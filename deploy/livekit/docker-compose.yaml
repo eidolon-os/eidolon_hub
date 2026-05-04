@@ -9,3 +9,5 @@ services:
       - "/etc/livekit.yaml"
     volumes:
       - ./livekit.yaml:/etc/livekit.yaml:ro
+      - /etc/nginx/ssl/yangtzeailab.com/fullchain.pem:/etc/certs/fullchain.pem:ro
+      - /etc/nginx/ssl/yangtzeailab.com/privkey.pem:/etc/certs/privkey.pem:ro
