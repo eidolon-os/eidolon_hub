@@ -48,7 +48,22 @@ else
     COMPOSE_CMD="docker compose"
 fi
 
-# 3. 检查 SSL 证书
+# 3. 检查并拉取 LiveKit 镜像 (使用国内镜像加速)
+IMAGE="livekit/livekit-server:v1.11.0"
+MIRROR_IMAGE="docker.m.daocloud.io/livekit/livekit-server:v1.11.0"
+
+if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+    log_info "拉取 LiveKit 镜像 (使用 DaoCloud 加速)..."
+    if docker pull "$MIRROR_IMAGE" 2>/dev/null; then
+        docker tag "$MIRROR_IMAGE" "$IMAGE"
+        log_info "镜像拉取成功"
+    else
+        log_info "使用默认源拉取镜像..."
+        docker pull "$IMAGE"
+    fi
+else
+    log_info "LiveKit 镜像已存在: $IMAGE"
+fi
 NGINX_SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
 if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
     log_error "SSL 证书未找到: $NGINX_SSL_DIR/fullchain.pem"
@@ -57,12 +72,8 @@ if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
 fi
 log_info "SSL 证书已准备: $NGINX_SSL_DIR"
 
-# 4. 创建本地配置目录
-CONFIG_DIR="$SCRIPT_DIR/config"
-mkdir -p "$CONFIG_DIR"
-
 # 5. 生成或使用 API Key
-if [[ ! -f "$CONFIG_DIR/livekit.yaml" ]]; then
+if [[ ! -f "$SCRIPT_DIR/livekit.yaml" ]]; then
     log_info "创建 LiveKit 配置文件..."
     
     # 生成随机密钥
@@ -70,7 +81,7 @@ if [[ ! -f "$CONFIG_DIR/livekit.yaml" ]]; then
     API_SECRET=$(openssl rand -hex 16)
     
     # 创建配置
-    cat > "$CONFIG_DIR/livekit.yaml" << EOF
+    cat > "$SCRIPT_DIR/livekit.yaml" << EOF
 port: 7880
 bind_addresses:
   - 127.0.0.1
@@ -81,8 +92,8 @@ keys:
 turn:
   enabled: true
   domain: livekit-turn.eidolon.yangtzeailab.com
-  cert_file: /etc/nginx/ssl/yangtzeailab.com/fullchain.pem
-  key_file: /etc/nginx/ssl/yangtzeailab.com/privkey.pem
+  cert_file: /etc/certs/fullchain.pem
+  key_file: /etc/certs/privkey.pem
   tls_port: 5349
   udp_port: 3478
 

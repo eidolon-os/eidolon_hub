@@ -8,8 +8,8 @@ keys:
 turn:
   enabled: true
   domain: livekit-turn.eidolon.yangtzeailab.com
-  cert_file: /etc/nginx/ssl/yangtzeailab.com/fullchain.pem
-  key_file: /etc/nginx/ssl/yangtzeailab.com/privkey.pem
+  cert_file: /etc/certs/fullchain.pem
+  key_file: /etc/certs/privkey.pem
   tls_port: 5349
   udp_port: 3478
 
