@@ -72,7 +72,7 @@ if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
 fi
 log_info "SSL 证书已准备: $NGINX_SSL_DIR"
 
-# 5. 生成或使用 API Key
+# 4. 生成或使用 API Key
 if [[ ! -f "$SCRIPT_DIR/livekit.yaml" ]]; then
     log_info "创建 LiveKit 配置文件..."
     
@@ -121,7 +121,7 @@ else
     log_info "使用已有配置文件"
 fi
 
-# 6. 更新 docker-compose.yaml 中的证书路径
+# 5. 停止旧容器
 log_info "更新 Docker Compose 配置..."
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yaml"
 
@@ -131,12 +131,12 @@ if docker ps -a --format '{{.Names}}' | grep -q "^livekit$"; then
     $COMPOSE_CMD -f "$COMPOSE_FILE" down || true
 fi
 
-# 7. 启动 LiveKit
+# 6. 启动 LiveKit
 log_info "启动 LiveKit Server..."
 cd "$SCRIPT_DIR"
 $COMPOSE_CMD up -d
 
-# 8. 等待并检查状态
+# 7. 等待并检查状态
 log_info "等待服务启动..."
 sleep 3
 
@@ -146,14 +146,14 @@ echo "  服务状态"
 echo "=========================================="
 $COMPOSE_CMD ps
 
-# 9. 检查日志
+# 8. 检查日志
 echo ""
 echo "=========================================="
 echo "  最近日志"
 echo "=========================================="
 $COMPOSE_CMD logs --tail 20
 
-# 10. 防火墙提示
+# 9. 部署完成
 echo ""
 echo "=========================================="
 echo "  部署完成!"
@@ -184,7 +184,7 @@ echo "    重启服务: docker compose -f $COMPOSE_FILE restart"
 echo "=========================================="
 echo ""
 
-# 11. 验证服务
+# 10. 验证服务
 log_info "验证服务健康状态..."
 sleep 2
 if curl -sf http://127.0.0.1:7880/ >/dev/null 2>&1 || \
