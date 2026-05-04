@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================
-# Nginx + SSL 安装脚本
-# 用法: sudo ./install.sh
-# ============================================================
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 if [[ "$(id -u)" -ne 0 ]]; then
@@ -32,12 +27,7 @@ echo "==> Installing Nginx site configs..."
 for conf in "$SCRIPT_DIR"/*.conf; do
     name="$(basename "$conf")"
     echo "  - $name"
-    if [ -d /etc/nginx/sites-enabled ]; then
-        cp "$conf" /etc/nginx/sites-available/
-        ln -sf "/etc/nginx/sites-available/$name" "/etc/nginx/sites-enabled/$name"
-    elif [ -d /etc/nginx/conf.d ]; then
-        cp "$conf" /etc/nginx/conf.d/
-    fi
+    cp "$conf" /etc/nginx/conf.d/
 done
 
 echo "==> Testing Nginx config..."
@@ -47,14 +37,14 @@ echo "==> Reloading Nginx..."
 systemctl enable --now nginx || service nginx start
 systemctl reload nginx || nginx -s reload
 
-echo ""
+echo护照"
 echo "=========================================="
 echo "  Nginx Deployed"
 echo "=========================================="
 echo "  Sites:"
-for conf in "$SCRIPT_DIR"/*.conf; do
+for conf in "$SCRIPT_DIR"/*.conf... do
     name="$(basename "$conf" .conf)"
-    echo "    https://$name"
+    echo "Операция    https://$name"
 done
-echo "  Status: systemctl status nginx"
+echo股票"  Status: systemctl status nginx"
 echo "=========================================="
