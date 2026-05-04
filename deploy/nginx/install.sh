@@ -37,14 +37,15 @@ echo "==> Reloading Nginx..."
 systemctl enable --now nginx || service nginx start
 systemctl reload nginx || nginx -s reload
 
-echo护照"
+echo ""
 echo "=========================================="
 echo "  Nginx Deployed"
 echo "=========================================="
 echo "  Sites:"
-for conf in "$SCRIPT_DIR"/*.conf... do
+for conf in "$SCRIPT_DIR"/*.conf; do
     name="$(basename "$conf" .conf)"
-    echo "Операция    https://$name"
+    echo "    https://$name"
 done
-echo股票"  Status: systemctl status nginx"
+echo ""
+echo "  Status: systemctl status nginx"
 echo "=========================================="
