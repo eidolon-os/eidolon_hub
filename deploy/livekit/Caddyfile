@@ -1,7 +1,0 @@
-livekit.eidolon.yangtzeailab.com {
-    reverse_proxy localhost:7880
-}
-
-livekit-turn.eidolon.yangtzeailab.com {
-    reverse_proxy localhost:443
-}

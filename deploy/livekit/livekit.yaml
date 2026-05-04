@@ -8,7 +8,7 @@ keys:
 turn:
   enabled: true
   domain: livekit-turn.eidolon.yangtzeailab.com
-  tls_port: 443
+  tls_port: 5349
   udp_port: 3478
 
 rtc:
@@ -20,7 +20,3 @@ rtc:
 logging:
   level: info
   json: false
-
-room:
-  enabled: true
-  empty_timeout: 300
