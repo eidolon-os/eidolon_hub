@@ -1,0 +1,30 @@
+version: "3.8"
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.11.1
+    container_name: livekit
+    restart: always
+    network_mode: host
+    command:
+      - "--config"
+      - "/etc/livekit.yaml"
+    volumes:
+      - ./livekit.yaml:/etc/livekit.yaml:ro
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: livekit-caddy
+    restart: always
+    network_mode: host
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - DOMAIN=livekit.eidolon.yangtzeailab.com
+      - TURN_DOMAIN=livekit-turn.eidolon.yangtzeailab.com
+
+volumes:
+  caddy_data:
+  caddy_config:

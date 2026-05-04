@@ -1,0 +1,26 @@
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+
+keys:
+  devkey: devkey_secret
+
+turn:
+  enabled: true
+  domain: livekit-turn.eidolon.yangtzeailab.com
+  tls_port: 443
+  udp_port: 3478
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+  use_external_ip: false
+  tcp_port: 7881
+
+logging:
+  level: info
+  json: false
+
+room:
+  enabled: true
+  empty_timeout: 300
