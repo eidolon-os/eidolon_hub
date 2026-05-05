@@ -64,6 +64,8 @@ if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
 else
     log_info "LiveKit 镜像已存在: $IMAGE"
 fi
+
+# 4. 检查 SSL 证书
 NGINX_SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
 if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
     log_error "SSL 证书未找到: $NGINX_SSL_DIR/fullchain.pem"
@@ -72,7 +74,7 @@ if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
 fi
 log_info "SSL 证书已准备: $NGINX_SSL_DIR"
 
-# 4. 生成或使用 API Key
+# 5. 生成或使用 API Key
 if [[ ! -f "$SCRIPT_DIR/livekit.yaml" ]]; then
     log_info "创建 LiveKit 配置文件..."
     
@@ -91,7 +93,7 @@ keys:
 
 turn:
   enabled: true
-  domain: livekit-turn.eidolon.yangtzeailab.com
+  domain: livekit-server.yangtzeailab.com
   cert_file: /etc/certs/fullchain.pem
   key_file: /etc/certs/privkey.pem
   tls_port: 5349
@@ -121,7 +123,7 @@ else
     log_info "使用已有配置文件"
 fi
 
-# 5. 停止旧容器
+# 6. 停止旧容器
 log_info "更新 Docker Compose 配置..."
 COMPOSE_FILE="$SCRIPT_DIR/docker-compose.yaml"
 
@@ -131,7 +133,7 @@ if docker ps -a --format '{{.Names}}' | grep -q "^livekit$"; then
     $COMPOSE_CMD -f "$COMPOSE_FILE" down || true
 fi
 
-# 6. 启动 LiveKit
+# 7. 启动 LiveKit
 log_info "启动 LiveKit Server..."
 cd "$SCRIPT_DIR"
 $COMPOSE_CMD up -d
@@ -160,8 +162,8 @@ echo "  部署完成!"
 echo "=========================================="
 echo ""
 echo "  连接信息:"
-echo "    WebSocket:  wss://livekit.eidolon.yangtzeailab.com"
-echo "    TURN TLS:   livekit-turn.eidolon.yangtzeailab.com:5349"
+echo "    WebSocket:  wss://livekit-server.yangtzeailab.com"
+echo "    TURN TLS:   livekit-server.yangtzeailab.com:5349"
 echo "    TURN UDP:   <服务器IP>:3478"
 echo ""
 echo "  需要开放的防火墙端口 (云服务器安全组 + 本地 UFW):"
