@@ -175,14 +175,12 @@ StandardError=journal
 Environment="PYTHONUNBUFFERED=1"
 Environment="EIDOLON_HUB_CONFIG=$PROJECT_ROOT/config/default.yaml"
 
+NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=yes
 ReadWritePaths=$PROJECT_ROOT/data $PROJECT_ROOT/logs $PROJECT_ROOT/.venv
-PrivateTmp=yes
-NoNewPrivileges=yes
-
 ReadOnlyPaths=$PROJECT_ROOT
-ProtectSystem=strict
+PrivateTmp=yes
 ProtectControlGroups=yes
 RestrictNamespaces=yes
 LockPersonality=yes
