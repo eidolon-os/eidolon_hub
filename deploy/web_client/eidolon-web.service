@@ -1,0 +1,23 @@
+[Unit]
+Description=Eidolon Web Client (Next.js)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/app/eidolon-hub/client/web
+ExecStart=/usr/local/bin/node /usr/local/app/eidolon-hub/client/web/node_modules/.bin/next start --port 3000
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment="NODE_ENV=production"
+Environment="PORT=3000"
+
+ProtectSystem=full
+ProtectHome=yes
+ReadWritePaths=/usr/local/app/eidolon-hub/client/web
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -66,69 +66,107 @@ if [ ! -d "$WEB_DIR" ]; then
     exit 1
 fi
 
-SERVICE_NAME="eidolon-web"
+APP_NAME="eidolon-web"
 log_info "项目路径: $PROJECT_ROOT"
 log_info "Web 目录: $WEB_DIR"
 
 # --------------------------------------------------
-# 2. 安装依赖并构建
+# 2. 配置环境变量
 # --------------------------------------------------
-log_step "2. 构建 Next.js 前端..."
+log_step "2. 配置环境变量..."
+
+ENV_FILE="$WEB_DIR/.env.local"
+ENV_EXAMPLE="$WEB_DIR/.env.local.example"
+
+if [ ! -f "$ENV_FILE" ]; then
+    if [ -f "$ENV_EXAMPLE" ]; then
+        log_info "复制环境变量模板..."
+        cp "$ENV_EXAMPLE" "$ENV_FILE"
+        log_warn "请编辑 $ENV_FILE 配置实际的环境变量"
+    else
+        log_warn "未找到环境变量文件: $ENV_EXAMPLE"
+    fi
+else
+    log_info "使用已有环境变量: $ENV_FILE"
+fi
+
+# --------------------------------------------------
+# 3. 安装依赖并构建
+# --------------------------------------------------
+log_step "3. 构建 Next.js 前端..."
 
 cd "$WEB_DIR"
 npm install
 npm run build
 
 # --------------------------------------------------
-# 3. 部署 systemd 服务
+# 4. 部署 systemd 服务
 # --------------------------------------------------
-log_step "3. 创建 systemd 服务..."
+log_step "4. 创建 systemd 服务..."
 
-NODE_BIN=$(which node)
+SERVICE_FILE="$SCRIPT_DIR/eidolon-web.service"
+SERVICE_TARGET="/etc/systemd/system/${APP_NAME}.service"
 
-cat > "/etc/systemd/system/${SERVICE_NAME}.service" << EOF
-[Unit]
-Description=Eidolon Web Client (Next.js)
-After=network-online.target
-Wants=network-online.target
+if [ ! -f "$SERVICE_FILE" ]; then
+    log_error "未找到 systemd 服务文件: $SERVICE_FILE"
+    exit 1
+fi
 
-[Service]
-Type=simple
-WorkingDirectory=$WEB_DIR
-ExecStart=$NODE_BIN $WEB_DIR/node_modules/.bin/next start --port 3000
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-Environment="NODE_ENV=production"
-Environment="PORT=3000"
-
-ProtectSystem=full
-ProtectHome=yes
-ReadWritePaths=$WEB_DIR
-PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-chmod 644 "/etc/systemd/system/${SERVICE_NAME}.service"
+# 移除旧文件，创建软链接
+rm -f "$SERVICE_TARGET"
+ln -s "$SERVICE_FILE" "$SERVICE_TARGET"
+chown root:root "$SERVICE_TARGET"
+chmod 644 "$SERVICE_TARGET"
 
 log_info "重载 systemd..."
 systemctl daemon-reload
 
-if systemctl is-active --quiet "$SERVICE_NAME"; then
+if systemctl is-active --quiet "$APP_NAME"; then
     log_info "重启服务..."
-    systemctl restart "$SERVICE_NAME"
+    systemctl restart "$APP_NAME"
 else
     log_info "启用并启动服务..."
-    systemctl enable --now "$SERVICE_NAME"
+    systemctl enable --now "$APP_NAME"
 fi
 
 sleep 2
 
 # --------------------------------------------------
-# 4. 完成
+# 5. 检查 Nginx SSL 证书
+# --------------------------------------------------
+log_step "5. 检查 SSL 证书..."
+
+SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
+if [ ! -f "$SSL_DIR/fullchain.pem" ] || [ ! -f "$SSL_DIR/privkey.pem" ]; then
+    log_warn "SSL 证书未找到: $SSL_DIR"
+    log_warn "请先运行 ../nginx/install.sh 安装 SSL 证书"
+fi
+
+# --------------------------------------------------
+# 6. 部署 Nginx 反向代理
+# --------------------------------------------------
+log_step "6. 部署 Nginx 反向代理..."
+
+NGINX_CONF="$SCRIPT_DIR/eidolon-hub.yangtzeailab.com.conf"
+NGINX_TARGET="/etc/nginx/conf.d/eidolon-hub.yangtzeailab.com.conf"
+
+if [ ! -f "$NGINX_CONF" ]; then
+    log_error "未找到 Nginx 配置文件: $NGINX_CONF"
+    exit 1
+fi
+
+# 移除旧配置，创建软链接
+rm -f "$NGINX_TARGET"
+ln -s "$NGINX_CONF" "$NGINX_TARGET"
+
+log_info "测试 Nginx 配置..."
+nginx -t && log_info "Nginx 配置测试通过" || { log_error "Nginx 配置测试失败"; exit 1; }
+
+log_info "重载 Nginx..."
+systemctl reload nginx || nginx -s reload
+
+# --------------------------------------------------
+# 7. 完成
 # --------------------------------------------------
 echo ""
 echo "=========================================="
@@ -138,12 +176,12 @@ echo ""
 echo "  访问地址: https://eidolon-hub.yangtzeailab.com"
 echo ""
 echo "  常用命令:"
-echo "    查看状态: systemctl status $SERVICE_NAME"
-echo "    查看日志: journalctl -u $SERVICE_NAME -f"
-echo "    重启服务: systemctl restart $SERVICE_NAME"
-echo "    停止服务: systemctl stop $SERVICE_NAME"
+echo "    查看状态: systemctl status $APP_NAME"
+echo "    查看日志: journalctl -u $APP_NAME -f"
+echo "    重启服务: systemctl restart $APP_NAME"
+echo "    停止服务: systemctl stop $APP_NAME"
 echo ""
 echo "=========================================="
 echo ""
 
-systemctl status "$SERVICE_NAME" --no-pager || true
+systemctl status "$APP_NAME" --no-pager || true
