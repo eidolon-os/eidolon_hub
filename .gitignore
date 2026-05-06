@@ -46,4 +46,5 @@ deploy/livekit/caddy_config
 
 .cursor
 .claude/
+uv.lock
 
