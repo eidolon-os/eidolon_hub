@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -19,16 +21,20 @@ class TokenResponse(BaseModel):
 async def get_token(
     roomName: str = Query(..., description="LiveKit room name"),
     participantName: str = Query(..., description="Participant identity"),
+    agent_mode: str = Query("streaming", description="Agent mode: 'streaming' or 'ptt'"),
 ):
+    if agent_mode not in ("streaming", "ptt"):
+        raise HTTPException(status_code=400, detail="agent_mode must be 'streaming' or 'ptt'")
+
     try:
-        identity, token = _generate_token(roomName, participantName)
+        identity, token = _generate_token(roomName, participantName, agent_mode)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
     return TokenResponse(identity=identity, accessToken=token)
 
 
-def _generate_token(room_name: str, participant_name: str) -> tuple[str, str]:
+def _generate_token(room_name: str, participant_name: str, agent_mode: str = "streaming") -> tuple[str, str]:
     """Generate a LiveKit access token."""
     from livekit import api
 
@@ -52,7 +58,12 @@ def _generate_token(room_name: str, participant_name: str) -> tuple[str, str]:
         )
         .with_room_config(
             api.RoomConfiguration(
-                agents=[api.RoomAgentDispatch(agent_name="eidolon")],
+                agents=[
+                    api.RoomAgentDispatch(
+                        agent_name="eidolon",
+                        metadata=json.dumps({"agent_mode": agent_mode}),
+                    )
+                ],
             )
         )
         .to_jwt()
