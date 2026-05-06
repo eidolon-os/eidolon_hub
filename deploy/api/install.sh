@@ -146,6 +146,7 @@ fi
 log_step "7. 创建 systemd 服务..."
 
 VENV_PYTHON="$VENV_DIR/bin/python"
+VENV_UVICORN="$VENV_DIR/bin/uvicorn"
 
 cat > "/etc/systemd/system/${APP_NAME}.service" << SERVICE
 [Unit]
@@ -159,27 +160,12 @@ Type=simple
 User=$APP_USER
 Group=$APP_GROUP
 WorkingDirectory=$PROJECT_ROOT
-ExecStart=$VENV_PYTHON -c "
-from hub.api.app import create_app
-from hub.config import load_config
-import uvicorn
-
-config = load_config()
-app = create_app(config)
-uvicorn.run(app, host=config.api.host, port=config.api.port, proxy_headers=True, forwarded_allow_ips='*')
-"
+ExecStart=$VENV_UVICORN hub.main:app --host 0.0.0.0 --port 8081 --proxy-headers --forwarded-allow-ips="*"
 Restart=always
 RestartSec=5
 StandardOutput=journal
 StandardError=journal
 Environment="PYTHONUNBUFFERED=1"
-Environment="EIDOLON_HUB_CONFIG=$PROJECT_ROOT/config/default.yaml"
-
-NoNewPrivileges=yes
-ProtectSystem=full
-ProtectHome=yes
-ReadWritePaths=$PROJECT_ROOT/data $PROJECT_ROOT/logs $PROJECT_ROOT/.venv
-PrivateTmp=yes
 
 [Install]
 WantedBy=multi-user.target

@@ -1,10 +1,16 @@
-"""Eidolon Hub 主入口."""
+"""Eidolon Hub 主入口 - ASGI 应用."""
+
+from __future__ import annotations
 
 import asyncio
 import logging
-import signals
+import signal
+from contextlib import asynccontextmanager
 from pathlib import Path
 
+from fastapi import FastAPI
+
+from hub.api.routers.system import esp32_router, livekit_router
 from hub.config import AppConfig, load_config
 from hub.core.device_manager import DeviceManager
 from hub.logging import setup_logging
@@ -12,67 +18,69 @@ from hub.logging import setup_logging
 logger = logging.getLogger(__name__)
 
 
-class HubApplication:
-    """Hub 主应用."""
+def create_app(config: AppConfig | None = None) -> FastAPI:
+    """创建 FastAPI 应用（带 Hub 生命周期管理）."""
+    app_config = config or load_config()
 
-    def __init__(self, config: AppConfig | None = None):
-        self._config = config or load_config()
-        self._running = False
-        self._device_manager = DeviceManager(Path("data/devices.json"))
-        self._http_runner = None
-
-    async def start(self) -> None:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
         setup_logging(
-            level=self._config.logging.level,
-            format_str=self._config.logging.format,
+            level=app_config.logging.level,
+            format_str=app_config.logging.format,
         )
         logger.info("Starting Eidolon Hub v%s", __import__("hub").__version__)
 
-        await self._device_manager.load()
+        device_manager = DeviceManager(Path("data/devices.json"))
+        await device_manager.load()
 
-        if self._config.api.enabled:
-            from hub.api.app import HttpApiRunner
-            self._http_runner = HttpApiRunner(self._config, self._device_manager)
-            asyncio.create_task(self._http_runner.start())
+        app.state.device_manager = device_manager
+        app.state.config = app_config
 
-        self._running = True
         logger.info("Hub started successfully")
-        logger.info("  - HTTP API: http://%s:%d", self._config.api.host, self._config.api.port)
+        logger.info("  - HTTP API: http://%s:%d", app_config.api.host, app_config.api.port)
 
-    async def stop(self) -> None:
+        yield
+
         logger.info("Stopping Eidolon Hub...")
-        self._running = False
-        if self._http_runner is not None:
-            await self._http_runner.stop()
-        await self._device_manager.save()
+        await device_manager.save()
         logger.info("Hub stopped")
 
-    async def run(self) -> None:
-        await self.start()
-        try:
-            while self._running:
-                await asyncio.sleep(1)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            await self.stop()
+    app = FastAPI(
+        lifespan=lifespan,
+        title="Eidolon Hub API",
+        docs_url="/docs",
+        redoc_url="/redoc",
+    )
+
+    app.add_middleware(
+        __import__("fastapi.middleware.cors", fromlist=["CORSMiddleware"]).CORSMiddleware,
+        allow_origins=["*"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    app.include_router(livekit_router)
+    app.include_router(esp32_router)
+
+    return app
 
 
-async def main() -> None:
-    app = HubApplication()
-    loop = asyncio.get_event_loop()
-    stop_event = asyncio.Event()
+def get_app() -> FastAPI:
+    """获取 ASGI 应用实例（供 uvicorn 使用）."""
+    return create_app()
 
-    def signal_handler() -> None:
-        stop_event.set()
 
-    for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, signal_handler)
-
-    asyncio.create_task(app.run())
-    await stop_event.wait()
-    await app.stop()
+app = get_app()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import uvicorn
+    uvicorn.run(
+        "hub.main:app",
+        host="0.0.0.0",
+        port=8081,
+        reload=False,
+        proxy_headers=True,
+        forwarded_allow_ips="*",
+    )
