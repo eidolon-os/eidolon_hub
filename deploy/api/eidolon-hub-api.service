@@ -1,0 +1,20 @@
+[Unit]
+Description=Eidolon Hub API — FastAPI 服务
+Documentation=https://github.com/eidolon/eidolon-hub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=eidolon
+Group=eidolon
+WorkingDirectory=/usr/local/app/eidolon-hub
+ExecStart=/usr/local/app/eidolon-hub/.venv/bin/uvicorn hub.main:app --host 0.0.0.0 --port 8081 --proxy-headers --forwarded-allow-ips="*"
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment="PYTHONUNBUFFERED=1"
+
+[Install]
+WantedBy=multi-user.target

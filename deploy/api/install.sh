@@ -145,31 +145,19 @@ fi
 # --------------------------------------------------
 log_step "7. 创建 systemd 服务..."
 
-VENV_PYTHON="$VENV_DIR/bin/python"
-VENV_UVICORN="$VENV_DIR/bin/uvicorn"
+SERVICE_FILE="$SCRIPT_DIR/eidolon-hub-api.service"
+SERVICE_TARGET="/etc/systemd/system/eidolon-hub-api.service"
 
-cat > "/etc/systemd/system/${APP_NAME}.service" << SERVICE
-[Unit]
-Description=Eidolon Hub API — FastAPI 服务
-Documentation=https://github.com/eidolon/eidolon-hub
-After=network-online.target
-Wants=network-online.target
+if [ ! -f "$SERVICE_FILE" ]; then
+    log_error "未找到 systemd 服务文件: $SERVICE_FILE"
+    exit 1
+fi
 
-[Service]
-Type=simple
-User=$APP_USER
-Group=$APP_GROUP
-WorkingDirectory=$PROJECT_ROOT
-ExecStart=$VENV_UVICORN hub.main:app --host 0.0.0.0 --port 8081 --proxy-headers --forwarded-allow-ips="*"
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-Environment="PYTHONUNBUFFERED=1"
-
-[Install]
-WantedBy=multi-user.target
-SERVICE
+# 移除旧文件，创建软链接
+rm -f "$SERVICE_TARGET"
+ln -s "$SERVICE_FILE" "$SERVICE_TARGET"
+chown root:root "$SERVICE_TARGET"
+chmod 644 "$SERVICE_TARGET"
 
 log_info "重载 systemd..."
 systemctl daemon-reload
