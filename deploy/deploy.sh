@@ -14,7 +14,17 @@ set -euo pipefail
 # ============================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+while [[ "$PROJECT_ROOT" != "/" ]]; do
+    if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+        break
+    fi
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+    echo "ERROR: 未找到 pyproject.toml，无法确定项目根目录"
+    exit 1
+fi
 
 # 颜色输出
 RED='\033[0;31m'
@@ -97,7 +107,7 @@ deploy_main() {
     # 创建 venv + 安装依赖
     echo "==> [deploy] Creating virtual environment with uv..."
     if [ ! -d "$PROJECT_ROOT/.venv" ]; then
-        uv venv "$PROJECT_ROOT/.venv" --python 3.11
+        uv venv "$PROJECT_ROOT/.venv" --python 3.12
     fi
     uv pip install -e "$PROJECT_ROOT" --python "$PROJECT_ROOT/.venv/bin/python"
 

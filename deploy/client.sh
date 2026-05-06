@@ -2,7 +2,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+while [[ "$PROJECT_ROOT" != "/" ]]; do
+    if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+        break
+    fi
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+    echo "ERROR: 未找到 pyproject.toml，无法确定项目根目录"
+    exit 1
+fi
 WEB_DIR="$PROJECT_ROOT/client/web"
 SERVICE_NAME="eidolon-web"
 APP_USER="${APP_USER:-eidolon}"

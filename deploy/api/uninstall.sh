@@ -2,6 +2,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$SCRIPT_DIR"
+while [[ "$PROJECT_ROOT" != "/" ]]; do
+    if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+        break
+    fi
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+    echo "ERROR: 未找到 pyproject.toml，无法确定项目根目录"
+    exit 1
+fi
 APP_NAME="eidolon-hub-api"
 
 RED='\033[0;31m'
@@ -39,7 +50,7 @@ echo "  卸载完成"
 echo "=========================================="
 echo ""
 echo "  如需完全清理，可手动执行:"
-echo "    rm -rf $SCRIPT_DIR/../.venv"
+echo "    rm -rf $PROJECT_ROOT/.venv"
 echo "    userdel eidolon  # 如不再需要"
 echo ""
 echo "=========================================="

@@ -30,25 +30,11 @@ if [[ "$(id -u)" -ne 0 ]]; then
     exit 1
 fi
 
-# 检查 uv
 if ! command -v uv >/dev/null 2>&1; then
-    log_info "安装 uv..."
-    curl -LsSf https://astral.sh/uv/install.sh | sh
-    export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# 检查 Python
-if ! command -v python3 >/dev/null 2>&1; then
-    log_error "Python 3 未安装"
+    log_error "uv 未安装，请先安装: curl -LsSf https://astral.sh/uv/install.sh | sh"
     exit 1
 fi
 
-PYTHON_VERSION=$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-if [[ "$(echo "$PYTHON_VERSION >= 3.11" | bc)" != "1" ]]; then
-    log_warn "Python 版本 $PYTHON_VERSION < 3.11，可能存在问题"
-fi
-
-log_info "Python 版本: $PYTHON_VERSION"
 log_info "uv: $(uv --version)"
 
 # --------------------------------------------------
@@ -56,7 +42,18 @@ log_info "uv: $(uv --version)"
 # --------------------------------------------------
 log_step "1. 确定项目路径..."
 
-PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+# 向上查找项目根目录（包含 pyproject.toml）
+PROJECT_ROOT="$SCRIPT_DIR"
+while [[ "$PROJECT_ROOT" != "/" ]]; do
+    if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+        break
+    fi
+    PROJECT_ROOT="$(dirname "$PROJECT_ROOT")"
+done
+if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
+    log_error "未找到 pyproject.toml，无法确定项目根目录"
+    exit 1
+fi
 APP_NAME="eidolon-hub-api"
 APP_USER="${APP_USER:-eidolon}"
 APP_GROUP="${APP_GROUP:-eidolon}"
@@ -83,7 +80,9 @@ log_step "3. 创建虚拟环境并安装依赖..."
 VENV_DIR="$PROJECT_ROOT/.venv"
 if [ ! -d "$VENV_DIR" ]; then
     log_info "创建虚拟环境 (.venv)..."
-    uv venv "$VENV_DIR" --python 3.11
+    uv venv "$VENV_DIR" --python 3.12
+else
+    log_info "虚拟环境已存在: $VENV_DIR"
 fi
 
 log_info "安装项目依赖..."
