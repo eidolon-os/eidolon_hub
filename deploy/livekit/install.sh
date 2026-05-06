@@ -74,54 +74,13 @@ if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
 fi
 log_info "SSL 证书已准备: $NGINX_SSL_DIR"
 
-# 5. 生成或使用 API Key
+# 5. 检查配置文件
 if [[ ! -f "$SCRIPT_DIR/livekit.yaml" ]]; then
-    log_info "创建 LiveKit 配置文件..."
-    
-    # 生成随机密钥
-    API_KEY="devkey"
-    API_SECRET=$(openssl rand -hex 16)
-    
-    # 创建配置
-    cat > "$SCRIPT_DIR/livekit.yaml" << EOF
-port: 7880
-bind_addresses:
-  - 127.0.0.1
-
-keys:
-  $API_KEY: $API_SECRET
-
-turn:
-  enabled: true
-  domain: livekit-server.yangtzeailab.com
-  cert_file: /etc/certs/fullchain.pem
-  key_file: /etc/certs/privkey.pem
-  tls_port: 5349
-  udp_port: 3478
-
-rtc:
-  port_range_start: 50000
-  port_range_end: 60000
-  use_external_ip: true
-  tcp_port: 7881
-
-logging:
-  level: info
-  json: false
-EOF
-    
-    log_info "API Secret 已生成，请保存以下信息:"
-    echo ""
-    echo "  API Key:    $API_KEY"
-    echo "  API Secret: $API_SECRET"
-    echo ""
-    echo "  请将以下内容添加到环境变量或 .env 文件:"
-    echo "  export LIVEKIT_API_KEY=$API_KEY"
-    echo "  export LIVEKIT_API_SECRET=$API_SECRET"
-    echo ""
-else
-    log_info "使用已有配置文件"
+    log_error "配置文件不存在: $SCRIPT_DIR/livekit.yaml"
+    log_error "请确保 livekit.yaml 已存在"
+    exit 1
 fi
+log_info "使用配置文件: $SCRIPT_DIR/livekit.yaml"
 
 # 6. 停止旧容器
 log_info "更新 Docker Compose 配置..."
@@ -138,7 +97,7 @@ log_info "启动 LiveKit Server..."
 cd "$SCRIPT_DIR"
 $COMPOSE_CMD up -d
 
-# 7. 等待并检查状态
+# 8. 等待并检查状态
 log_info "等待服务启动..."
 sleep 3
 

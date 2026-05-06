@@ -13,6 +13,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+LIVEKIT_YAML="$SCRIPT_DIR/livekit.yaml"
+
 MODE="${1:-auto}"
 DOMAIN="${DOMAIN:-livekit-server.yangtzeailab.com}"
 SERVER_IP="${SERVER_IP:-8.141.101.214}"
@@ -39,7 +42,7 @@ run_local_test() {
     echo ""
 
     # 监听地址
-    BIND_ADDR=$(grep "^bind:" /usr/local/app/eidolon-hub/deploy/livekit/livekit.yaml 2>/dev/null | awk '{print $2}' || echo "0.0.0.0:7880")
+    BIND_ADDR=$(grep "^bind:" "$LIVEKIT_YAML" 2>/dev/null | awk '{print $2}' || echo "0.0.0.0:7880")
     log_info "LiveKit 监听: $BIND_ADDR"
 
     # HTTP
