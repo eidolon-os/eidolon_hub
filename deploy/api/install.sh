@@ -179,14 +179,7 @@ NoNewPrivileges=yes
 ProtectSystem=full
 ProtectHome=yes
 ReadWritePaths=$PROJECT_ROOT/data $PROJECT_ROOT/logs $PROJECT_ROOT/.venv
-ReadOnlyPaths=$PROJECT_ROOT
 PrivateTmp=yes
-ProtectControlGroups=yes
-RestrictNamespaces=yes
-LockPersonality=yes
-MemoryDenyWriteExecute=yes
-RestrictRealtime=yes
-RestrictSUIDSGID=yes
 
 [Install]
 WantedBy=multi-user.target
