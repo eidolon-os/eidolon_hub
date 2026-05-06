@@ -35,7 +35,10 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 1
 fi
 
+UV_INDEX_URL="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+
 log_info "uv: $(uv --version)"
+log_info "pip 镜像: $UV_INDEX_URL"
 
 # --------------------------------------------------
 # 1. 获取项目路径
@@ -86,7 +89,7 @@ else
 fi
 
 log_info "安装项目依赖..."
-uv pip install -e "$PROJECT_ROOT" --python "$VENV_DIR/bin/python"
+uv pip install -e "$PROJECT_ROOT" --python "$VENV_DIR/bin/python" --index-url "$UV_INDEX_URL"
 
 chown -R "$APP_USER:$APP_GROUP" "$VENV_DIR"
 

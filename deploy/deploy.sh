@@ -96,6 +96,8 @@ deploy_main() {
     log_info "部署主 Hub 服务..."
     echo "==> [deploy] Project root: $PROJECT_ROOT"
 
+UV_INDEX_URL="${UV_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple/}"
+
     # 前置检查
     command -v uv >/dev/null 2>&1 || { echo "ERROR: uv not found. Install: curl -LsSf https://astral.sh/uv/install.sh | sh"; exit 1; }
 
@@ -104,12 +106,14 @@ deploy_main() {
         exit 1
     fi
 
+    echo "==> [deploy] Using pip mirror: $UV_INDEX_URL"
+
     # 创建 venv + 安装依赖
     echo "==> [deploy] Creating virtual environment with uv..."
     if [ ! -d "$PROJECT_ROOT/.venv" ]; then
         uv venv "$PROJECT_ROOT/.venv" --python 3.12
     fi
-    uv pip install -e "$PROJECT_ROOT" --python "$PROJECT_ROOT/.venv/bin/python"
+    uv pip install -e "$PROJECT_ROOT" --python "$PROJECT_ROOT/.venv/bin/python" --index-url "$UV_INDEX_URL"
 
     chown -R "$APP_USER:$APP_GROUP" "$PROJECT_ROOT/.venv"
 
