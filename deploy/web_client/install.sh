@@ -132,48 +132,14 @@ fi
 sleep 2
 
 # --------------------------------------------------
-# 5. 检查 Nginx SSL 证书
-# --------------------------------------------------
-log_step "5. 检查 SSL 证书..."
-
-SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
-if [ ! -f "$SSL_DIR/fullchain.pem" ] || [ ! -f "$SSL_DIR/privkey.pem" ]; then
-    log_warn "SSL 证书未找到: $SSL_DIR"
-    log_warn "请先运行 ../nginx/install.sh 安装 SSL 证书"
-fi
-
-# --------------------------------------------------
-# 6. 部署 Nginx 反向代理
-# --------------------------------------------------
-log_step "6. 部署 Nginx 反向代理..."
-
-NGINX_CONF="$SCRIPT_DIR/eidolon-hub.yangtzeailab.com.conf"
-NGINX_TARGET="/etc/nginx/conf.d/eidolon-hub.yangtzeailab.com.conf"
-
-if [ ! -f "$NGINX_CONF" ]; then
-    log_error "未找到 Nginx 配置文件: $NGINX_CONF"
-    exit 1
-fi
-
-# 移除旧配置，创建软链接
-rm -f "$NGINX_TARGET"
-ln -s "$NGINX_CONF" "$NGINX_TARGET"
-
-log_info "测试 Nginx 配置..."
-nginx -t && log_info "Nginx 配置测试通过" || { log_error "Nginx 配置测试失败"; exit 1; }
-
-log_info "重载 Nginx..."
-systemctl reload nginx || nginx -s reload
-
-# --------------------------------------------------
-# 7. 完成
+# 5. 完成
 # --------------------------------------------------
 echo ""
 echo "=========================================="
 echo "  部署完成!"
 echo "=========================================="
 echo ""
-echo "  访问地址: https://eidolon-hub.yangtzeailab.com"
+echo "  访问地址: https://eidolon-web-client.yangtzeailab.com"
 echo ""
 echo "  常用命令:"
 echo "    查看状态: systemctl status $APP_NAME"

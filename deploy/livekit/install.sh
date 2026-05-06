@@ -65,15 +65,6 @@ else
     log_info "LiveKit 镜像已存在: $IMAGE"
 fi
 
-# 4. 检查 SSL 证书
-NGINX_SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
-if [[ ! -f "$NGINX_SSL_DIR/fullchain.pem" ]]; then
-    log_error "SSL 证书未找到: $NGINX_SSL_DIR/fullchain.pem"
-    log_error "请先运行 ../nginx/install.sh 安装 SSL 证书"
-    exit 1
-fi
-log_info "SSL 证书已准备: $NGINX_SSL_DIR"
-
 # 5. 检查配置文件
 if [[ ! -f "$SCRIPT_DIR/livekit.yaml" ]]; then
     log_error "配置文件不存在: $SCRIPT_DIR/livekit.yaml"
@@ -107,14 +98,12 @@ echo "  服务状态"
 echo "=========================================="
 $COMPOSE_CMD ps
 
-# 8. 检查日志
 echo ""
 echo "=========================================="
 echo "  最近日志"
 echo "=========================================="
 $COMPOSE_CMD logs --tail 20
 
-# 9. 部署完成
 echo ""
 echo "=========================================="
 echo "  部署完成!"
@@ -145,7 +134,7 @@ echo "    重启服务: docker compose -f $COMPOSE_FILE restart"
 echo "=========================================="
 echo ""
 
-# 10. 验证服务
+# 9. 验证服务
 log_info "验证服务健康状态..."
 sleep 2
 if curl -sf http://127.0.0.1:7880/ >/dev/null 2>&1 || \

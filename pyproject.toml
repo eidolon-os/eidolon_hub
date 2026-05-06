@@ -9,7 +9,7 @@ license = { text = "MIT" }
 dependencies = [
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
-    "pyyaml>=6.0",
+    "pyyaml",
     "uvicorn[standard]>=0.27",
     "fastapi>=0.109",
     "httpx>=0.27",
@@ -42,6 +42,3 @@ ignore = ["E501"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
-
-[tool.pydantic-settings]
-settings_config = "pydantic-settings.yaml"
