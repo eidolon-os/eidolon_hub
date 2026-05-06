@@ -24,10 +24,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        setup_logging(
-            level=app_config.logging.level,
-            format_str=app_config.logging.format,
-        )
+        setup_logging(level=app_config.logging.level)
         logger.info("Starting Eidolon Hub v%s", __import__("hub").__version__)
 
         device_manager = DeviceManager(Path("data/devices.json"))
