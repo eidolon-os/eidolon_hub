@@ -45,7 +45,6 @@ log_info "pip 镜像: $UV_INDEX_URL"
 # --------------------------------------------------
 log_step "1. 确定项目路径..."
 
-# 向上查找项目根目录（包含 pyproject.toml）
 PROJECT_ROOT="$SCRIPT_DIR"
 while [[ "$PROJECT_ROOT" != "/" ]]; do
     if [[ -f "$PROJECT_ROOT/pyproject.toml" ]]; then
@@ -58,27 +57,13 @@ if [[ ! -f "$PROJECT_ROOT/pyproject.toml" ]]; then
     exit 1
 fi
 APP_NAME="eidolon-hub-api"
-APP_USER="${APP_USER:-eidolon}"
-APP_GROUP="${APP_GROUP:-eidolon}"
 
 log_info "项目路径: $PROJECT_ROOT"
 
 # --------------------------------------------------
-# 2. 创建系统用户
+# 2. 创建 venv 并安装依赖
 # --------------------------------------------------
-log_step "2. 创建系统用户..."
-
-if ! id -u "$APP_USER" >/dev/null 2>&1; then
-    log_info "创建用户: $APP_USER"
-    useradd --system --no-create-home --user-group "$APP_USER" || true
-else
-    log_info "用户已存在: $APP_USER"
-fi
-
-# --------------------------------------------------
-# 3. 创建 venv 并安装依赖
-# --------------------------------------------------
-log_step "3. 创建虚拟环境并安装依赖..."
+log_step "2. 创建虚拟环境并安装依赖..."
 
 VENV_DIR="$PROJECT_ROOT/.venv"
 if [ ! -d "$VENV_DIR" ]; then
@@ -91,21 +76,18 @@ fi
 log_info "安装项目依赖..."
 uv pip install -e "$PROJECT_ROOT" --python "$VENV_DIR/bin/python" --index-url "$UV_INDEX_URL"
 
-chown -R "$APP_USER:$APP_GROUP" "$VENV_DIR"
-
 # --------------------------------------------------
-# 4. 确保运行时目录
+# 3. 确保运行时目录
 # --------------------------------------------------
-log_step "4. 创建运行时目录..."
+log_step "3. 创建运行时目录..."
 
 mkdir -p "$PROJECT_ROOT/data"
 mkdir -p "$PROJECT_ROOT/logs"
-chown -R "$APP_USER:$APP_GROUP" "$PROJECT_ROOT/data" "$PROJECT_ROOT/logs"
 
 # --------------------------------------------------
-# 5. 复制并加载环境变量
+# 4. 复制并加载环境变量
 # --------------------------------------------------
-log_step "5. 配置环境变量..."
+log_step "4. 配置环境变量..."
 
 ENV_FILE="$PROJECT_ROOT/.env"
 ENV_EXAMPLE="$SCRIPT_DIR/env.api.example"
@@ -130,9 +112,9 @@ if [ -f "$ENV_FILE" ]; then
 fi
 
 # --------------------------------------------------
-# 6. 检查 Nginx SSL 证书
+# 5. 检查 Nginx SSL 证书
 # --------------------------------------------------
-log_step "6. 检查 SSL 证书..."
+log_step "5. 检查 SSL 证书..."
 
 SSL_DIR="/etc/nginx/ssl/yangtzeailab.com"
 if [ ! -f "$SSL_DIR/fullchain.pem" ] || [ ! -f "$SSL_DIR/privkey.pem" ]; then
@@ -141,9 +123,9 @@ if [ ! -f "$SSL_DIR/fullchain.pem" ] || [ ! -f "$SSL_DIR/privkey.pem" ]; then
 fi
 
 # --------------------------------------------------
-# 7. 部署 systemd 服务
+# 6. 部署 systemd 服务
 # --------------------------------------------------
-log_step "7. 创建 systemd 服务..."
+log_step "6. 创建 systemd 服务..."
 
 SERVICE_FILE="$SCRIPT_DIR/eidolon-hub-api.service"
 SERVICE_TARGET="/etc/systemd/system/eidolon-hub-api.service"
@@ -173,9 +155,9 @@ fi
 sleep 2
 
 # --------------------------------------------------
-# 8. 检查 Nginx 配置
+# 7. 检查 Nginx 配置
 # --------------------------------------------------
-log_step "8. 检查 Nginx 反向代理配置..."
+log_step "7. 检查 Nginx 反向代理配置..."
 
 NGINX_CONF="/etc/nginx/conf.d/eidolon-hub-api.yangtzeailab.com.conf"
 
@@ -191,9 +173,9 @@ else
 fi
 
 # --------------------------------------------------
-# 9. 验证服务
+# 8. 验证服务
 # --------------------------------------------------
-log_step "9. 验证服务状态..."
+log_step "8. 验证服务状态..."
 
 sleep 2
 
@@ -207,7 +189,7 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 # --------------------------------------------------
-# 10. 完成
+# 9. 完成
 # --------------------------------------------------
 echo ""
 echo "=========================================="
