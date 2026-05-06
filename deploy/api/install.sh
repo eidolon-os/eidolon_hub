@@ -90,7 +90,7 @@ mkdir -p "$PROJECT_ROOT/logs"
 log_step "4. 配置环境变量..."
 
 ENV_FILE="$PROJECT_ROOT/.env"
-ENV_EXAMPLE="$SCRIPT_DIR/env.api.example"
+ENV_EXAMPLE="$PROJECT_ROOT/.env.example"
 
 if [ ! -f "$ENV_FILE" ]; then
     if [ -f "$ENV_EXAMPLE" ]; then

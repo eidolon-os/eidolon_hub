@@ -9,7 +9,8 @@ Type=simple
 User=root
 Group=root
 WorkingDirectory=/usr/local/app/eidolon-hub
-ExecStart=/usr/local/app/eidolon-hub/.venv/bin/uvicorn hub.main:app --host 0.0.0.0 --port 8081 --proxy-headers --forwarded-allow-ips="*"
+EnvironmentFile=/usr/local/app/eidolon-hub/.env
+ExecStart=/usr/local/app/eidolon-hub/.venv/bin/uvicorn hub.main:app --proxy-headers --forwarded-allow-ips="*"
 Restart=always
 RestartSec=5
 StandardOutput=journal
