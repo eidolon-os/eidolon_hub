@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from hub.config import _get_config
-
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
+
+from hub.config import load_config
 
 router = APIRouter(prefix="/api/livekit", tags=["LiveKit"])
 
@@ -32,13 +32,13 @@ def _generate_token(room_name: str, participant_name: str) -> tuple[str, str]:
     """Generate a LiveKit access token."""
     from livekit import api
 
-    cfg = _get_config()
+    cfg = load_config().livekit
 
-    if not cfg.core.api_key or not cfg.core.api_secret:
+    if not cfg.api_key or not cfg.api_secret:
         raise ValueError("LIVEKIT_API_KEY or LIVEKIT_API_SECRET not configured")
 
     token = (
-        api.AccessToken(cfg.core.api_key, cfg.core.api_secret)
+        api.AccessToken(cfg.api_key, cfg.api_secret)
         .with_identity(participant_name)
         .with_name(participant_name)
         .with_grants(
