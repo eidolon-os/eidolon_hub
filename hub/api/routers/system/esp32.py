@@ -13,7 +13,7 @@ from hub.api.routers.system.livekit import _generate_token
 
 load_dotenv(dotenv_path=Path(__file__).parent.parent.parent.parent / ".env", override=False)
 
-router = APIRouter(prefix="/esp32", tags=["ESP32"])
+router = APIRouter(prefix="/esp32/livekit", tags=["ESP32"])
 
 
 class AudioConfig(BaseModel):
