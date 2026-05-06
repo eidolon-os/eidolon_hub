@@ -99,7 +99,7 @@ class AppConfig:
 
     @classmethod
     def from_yaml(cls, path: Path | None = None) -> "AppConfig":
-        import y 
+        import yaml
 
         data: dict = {}
         if path and path.exists():
