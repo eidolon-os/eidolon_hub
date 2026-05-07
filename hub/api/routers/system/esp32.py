@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
-from hub.api.routers.system.livekit import _generate_token
+from hub.api.routers.system.token import AgentMode, generate_token
 from hub.config import load_config
 
 router = APIRouter(prefix="/esp32/livekit", tags=["ESP32"])
@@ -33,12 +33,13 @@ class ESP32ConfigResponse(BaseModel):
 async def get_esp32_config(
     x_device_id: str = Header(..., alias="X-Device-ID"),
     room_name: str = Query(..., description="LiveKit room name"),
+    agent_mode: AgentMode = Query(AgentMode.STREAMING, description="Agent mode: 'streaming' or 'ptt'"),
 ):
     """Return LiveKit configuration for an ESP32 device."""
     server_url = load_config().esp32.server_url
 
     try:
-        _, token = _generate_token(room_name, x_device_id)
+        _, token = generate_token(room_name, x_device_id, agent_mode)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
