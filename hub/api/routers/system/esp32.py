@@ -2,16 +2,11 @@
 
 from __future__ import annotations
 
-import os
-from pathlib import Path
-
-from dotenv import load_dotenv
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from hub.api.routers.system.livekit import _generate_token
-
-load_dotenv(dotenv_path=Path(__file__).parent.parent.parent.parent / ".env", override=False)
+from hub.config import load_config
 
 router = APIRouter(prefix="/esp32/livekit", tags=["ESP32"])
 
@@ -40,7 +35,7 @@ async def get_esp32_config(
     room_name: str = Query(..., description="LiveKit room name"),
 ):
     """Return LiveKit configuration for an ESP32 device."""
-    server_url = os.environ.get("EIDOLON_LIVEKIT_URL", "ws://192.168.3.204:7880")
+    server_url = load_config().esp32.server_url
 
     try:
         _, token = _generate_token(room_name, x_device_id)
