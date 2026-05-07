@@ -41,14 +41,12 @@ class LoggingConfig:
 class LiveKitConfig:
     api_key: str = ""
     api_secret: str = ""
-    room_name: str = ""
 
     @classmethod
     def from_env(cls) -> "LiveKitConfig":
         return cls(
             api_key=os.environ.get("LIVEKIT_API_KEY", ""),
             api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
-            room_name=os.environ.get("EIDOLON_ESP32_ROOM_NAME", ""),
         )
 
 
