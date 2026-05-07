@@ -50,7 +50,7 @@ export function useConnection(livekitUrl: string) {
         roomName,
         participantName,
       });
-      const tokenUrl = process.env.NEXT_PUBLIC_LIVEKIT_TOKEN_URL ?? "http://localhost:8000/api/livekit/token";
+      const tokenUrl = process.env.NEXT_PUBLIC_LIVEKIT_TOKEN_URL ?? "http://localhost:8000/api/web/config";
       const response = await fetch(`${tokenUrl}?${params}`, {
         signal: ac.signal,
       });

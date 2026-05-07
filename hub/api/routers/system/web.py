@@ -1,4 +1,4 @@
-"""LiveKit routes - token generation for client connections."""
+"""Web routes - token generation for client connections."""
 
 from __future__ import annotations
 
@@ -7,10 +7,10 @@ from pydantic import BaseModel
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
 
-router = APIRouter(prefix="/api/livekit", tags=["LiveKit"])
+router = APIRouter(prefix="/api/web", tags=["Web"])
 
 
-@router.get("/token", response_model=TokenResponse)
+@router.get("/config", response_model=TokenResponse)
 async def get_token(
     room_name: str = Query(..., description="LiveKit room name"),
     participant_name: str = Query(..., description="Participant identity"),

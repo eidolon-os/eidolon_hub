@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from hub.api.routers.system import esp32_router, livekit_router
+from hub.api.routers.system import esp32_router, web_router
 from hub.config import AppConfig
 
 
@@ -29,7 +29,7 @@ def create_app(config: AppConfig) -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(livekit_router)
+    app.include_router(web_router)
     app.include_router(esp32_router)
 
     return app

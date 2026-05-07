@@ -11,7 +11,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from hub.api.routers.system import esp32_router, livekit_router
+from hub.api.routers.system import esp32_router, web_router
 from hub.config import AppConfig, load_config
 from hub.core.device_manager import DeviceManager
 from hub.logging import setup_logging
@@ -58,7 +58,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(livekit_router)
+    app.include_router(web_router)
     app.include_router(esp32_router)
 
     return app

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from hub.api.routers.system.token import AgentMode, generate_token
 from hub.config import load_config
 
-router = APIRouter(prefix="/esp32/livekit", tags=["ESP32"])
+router = APIRouter(prefix="/api/esp32", tags=["ESP32"])
 
 
 class AudioConfig(BaseModel):
@@ -32,10 +32,10 @@ class ESP32ConfigResponse(BaseModel):
 @router.get("/config", response_model=ESP32ConfigResponse)
 async def get_esp32_config(
     x_device_id: str = Header(..., alias="X-Device-ID"),
-    room_name: str = Query(..., description="LiveKit room name"),
+    room_name: str = Query(..., description="Room name"),
     agent_mode: AgentMode = Query(AgentMode.STREAMING, description="Agent mode: 'streaming' or 'ptt'"),
 ):
-    """Return LiveKit configuration for an ESP32 device."""
+    """Return configuration for an ESP32 device."""
     server_url = load_config().esp32.server_url
 
     try:
