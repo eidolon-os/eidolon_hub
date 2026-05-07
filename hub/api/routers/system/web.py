@@ -17,6 +17,7 @@ async def get_token(
     agent_mode: AgentMode = Query(AgentMode.STREAMING, description="Agent mode: 'streaming' or 'ptt'"),
 ):
     try:
+        agent_mode = AgentMode.STREAMING
         identity, token = generate_token(room_name, participant_name, agent_mode)
     except ValueError as e:
         raise HTTPException(status_code=500, detail=str(e))

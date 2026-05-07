@@ -47,8 +47,9 @@ export function useConnection(livekitUrl: string) {
 
     try {
       const params = new URLSearchParams({
-        roomName,
-        participantName,
+        room_name: roomName,
+        participant_name: participantName,
+        agent_mode: "streaming",
       });
       const tokenUrl = process.env.NEXT_PUBLIC_LIVEKIT_TOKEN_URL ?? "http://localhost:8000/api/web/config";
       const response = await fetch(`${tokenUrl}?${params}`, {
