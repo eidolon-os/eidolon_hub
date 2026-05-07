@@ -1,43 +1,45 @@
-"""Eidolon Hub 主入口 - ASGI 应用."""
+"""Eidolon Hub main entry point - ASGI application."""
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import signal
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
 
+import hub
 from hub.api.routers.system import esp32_router, web_router
 from hub.config import AppConfig, load_config
 from hub.core.device_manager import DeviceManager
+from hub.core.discovery import mdns_lifespan
 from hub.logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
-    """创建 FastAPI 应用（带 Hub 生命周期管理）."""
+    """Create FastAPI application with Hub lifecycle management."""
     app_config = config or load_config()
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):
+    async def lifespan(app: FastAPI) -> None:
         setup_logging(level=app_config.logging.level)
-        logger.info("Starting Eidolon Hub v%s", __import__("hub").__version__)
+        logger.info("Starting Eidolon Hub v%s", hub.__version__)
 
         device_manager = DeviceManager(Path("data/devices.json"))
         await device_manager.load()
-
         app.state.device_manager = device_manager
         app.state.config = app_config
 
         logger.info("Hub started successfully")
         logger.info("  - HTTP API: http://%s:%d", app_config.api.host, app_config.api.port)
 
-        yield
+        async with mdns_lifespan(
+            port=app_config.api.port,
+            version=hub.__version__,
+        ):
+            yield
 
         logger.info("Stopping Eidolon Hub...")
         await device_manager.save()
@@ -65,7 +67,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
 
 def get_app() -> FastAPI:
-    """获取 ASGI 应用实例（供 uvicorn 使用）."""
+    """Return ASGI application instance (used by uvicorn)."""
     return create_app()
 
 
@@ -74,6 +76,7 @@ app = get_app()
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(
         "hub.main:app",
         host=os.environ.get("HUB_HOST", "0.0.0.0"),

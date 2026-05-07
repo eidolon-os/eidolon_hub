@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import secrets
+
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
@@ -32,10 +34,13 @@ class ESP32ConfigResponse(BaseModel):
 @router.get("/config", response_model=ESP32ConfigResponse)
 async def get_esp32_config(
     x_device_id: str = Header(..., alias="X-Device-ID"),
-    room_name: str = Query(..., description="Room name"),
+    room_name: str | None = Query(default=None, description="Room name (optional; auto-generated if omitted)"),
     agent_mode: AgentMode = Query(AgentMode.STREAMING, description="Agent mode: 'streaming' or 'ptt'"),
 ):
     """Return configuration for an ESP32 device."""
+    if not room_name:
+        room_name = f"esp32-{secrets.token_hex(4)}"
+
     server_url = load_config().esp32.server_url
 
     try:

@@ -17,6 +17,7 @@ dependencies = [
     "aiomqtt>=2.0",
     "livekit-api>=0.5",
     "python-dotenv>=1.0",
+    "zeroconf>=0.131",
 ]
 
 [tool.setuptools.packages.find]
