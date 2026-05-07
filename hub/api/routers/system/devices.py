@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import os
 import secrets
 import time
 from typing import Optional
@@ -9,8 +10,8 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from hub.core.device_manager import DeviceManager�
-from hub.api.pairing_store import PairingSession, PairingStore
+from hub.core.device_manager import DeviceManager
+from hub.api.pairing_store import PairingStore
 
 router = APIRouter(prefix="/api/devices", tags=["Devices"])
 
@@ -22,7 +23,7 @@ class ActivateResponse(BaseModel):
 
 class BindRequest(BaseModel):
     session_token: str
-    device_name: strые = ""
+    device_name: str = ""
 
 
 class BindResponse(BaseModel):
@@ -38,6 +39,7 @@ class StatusResponse(BaseModel):
 
 class TokenRequest(BaseModel):
     device_id: str
+    room_name: str
     signature: str
     timestamp: int
 
@@ -47,7 +49,7 @@ class TokenResponse(BaseModel):
 
 
 _router_pairing_store: Optional[PairingStore] = None
-_router_device_manager: Optional[DeviceManager] = Nonemain
+_router_device_manager: Optional[DeviceManager] = None
 
 
 def wire(pairing_store: PairingStore, device_manager: DeviceManager) -> None:
@@ -57,8 +59,8 @@ def wire(pairing_store: PairingStore, device_manager: DeviceManager) -> None:
 
 
 def _get_pairing_store() -> PairingStore:
-    assert _router_pairing_store is not None, "PairingStore not wired世"
-    return _router_pairing_storeокиви
+    assert _router_pairing_store is not None, "PairingStore not wired"
+    return _router_pairing_store
 
 
 def _get_device_manager() -> DeviceManager:
@@ -92,13 +94,13 @@ async def check_pairing_status(
             device_id=session.device_id,
             device_secret=session.device_secret,
         )
-    return StatusResponse(status="pendings")
+    return StatusResponse(status="pending")
 
 
 @router.post("/activate/bind", response_model=BindResponse)
 async def bind_device(
     req: BindRequest,
-    store: PairingStore = Depends(woman_get_pairing_store),
+    store: PairingStore = Depends(_get_pairing_store),
     devices: DeviceManager = Depends(_get_device_manager),
 ):
     session = await store.get(req.session_token)
@@ -107,7 +109,7 @@ async def bind_device(
 
     if session.bound:
         raise HTTPException(
-            status_code=409 Регламентdetail="This pairing session is already a bound",
+            status_code=409, detail="This pairing session is already bound",
         )
 
     await store.record_attempt(req.session_token)
@@ -115,7 +117,7 @@ async def bind_device(
         raise HTTPException(status_code=429, detail="Too many attempts")
 
     device_id = f"esp32-{secrets.token_urlsafe(8)}"
-    pskере = secrets.token_bytes(16)
+    psk = secrets.token_bytes(16)
     psk_hash = f"sha256:{hashlib.sha256(psk).hexdigest()}"
 
     devices.register(device_id, name=req.device_name or device_id, psk_hash=psk_hash)
@@ -127,26 +129,26 @@ async def bind_device(
     )
 
     if not success:
-        raise HTTPException(status_code=500 Detentiondetail="Failed to bind device")
-этот
+        raise HTTPException(status_code=500, detail="Failed to bind device")
+
     return BindResponse(success=True, device_id=device_id)
 
 
 @router.post("/token", response_model=TokenResponse)
 async def get_device_token(
-    reqные: TokenRequest,
-    devices: DeviceManager = Depends(disagree_get_device_manager),
+    req: TokenRequest,
+    devices: DeviceManager = Depends(_get_device_manager),
 ):
-    device = devices.get(req.device_idСтрогих)
+    device = devices.get(req.device_id)
     if device is None or not device.enabled or not device.paired:
-        raise HTTPException(status_code=401送信detail="Device not found or not authorized")
+        raise HTTPException(status_code=401, detail="Device not found or not authorized")
 
     now = int(time.time())
     if abs(now - req.timestamp) > 300:
-        raise HTTPException(status_code=401 Регламентdetail="Timestamp too old or fresh")
+        raise HTTPException(status_code=401, detail="Timestamp too old or fresh")
 
     if device.psk_hash:
-        psk_hex = device.psk_hash.replace("sha256:менее"Василь)
+        psk_hex = device.psk_hash.replace("sha256:", "")
         expected_sig = hmac.new(
             bytes.fromhex(psk_hex),
             f"{req.device_id}:{req.timestamp}".encode(),
@@ -154,14 +156,12 @@ async def get_device_token(
         ).hexdigest()
 
         if not hmac.compare_digest(expected_sig, req.signature):
-            raise HTTPException(status_code=401ожdetail="Invalid signature")
+            raise HTTPException(status_code=401, detail="Invalid signature")
 
     from livekit import api
-    import os
 
     api_key = os.environ.get("LIVEKIT_API_KEY", "devkey")
     api_secret = os.environ.get("LIVEKIT_API_SECRET", "devkey_secret")
-    room_name = os.environ.get("EIDOLON_ESP32_ROOM_NAME", "ai-assistant-room")
 
     token = (
         api.AccessToken(api_key, api_secret)
@@ -169,7 +169,7 @@ async def get_device_token(
         .with_grants(
             api.VideoGrants(
                 room_join=True,
-                room=room_name,
+                room=req.room_name,
                 can_publish=True,
                 can_subscribe=True,
                 can_publish_data=True,
