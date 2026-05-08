@@ -62,11 +62,33 @@ class Esp32Config:
 
 
 @dataclass
+class DiscoveryConfig:
+    service_type: str = "_eidolon-hub._tcp.local."
+    service_name: str = ""
+    hostname: str = "eidolon-hub"
+    txt_version: str = "1"
+    api_version: str = "v1"
+    config_path: str = "/api/esp32/config"
+
+    @classmethod
+    def from_env(cls) -> "DiscoveryConfig":
+        return cls(
+            service_type=os.environ.get("MDNS_SERVICE_TYPE", "_eidolon-hub._tcp.local."),
+            service_name=os.environ.get("MDNS_SERVICE_NAME", ""),
+            hostname=os.environ.get("MDNS_HOSTNAME", "eidolon-hub"),
+            txt_version=os.environ.get("MDNS_TXT_VERSION", "1"),
+            api_version=os.environ.get("MDNS_API_VERSION", "v1"),
+            config_path=os.environ.get("MDNS_CONFIG_PATH", "/api/esp32/config"),
+        )
+
+
+@dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     livekit: LiveKitConfig = field(default_factory=LiveKitConfig)
     esp32: Esp32Config = field(default_factory=Esp32Config)
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -75,6 +97,7 @@ class AppConfig:
             logging=LoggingConfig.from_env(),
             livekit=LiveKitConfig.from_env(),
             esp32=Esp32Config.from_env(),
+            discovery=DiscoveryConfig.from_env(),
         )
 
 

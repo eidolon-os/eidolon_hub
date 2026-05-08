@@ -38,6 +38,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         async with mdns_lifespan(
             port=app_config.api.port,
             version=hub.__version__,
+            discovery_config=app_config.discovery,
         ):
             yield
 

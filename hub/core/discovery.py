@@ -10,11 +10,14 @@ from typing import AsyncIterator
 from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
+from hub.config import DiscoveryConfig, load_config
+
 logger = logging.getLogger(__name__)
 
-SERVICE_TYPE = "_eidolon-hub._tcp.local."
-SERVICE_NAME = f"Eidolon Hub.{SERVICE_TYPE}"
-DEFAULT_HOSTNAME = "eidolon-hub"
+_DISCOVERY_DEFAULTS = load_config().discovery
+SERVICE_TYPE = _DISCOVERY_DEFAULTS.service_type
+SERVICE_NAME = _DISCOVERY_DEFAULTS.service_name or f"Eidolon Hub.{SERVICE_TYPE}"
+DEFAULT_HOSTNAME = _DISCOVERY_DEFAULTS.hostname
 
 
 def _local_ipv4() -> str:
@@ -33,33 +36,43 @@ def _local_ipv4() -> str:
 async def mdns_lifespan(
     port: int,
     version: str,
+    discovery_config: DiscoveryConfig | None = None,
 ) -> AsyncIterator[None]:
     """Async context manager that registers/unregisters the mDNS service.
 
     Args:
         port: Hub HTTP port.
         version: Hub software version string.
+        discovery_config: mDNS discovery configuration.
     """
+    cfg = discovery_config or load_config().discovery
+    service_type = cfg.service_type
+    service_name = cfg.service_name or f"Eidolon Hub.{service_type}"
+    hostname = cfg.hostname
+    txt_version = cfg.txt_version
+    api_version = cfg.api_version
+    config_path = cfg.config_path
+
     aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only)
     ip = _local_ipv4()
 
     info = ServiceInfo(
-        type_=SERVICE_TYPE,
-        name=SERVICE_NAME,
+        type_=service_type,
+        name=service_name,
         addresses=[socket.inet_aton(ip)],
         port=port,
         properties={
-            "txtvers": "1",
+            "txtvers": txt_version,
             "version": version,
-            "api": "v1",
-            "config_url": f"http://{ip}:{port}/api/esp32/config",
+            "api": api_version,
+            "config_url": f"http://{ip}:{port}{config_path}",
         },
-        server=f"{DEFAULT_HOSTNAME}.local.",
+        server=f"{hostname}.local.",
     )
 
     try:
         await aiozc.async_register_service(info)
-        logger.info("mDNS registered: %s.local:%d", DEFAULT_HOSTNAME, port)
+        logger.info("mDNS registered: %s.local:%d", hostname, port)
     except Exception as exc:  # pragma: no cover
         logger.warning(
             "mDNS registration failed: %s — Hub continues without LAN discovery",
