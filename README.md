@@ -12,6 +12,11 @@ uv sync
 uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
 ```
 
+## 部署与运行方式
+
+- **本地开发（LiveKit + Hub + Web + Admin 分进程）**：说明见 [deploy/dev/README.md](deploy/dev/README.md)。
+- **Docker Compose（单机一键拉起上述服务）**：说明见 [deploy/prod/README.md](deploy/prod/README.md)。
+
 ## Environment Variables
 
 | Variable | Default | Description |

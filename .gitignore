@@ -40,10 +40,6 @@ client/web/.next
 client/web/node_modules
 client/web/tsconfig.tsbuildinfo
 
-# deploy runtime
-deploy/livekit/caddy_data
-deploy/livekit/caddy_config
-
 .cursor
 .claude/
 uv.lock

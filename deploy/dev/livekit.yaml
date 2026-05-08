@@ -1,0 +1,23 @@
+# LiveKit — deploy/dev 本地/局域网开发（与仓库根 .env 中 LIVEKIT_API_* 对齐）
+#
+# 启动: ./run-livekit.sh
+#
+port: 7880
+bind_addresses:
+  - 0.0.0.0
+
+keys:
+  eidolon: eidolon-livekit-secret-2026
+
+# 未配置 cert_file/key_file 时 TURN TLS 关闭，保留 UDP/TCP
+turn:
+  enabled: true
+  udp_port: 3478
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 60000
+
+logging:
+  level: debug
+  json: false

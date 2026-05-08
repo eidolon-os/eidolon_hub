@@ -1,3 +1,4 @@
+# LiveKit — 与 compose 中容器编排配套（无宿主机 Nginx 路径、无 TURN TLS 证书）
 port: 7880
 bind_addresses:
   - 0.0.0.0
@@ -7,16 +8,11 @@ keys:
 
 turn:
   enabled: true
-  domain: livekit-server.yangtzeailab.com
-  cert_file: /etc/certs/fullchain.pem
-  key_file: /etc/certs/privkey.pem
-  tls_port: 5349
   udp_port: 3478
 
 rtc:
   port_range_start: 50000
   port_range_end: 60000
-  use_external_ip: true
   tcp_port: 7881
 
 logging:
