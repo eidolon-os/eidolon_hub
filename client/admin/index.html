@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eidolon Admin</title>
+  </head>
+  <body>
+    <main class="container">
+      <header>
+        <h1>Eidolon Admin</h1>
+        <p class="muted">Phase A: LiveKit probe-driven device monitor</p>
+      </header>
+
+      <section class="panel">
+        <h2>Probe Health</h2>
+        <pre id="probeHealth">loading...</pre>
+      </section>
+
+      <section class="panel">
+        <h2>Metrics</h2>
+        <pre id="metrics">loading...</pre>
+      </section>
+
+      <section class="panel">
+        <div class="row">
+          <h2>Devices</h2>
+          <button id="refreshBtn">Refresh</button>
+        </div>
+        <table id="devicesTable">
+          <thead>
+            <tr>
+              <th>Device ID</th>
+              <th>Status</th>
+              <th>Room</th>
+              <th>Last Seen</th>
+              <th>Missed Probes</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </section>
+
+      <section class="panel">
+        <h2>Send Command</h2>
+        <form id="commandForm">
+          <label>
+            Device ID
+            <input id="deviceId" placeholder="esp32-001" required />
+          </label>
+          <label>
+            Topic
+            <input id="topic" value="admin.command" required />
+          </label>
+          <label>
+            Payload JSON
+            <textarea id="payload">{}</textarea>
+          </label>
+          <button type="submit">Send</button>
+        </form>
+        <pre id="commandResult"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Recent Events (SSE)</h2>
+        <pre id="eventsLog">connecting...</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

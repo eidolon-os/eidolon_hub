@@ -39,12 +39,16 @@ class LoggingConfig:
 
 @dataclass
 class LiveKitConfig:
+    url: str = ""
     api_key: str = ""
     api_secret: str = ""
 
     @classmethod
     def from_env(cls) -> "LiveKitConfig":
+        explicit_url = os.environ.get("LIVEKIT_URL", "")
+        fallback_url = os.environ.get("EIDOLON_LIVEKIT_URL", "")
         return cls(
+            url=explicit_url or fallback_url,
             api_key=os.environ.get("LIVEKIT_API_KEY", ""),
             api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
         )
@@ -83,12 +87,32 @@ class DiscoveryConfig:
 
 
 @dataclass
+class AdminConfig:
+    probe_enabled: bool = True
+    probe_interval_seconds: int = 10
+    offline_after_missed_probes: int = 3
+    degraded_after_missed_probes: int = 2
+    command_timeout_seconds: int = 30
+
+    @classmethod
+    def from_env(cls) -> "AdminConfig":
+        return cls(
+            probe_enabled=os.environ.get("ADMIN_PROBE_ENABLED", "true").lower() in {"1", "true", "yes"},
+            probe_interval_seconds=int(os.environ.get("ADMIN_PROBE_INTERVAL_SECONDS", "10")),
+            offline_after_missed_probes=int(os.environ.get("ADMIN_OFFLINE_AFTER_MISSED_PROBES", "3")),
+            degraded_after_missed_probes=int(os.environ.get("ADMIN_DEGRADED_AFTER_MISSED_PROBES", "2")),
+            command_timeout_seconds=int(os.environ.get("ADMIN_COMMAND_TIMEOUT_SECONDS", "30")),
+        )
+
+
+@dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
     livekit: LiveKitConfig = field(default_factory=LiveKitConfig)
     esp32: Esp32Config = field(default_factory=Esp32Config)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    admin: AdminConfig = field(default_factory=AdminConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -98,6 +122,7 @@ class AppConfig:
             livekit=LiveKitConfig.from_env(),
             esp32=Esp32Config.from_env(),
             discovery=DiscoveryConfig.from_env(),
+            admin=AdminConfig.from_env(),
         )
 
 

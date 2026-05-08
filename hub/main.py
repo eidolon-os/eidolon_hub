@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import signal
+from contextlib import suppress
 from pathlib import Path
 
 from fastapi import FastAPI
 
 import hub
+from hub.api.routers.admin import admin_commands_router, admin_devices_router, admin_events_router
 from hub.api.routers.system import esp32_router, web_router
 from hub.config import AppConfig, load_config
+from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.device_manager import DeviceManager
 from hub.core.discovery import mdns_lifespan
 from hub.logging import setup_logging
@@ -29,8 +33,24 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         device_manager = DeviceManager(Path("data/devices.json"))
         await device_manager.load()
+        admin_runtime = LiveKitAdminRuntime(app_config)
+
         app.state.device_manager = device_manager
+        app.state.admin_runtime = admin_runtime
         app.state.config = app_config
+
+        probe_task = None
+        if app_config.admin.probe_enabled:
+            admin_runtime.get_probe_health().running = True
+
+            async def probe_loop() -> None:
+                while True:
+                    device_ids = [device.device_id for device in device_manager.list_all()]
+                    await admin_runtime.run_probe_cycle(device_ids)
+                    await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
+                    await asyncio.sleep(app_config.admin.probe_interval_seconds)
+
+            probe_task = asyncio.create_task(probe_loop())
 
         logger.info("Hub started successfully")
         logger.info("  - HTTP API: http://%s:%d", app_config.api.host, app_config.api.port)
@@ -43,6 +63,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             yield
 
         logger.info("Stopping Eidolon Hub...")
+        if probe_task:
+            admin_runtime.get_probe_health().running = False
+            probe_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await probe_task
         await device_manager.save()
         logger.info("Hub stopped")
 
@@ -63,6 +88,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app.include_router(web_router)
     app.include_router(esp32_router)
+    app.include_router(admin_devices_router)
+    app.include_router(admin_commands_router)
+    app.include_router(admin_events_router)
 
     return app
 
