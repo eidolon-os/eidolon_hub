@@ -5,11 +5,11 @@ from __future__ import annotations
 import secrets
 from enum import Enum
 
-from fastapi import APIRouter, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
-from hub.config import load_config
+from hub.config import load_config, resolve_eidolon_livekit_client_url
 
 router = APIRouter(prefix="/api", tags=["Config"])
 
@@ -50,16 +50,26 @@ def _token_pair(
 
 def _esp32_response(
     *,
+    request: Request,
     room_name: str | None,
     device_id: str,
     agent_mode: AgentMode,
 ) -> ESP32ConfigResponse:
     resolved_room = room_name or f"esp32-{secrets.token_hex(4)}"
     _, token = _token_pair(resolved_room, device_id, agent_mode)
+    cfg = load_config().esp32
+    try:
+        server_url = resolve_eidolon_livekit_client_url(
+            cfg,
+            request_host=request.url.hostname or "",
+            request_scheme=request.url.scheme or "http",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
     return ESP32ConfigResponse(
         success=True,
         config=ESP32Config(
-            server_url=load_config().esp32.server_url,
+            server_url=server_url,
             token=token,
             identity=device_id,
             room_name=resolved_room,
@@ -111,6 +121,7 @@ def _web_response(
     },
 )
 async def get_config(
+    request: Request,
     client_type: ClientType = Query(
         default=ClientType.ESP32,
         description="esp32: full device config; web: token only",
@@ -136,6 +147,7 @@ async def get_config(
                 detail="X-Device-ID header is required when client_type=esp32",
             )
         return _esp32_response(
+            request=request,
             room_name=room_name,
             device_id=x_device_id,
             agent_mode=agent_mode,

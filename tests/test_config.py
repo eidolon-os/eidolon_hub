@@ -7,14 +7,14 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from hub.config import AppConfig
+from hub.config import AppConfig, Esp32Config, resolve_eidolon_livekit_client_url
 from hub.main import create_app
 
 
 @pytest.fixture
 def client():
     cfg = AppConfig()
-    cfg.esp32.server_url = "wss://example.test"
+    cfg.esp32.livekit_url = "wss://example.test"
     with patch("hub.api.routers.system.config.load_config", return_value=cfg):
         app = create_app(cfg)
         yield TestClient(app)
@@ -76,3 +76,79 @@ def test_config_web(client: TestClient):
 def test_config_web_missing_params(client: TestClient):
     r = client.get("/api/config", params={"client_type": "web", "room_name": "r"})
     assert r.status_code == 422
+
+
+def test_resolve_full_url_override():
+    esp32 = Esp32Config(livekit_url="wss://lk.example.com/livekit")
+    assert (
+        resolve_eidolon_livekit_client_url(
+            esp32,
+            request_host="ignored",
+            request_scheme="http",
+        )
+        == "wss://lk.example.com/livekit"
+    )
+
+
+def test_resolve_explicit_ip():
+    esp32 = Esp32Config(
+        livekit_url="",
+        livekit_ip="192.168.3.204",
+        livekit_port=7880,
+        livekit_scheme="",
+    )
+    assert (
+        resolve_eidolon_livekit_client_url(
+            esp32,
+            request_host="10.0.0.1",
+            request_scheme="https",
+        )
+        == "ws://192.168.3.204:7880"
+    )
+
+
+def test_resolve_explicit_ip_wss():
+    esp32 = Esp32Config(
+        livekit_url="",
+        livekit_ip="192.168.3.204",
+        livekit_port=7880,
+        livekit_scheme="wss",
+    )
+    assert (
+        resolve_eidolon_livekit_client_url(
+            esp32,
+            request_host="10.0.0.1",
+            request_scheme="http",
+        )
+        == "wss://192.168.3.204:7880"
+    )
+
+
+def test_resolve_auto_uses_request_host():
+    esp32 = Esp32Config(livekit_url="", livekit_ip="", livekit_port=7880, livekit_scheme="")
+    assert (
+        resolve_eidolon_livekit_client_url(
+            esp32,
+            request_host="eidolon-hub.local",
+            request_scheme="http",
+        )
+        == "ws://eidolon-hub.local:7880"
+    )
+
+
+def test_resolve_auto_https_hub():
+    esp32 = Esp32Config(livekit_url="", livekit_ip="auto", livekit_port=7880, livekit_scheme="")
+    assert (
+        resolve_eidolon_livekit_client_url(
+            esp32,
+            request_host="hub.example.com",
+            request_scheme="https",
+        )
+        == "wss://hub.example.com:7880"
+    )
+
+
+def test_resolve_auto_empty_host_raises():
+    esp32 = Esp32Config(livekit_url="", livekit_ip="", livekit_port=7880, livekit_scheme="")
+    with pytest.raises(ValueError):
+        resolve_eidolon_livekit_client_url(esp32, request_host="", request_scheme="http")

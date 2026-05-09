@@ -56,13 +56,77 @@ class LiveKitConfig:
 
 @dataclass
 class Esp32Config:
-    server_url: str = ""
+    """LiveKit URL as seen by ESP32 / browsers (ws or wss).
+
+    Resolution (see ``resolve_eidolon_livekit_client_url``):
+
+    1. ``livekit_url`` (``EIDOLON_LIVEKIT_URL``) non-empty → use as-is.
+    2. ``livekit_ip`` non-empty and not ``auto`` → ``{scheme}://{ip}:{port}``.
+    3. ``livekit_ip`` empty or ``auto`` → ``{scheme}://{request Host}:{port}``
+       (same hostname the client used to reach Hub).
+    """
+
+    livekit_url: str = ""
+    livekit_ip: str = ""
+    livekit_port: int = 7880
+    livekit_scheme: str = ""
 
     @classmethod
     def from_env(cls) -> "Esp32Config":
         return cls(
-            server_url=os.environ.get("EIDOLON_LIVEKIT_URL", ""),
+            livekit_url=os.environ.get("EIDOLON_LIVEKIT_URL", "").strip(),
+            livekit_ip=os.environ.get("EIDOLON_LIVEKIT_IP", "").strip(),
+            livekit_port=int(os.environ.get("EIDOLON_LIVEKIT_PORT", "7880")),
+            livekit_scheme=os.environ.get("EIDOLON_LIVEKIT_SCHEME", "").strip().lower(),
         )
+
+
+def _ws_scheme_from_config_and_request(
+    configured: str,
+    hub_request_scheme: str,
+    *,
+    explicit_host: bool,
+) -> str:
+    """Pick ws or wss for composed client URLs."""
+    if configured in ("ws", "wss"):
+        return configured
+    if explicit_host:
+        return "ws"
+    return "wss" if hub_request_scheme == "https" else "ws"
+
+
+def resolve_eidolon_livekit_client_url(
+    esp32: Esp32Config,
+    *,
+    request_host: str,
+    request_scheme: str,
+) -> str:
+    """Build LiveKit WebSocket URL returned in ``GET /api/config`` (esp32)."""
+    if esp32.livekit_url:
+        return esp32.livekit_url
+
+    host_part = esp32.livekit_ip.strip()
+    if host_part and host_part.lower() != "auto":
+        scheme = _ws_scheme_from_config_and_request(
+            esp32.livekit_scheme,
+            request_scheme,
+            explicit_host=True,
+        )
+        return f"{scheme}://{host_part}:{esp32.livekit_port}"
+
+    hub_host = (request_host or "").strip()
+    if not hub_host:
+        raise ValueError(
+            "Cannot resolve LiveKit client URL: set EIDOLON_LIVEKIT_URL, "
+            "or EIDOLON_LIVEKIT_IP, or call /api/config with a valid Host header"
+        )
+
+    scheme = _ws_scheme_from_config_and_request(
+        esp32.livekit_scheme,
+        request_scheme,
+        explicit_host=False,
+    )
+    return f"{scheme}://{hub_host}:{esp32.livekit_port}"
 
 
 @dataclass
