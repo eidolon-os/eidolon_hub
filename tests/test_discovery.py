@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from hub.config import DiscoveryConfig
 from hub.core.discovery import (
     DEFAULT_HOSTNAME,
     SERVICE_NAME,
@@ -206,6 +207,7 @@ class TestMdnsLifespan:
                 async with mdns_lifespan(
                     port=8081,
                     version="1.2.3",
+                    discovery_config=DiscoveryConfig(config_path="/api/config"),
                 ):
                     info = mock_instance.async_register_service.await_args.args[0]
                     props = info.properties
@@ -213,7 +215,7 @@ class TestMdnsLifespan:
                     assert props[b"txtvers"] == b"1"
                     assert props[b"version"] == b"1.2.3"
                     assert props[b"api"] == b"v1"
-                    assert props[b"config_url"] == b"http://192.168.1.100:8081/api/esp32/config"
+                    assert props[b"config_url"] == b"http://192.168.1.100:8081/api/config"
 
     @pytest.mark.asyncio
     async def test_service_info_server_name(self, mock_zeroconf):

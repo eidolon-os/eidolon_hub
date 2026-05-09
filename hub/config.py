@@ -72,7 +72,7 @@ class DiscoveryConfig:
     hostname: str = "eidolon-hub"
     txt_version: str = "1"
     api_version: str = "v1"
-    config_path: str = "/api/esp32/config"
+    config_path: str = "/api/config"
 
     @classmethod
     def from_env(cls) -> "DiscoveryConfig":
@@ -82,7 +82,7 @@ class DiscoveryConfig:
             hostname=os.environ.get("MDNS_HOSTNAME", "eidolon-hub"),
             txt_version=os.environ.get("MDNS_TXT_VERSION", "1"),
             api_version=os.environ.get("MDNS_API_VERSION", "v1"),
-            config_path=os.environ.get("MDNS_CONFIG_PATH", "/api/esp32/config"),
+            config_path=os.environ.get("MDNS_CONFIG_PATH", "/api/config"),
         )
 
 

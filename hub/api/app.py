@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from hub.api.routers.admin import admin_commands_router, admin_devices_router, admin_events_router
-from hub.api.routers.system import esp32_router, web_router
+from hub.api.routers.system import config_router
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.device_manager import DeviceManager
@@ -63,8 +63,7 @@ def create_app(config: AppConfig) -> FastAPI:
         allow_headers=["*"],
     )
 
-    app.include_router(web_router)
-    app.include_router(esp32_router)
+    app.include_router(config_router)
     app.include_router(admin_devices_router)
     app.include_router(admin_commands_router)
     app.include_router(admin_events_router)

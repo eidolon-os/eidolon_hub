@@ -30,20 +30,19 @@ uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
 
 ## API Endpoints
 
-### ESP32 Device
+### Unified config (ESP32 + Web)
 
 ```
-GET /api/esp32/config
-Headers: X-Device-ID: <device-id>
-Query: room_name, agent_mode (streaming|ptt)
+GET /api/config
+Query:
+  client_type: esp32 (default) | web
+  room_name: optional for esp32 (auto if omitted); required for web
+  participant_name: required when client_type=web
+  agent_mode: streaming|ptt
+Headers (esp32 only): X-Device-ID: <device-id>
 ```
 
-### Web Client
-
-```
-GET /api/web/config
-Query: room_name, participant_name, agent_mode (streaming|ptt)
-```
+ESP32 响应体与原先 `/api/esp32/config` 相同；Web 响应体与原先 `/api/web/config` 相同（`identity` + `accessToken`）。
 
 ## LAN Discovery (mDNS / Zeroconf)
 
@@ -82,7 +81,7 @@ ping eidolon-hub.local
 
 # Access from another machine on LAN
 curl -H "X-Device-ID: test-001" \
-  "http://eidolon-hub.local:8081/api/esp32/config?room_name=demo"
+  "http://eidolon-hub.local:8081/api/config?room_name=demo"
 ```
 
 **ESP32 (ESP-IDF)**: Use the built-in mDNS API to query `_eidolon-hub._tcp.local.`, read the TXT record, then call the endpoint paths found in `esp32_config` and `livekit_url`.

@@ -7,7 +7,7 @@ bind_addresses:
   - 0.0.0.0
 
 keys:
-  eidolon: eidolon-livekit-secret-2026
+  eidolon: _v0_i6cC2NJqa-4a6b-TfmtdJ9giW3WRu9QQRYSXUQ0
 
 # 未配置 cert_file/key_file 时 TURN TLS 关闭，保留 UDP/TCP
 turn:
