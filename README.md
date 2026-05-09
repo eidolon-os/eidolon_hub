@@ -28,7 +28,7 @@ uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
 | `LIVEKIT_API_SECRET` | — | LiveKit API secret |
 | `LIVEKIT_URL` | — | LiveKit **server HTTP API** URL for Hub (e.g. `http://127.0.0.1:7880`); if unset, falls back to `EIDOLON_LIVEKIT_URL` with `ws`→`http` |
 | `EIDOLON_LIVEKIT_URL` | — | If set, full **client** WebSocket URL (`ws://…` / `wss://…`) returned in `GET /api/config` (highest priority) |
-| `EIDOLON_LIVEKIT_IP` | — | If set and not `auto`, client URL host is this value; empty or `auto` → use the **same Host** the client used to call Hub |
+| `EIDOLON_LIVEKIT_IP` | — | If set and not `auto`, client URL host is this value; empty or `auto` → use request **Host** if non-loopback, else **LAN outbound IPv4** (never `127.0.0.1` for that fallback) |
 | `EIDOLON_LIVEKIT_PORT` | `7880` | Client WebSocket port when URL is composed from IP or Host |
 | `EIDOLON_LIVEKIT_SCHEME` | — | `ws` or `wss` when composing URL; if empty: explicit IP defaults to `ws`; auto-host uses `wss` when Hub request is `https`, else `ws` |
 
@@ -48,7 +48,7 @@ Headers (esp32 only): X-Device-ID: <device-id>
 
 ESP32 响应体与原先 `/api/esp32/config` 相同；Web 响应体与原先 `/api/web/config` 相同（`identity` + `accessToken`）。
 
-下发给设备的 `config.server_url` 按顺序解析：`EIDOLON_LIVEKIT_URL`（完整）→ 否则 `EIDOLON_LIVEKIT_IP`（非 `auto`）+ 端口 → 否则用本次请求的 `Host` + 端口（便于与访问 Hub 的地址一致，换机不必改 IP）。
+下发给设备的 `config.server_url` 按顺序解析：`EIDOLON_LIVEKIT_URL`（完整）→ 否则 `EIDOLON_LIVEKIT_IP`（非 `auto`）+ 端口 → 否则用本次请求的 `Host` + 端口；若 `Host` 为 `localhost` / `127.0.0.1` 等回环地址（或 `livekit_ip=auto` 且等价场景），则改为本机**局域网出站 IPv4**（与 mDNS 注册同源探测），避免其它设备拿到不可达的 `127.0.0.1`。
 
 ## LAN Discovery (mDNS / Zeroconf)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import socket
 from dataclasses import dataclass, field
 
 
@@ -62,8 +63,10 @@ class Esp32Config:
 
     1. ``livekit_url`` (``EIDOLON_LIVEKIT_URL``) non-empty → use as-is.
     2. ``livekit_ip`` non-empty and not ``auto`` → ``{scheme}://{ip}:{port}``.
-    3. ``livekit_ip`` empty or ``auto`` → ``{scheme}://{request Host}:{port}``
-       (same hostname the client used to reach Hub).
+    3. ``livekit_ip`` empty or ``auto`` → ``{scheme}://{host}:{port}`` where
+       ``host`` is the request ``Host`` if it is a non-loopback address; otherwise
+       the machine's LAN IPv4 (same strategy as mDNS registration), so other
+       devices never receive ``127.0.0.1`` when auto is intended for LAN access.
     """
 
     livekit_url: str = ""
@@ -79,6 +82,31 @@ class Esp32Config:
             livekit_port=int(os.environ.get("EIDOLON_LIVEKIT_PORT", "7880")),
             livekit_scheme=os.environ.get("EIDOLON_LIVEKIT_SCHEME", "").strip().lower(),
         )
+
+
+def _outbound_ipv4() -> str:
+    """Return local IPv4 used for outbound UDP (typically LAN, not loopback)."""
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(("8.8.8.8", 80))
+        return s.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+    finally:
+        s.close()
+
+
+def _is_loopback_request_host(host: str) -> bool:
+    h = (host or "").strip().lower()
+    if not h:
+        return True
+    if h == "localhost":
+        return True
+    if h in {"127.0.0.1", "::1"}:
+        return True
+    if h.startswith("127."):
+        return True
+    return False
 
 
 def _ws_scheme_from_config_and_request(
@@ -115,11 +143,15 @@ def resolve_eidolon_livekit_client_url(
         return f"{scheme}://{host_part}:{esp32.livekit_port}"
 
     hub_host = (request_host or "").strip()
-    if not hub_host:
-        raise ValueError(
-            "Cannot resolve LiveKit client URL: set EIDOLON_LIVEKIT_URL, "
-            "or EIDOLON_LIVEKIT_IP, or call /api/config with a valid Host header"
-        )
+    if _is_loopback_request_host(hub_host):
+        lan = _outbound_ipv4()
+        if lan == "127.0.0.1":
+            raise ValueError(
+                "Cannot resolve a LAN-reachable LiveKit URL: outbound IPv4 is "
+                "127.0.0.1. Set EIDOLON_LIVEKIT_URL or EIDOLON_LIVEKIT_IP to an "
+                "explicit address other machines can use."
+            )
+        hub_host = lan
 
     scheme = _ws_scheme_from_config_and_request(
         esp32.livekit_scheme,

@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+import hub.config as hub_config
 from hub.config import AppConfig, Esp32Config, resolve_eidolon_livekit_client_url
 from hub.main import create_app
 
@@ -148,7 +149,22 @@ def test_resolve_auto_https_hub():
     )
 
 
-def test_resolve_auto_empty_host_raises():
+def test_resolve_auto_empty_host_uses_lan(monkeypatch):
     esp32 = Esp32Config(livekit_url="", livekit_ip="", livekit_port=7880, livekit_scheme="")
+    monkeypatch.setattr(hub_config, "_outbound_ipv4", lambda: "192.168.55.2")
+    url = resolve_eidolon_livekit_client_url(esp32, request_host="", request_scheme="http")
+    assert url == "ws://192.168.55.2:7880"
+
+
+def test_resolve_auto_localhost_uses_lan(monkeypatch):
+    esp32 = Esp32Config(livekit_url="", livekit_ip="auto", livekit_port=7880, livekit_scheme="")
+    monkeypatch.setattr(hub_config, "_outbound_ipv4", lambda: "10.0.0.7")
+    url = resolve_eidolon_livekit_client_url(esp32, request_host="127.0.0.1", request_scheme="http")
+    assert url == "ws://10.0.0.7:7880"
+
+
+def test_resolve_auto_lan_probe_fails_raises(monkeypatch):
+    esp32 = Esp32Config(livekit_url="", livekit_ip="", livekit_port=7880, livekit_scheme="")
+    monkeypatch.setattr(hub_config, "_outbound_ipv4", lambda: "127.0.0.1")
     with pytest.raises(ValueError):
-        resolve_eidolon_livekit_client_url(esp32, request_host="", request_scheme="http")
+        resolve_eidolon_livekit_client_url(esp32, request_host="localhost", request_scheme="http")
