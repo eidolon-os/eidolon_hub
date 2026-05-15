@@ -44,3 +44,5 @@ client/web/tsconfig.tsbuildinfo
 .claude/
 uv.lock
 
+**/.env.local
+
