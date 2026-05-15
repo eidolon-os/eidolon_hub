@@ -46,10 +46,8 @@ class LiveKitConfig:
 
     @classmethod
     def from_env(cls) -> "LiveKitConfig":
-        explicit_url = os.environ.get("LIVEKIT_URL", "")
-        fallback_url = os.environ.get("EIDOLON_LIVEKIT_URL", "")
         return cls(
-            url=explicit_url or fallback_url,
+            url=os.environ.get("LIVEKIT_API_URL", ""),
             api_key=os.environ.get("LIVEKIT_API_KEY", ""),
             api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
         )

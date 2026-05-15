@@ -48,11 +48,13 @@ class LiveKitAdminRuntime:
         cfg = self._config.livekit
         url = cfg.url
         if not url:
-            raise ValueError("LIVEKIT_URL or EIDOLON_LIVEKIT_URL is not configured")
-        if url.startswith("ws://"):
-            url = "http://" + url[len("ws://") :]
-        elif url.startswith("wss://"):
-            url = "https://" + url[len("wss://") :]
+            raise ValueError("LIVEKIT_API_URL is not configured")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise ValueError(
+                f"LIVEKIT_API_URL must be an http(s):// URL (got: {url!r}). "
+                "This is the LiveKit server-side management API, not the client signaling WebSocket; "
+                "use the client URL via EIDOLON_LIVEKIT_URL / EIDOLON_LIVEKIT_IP instead."
+            )
         return api.LiveKitAPI(url=url, api_key=cfg.api_key, api_secret=cfg.api_secret)
 
     async def run_probe_cycle(self, known_device_ids: list[str]) -> None:

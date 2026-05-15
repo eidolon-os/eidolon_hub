@@ -65,7 +65,7 @@ section() { echo ""; echo -e "${CYAN}==== $* ====${NC}"; }
 check_prereqs() {
   if [[ ! -x "$LIVEKIT_BIN" ]]; then
     error "找不到 livekit-server 二进制"
-    error "请确认已安装: brew install livekit-server  (macOS)"
+    error "请确认已安装: brew install livekit  (macOS)"
     error "或: curl -sL https://get.livekit.io | bash  (Linux)"
     exit 1
   fi

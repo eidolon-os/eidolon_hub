@@ -25,7 +25,7 @@ services:
     env_file:
       - .env
     environment:
-      LIVEKIT_URL: ${LIVEKIT_URL:-http://host.docker.internal:7880}
+      LIVEKIT_API_URL: ${LIVEKIT_API_URL:-http://host.docker.internal:7880}
     volumes:
       - hub_data:/app/data
       - hub_logs:/app/logs
