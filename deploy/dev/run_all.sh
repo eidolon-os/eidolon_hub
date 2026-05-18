@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一键启动 / 停止：LiveKit(-d) + Hub API + Web + Admin
+# 一键启动 / 停止：NATS(-d) + LiveKit(-d) + Hub API + Web + Admin
 #
 #   ./run_all.sh        启动（全部后台，日志在仓库 logs/run_all_*.log）
 #   ./run_all.sh stop   停止
@@ -71,6 +71,9 @@ do_start() {
   fi
   clear_stale_pid_file || true
 
+  info "启动 NATS（后台，JetStream）..."
+  RUN_ALL_INNER=1 "$SCRIPT_DIR/run-nats.sh" -d
+
   info "启动 LiveKit（后台）..."
   RUN_ALL_INNER=1 "$SCRIPT_DIR/run-livekit.sh" -d
 
@@ -133,6 +136,10 @@ do_stop() {
   done < "$PID_FILE"
 
   rm -f "$PID_FILE"
+
+  info "停止 NATS..."
+  "$SCRIPT_DIR/run-nats.sh" stop 2>/dev/null || true
+
   info "已停止。"
 }
 
@@ -147,6 +154,8 @@ do_status() {
   else
     info "无活跃 run_all 进程（或 PID 文件已过期）。"
   fi
+  echo ""
+  "$SCRIPT_DIR/run-nats.sh" status 2>/dev/null || true
   echo ""
   "$SCRIPT_DIR/run-livekit.sh" status 2>/dev/null || true
 }

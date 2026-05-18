@@ -6,6 +6,8 @@ dev_print_access_urls() {
   local host="${DEV_URL_HOST:-127.0.0.1}"
   echo ""
   echo "======== 访问地址（本机 ${host}；局域网请换成本机 IP）========"
+  echo "  NATS             nats://${host}:4222  (JetStream)"
+  echo "  NATS 监控        http://${host}:8222"
   echo "  LiveKit 信令     ws://${host}:7880"
   echo "  Hub API          http://${host}:${hub_port}/"
   echo "  Hub API 文档     http://${host}:${hub_port}/docs"
