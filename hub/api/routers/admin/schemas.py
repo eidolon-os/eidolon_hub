@@ -11,6 +11,9 @@ class AdminDevice(BaseModel):
     name: str = ""
     enabled: bool
     paired: bool
+    # Phase 25: 操作员批准位 + 时间戳; 跟 paired 是独立维度.
+    approved: bool = False
+    approved_at: datetime | None = None
     last_seen: datetime | None = None
     status: str = "offline"
     room_name: str = ""
@@ -20,6 +23,13 @@ class AdminDevice(BaseModel):
 
 class AdminDeviceListResponse(BaseModel):
     devices: list[AdminDevice]
+
+
+class ApproveDeviceResponse(BaseModel):
+    """POST /devices/{id}/approve 的响应. 返回新状态以便前端直接更新视图."""
+    device_id: str
+    approved: bool
+    approved_at: datetime | None
 
 
 class CommandRequest(BaseModel):

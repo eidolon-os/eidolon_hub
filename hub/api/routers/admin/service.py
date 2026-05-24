@@ -20,6 +20,8 @@ async def build_admin_devices(
                 name=device.name,
                 enabled=device.enabled,
                 paired=device.paired,
+                approved=device.approved,
+                approved_at=device.approved_at,
                 last_seen=p.last_seen_at if p else device.last_seen,
                 status=p.status if p else "offline",
                 room_name=p.room_name if p else "",
@@ -31,11 +33,15 @@ async def build_admin_devices(
     for device_id, p in presence.items():
         if device_manager.get(device_id):
             continue
+        # Presence-only 设备 (从 LiveKit room 抓到但 device_manager 还没注册):
+        # 既未配对也未批准. 出现在列表里只是为了让 operator 能看见 "嘿, 有个
+        # 没注册的设备在 room 里, 你得处理一下".
         rows.append(
             AdminDevice(
                 device_id=device_id,
                 enabled=True,
                 paired=False,
+                approved=False,
                 last_seen=p.last_seen_at,
                 status=p.status,
                 room_name=p.room_name,
