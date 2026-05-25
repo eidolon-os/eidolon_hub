@@ -14,8 +14,7 @@ uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
 
 ## 部署与运行方式
 
-- **本地开发（LiveKit + Hub + Web + Admin 分进程）**：说明见 [deploy/dev/README.md](deploy/dev/README.md)。
-- **Docker Compose（单机一键拉起上述服务）**：说明见 [deploy/prod/README.md](deploy/prod/README.md)。
+- **本地开发（NATS + LiveKit + Hub + 全栈）**：由 [eidolon_admin](../eidolon_admin) 统一编排，见 `eidolon_admin/deploy/dev/run_all.sh`。端口在 `eidolon_admin/config/ports.yaml` 集中管理。首次配置 Hub： `./scripts/init-config.sh`（或 eidolon_admin Configs 面板从模板创建）。
 
 ## Environment Variables
 

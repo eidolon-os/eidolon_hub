@@ -26,7 +26,7 @@ def _resolve_settings_yaml() -> Path:
     if _DEFAULT_YAML.is_file():
         return _DEFAULT_YAML.resolve()
     raise FileNotFoundError(
-        f"hub settings not found: {_DEFAULT_YAML}. Run ./deploy/dev/init.sh"
+        f"hub settings not found: {_DEFAULT_YAML}. Run ./scripts/init-config.sh"
     )
 
 
@@ -42,7 +42,7 @@ def _resolve_env_file() -> Path:
     if _LEGACY_ENV.is_file():
         return _LEGACY_ENV.resolve()
     raise FileNotFoundError(
-        f"hub env not found: {_DEFAULT_ENV}. Run ./deploy/dev/init.sh"
+        f"hub env not found: {_DEFAULT_ENV}. Run ./scripts/init-config.sh"
     )
 
 
