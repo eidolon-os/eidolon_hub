@@ -38,10 +38,6 @@ app/SQLlite/SQLGen.db
 data/
 .cursorignore
 
-client/web/.next
-client/web/node_modules
-client/web/tsconfig.tsbuildinfo
-
 .cursor
 .claude/
 uv.lock
