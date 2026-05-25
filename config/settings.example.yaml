@@ -1,5 +1,5 @@
 # Hub structured settings (copy to config/settings.yaml).
-# livekit.api_key / api_secret 须在 yaml 中留空；值由 config/.env 注入。
+# livekit.api_key / api_secret 占位符 = 环境变量名；值由 config/.env 注入。
 
 api:
   host: 0.0.0.0
@@ -10,8 +10,8 @@ logging:
 
 livekit:
   api_url: http://127.0.0.1:7880
-  api_key: ""      # env: LIVEKIT_API_KEY
-  api_secret: ""   # env: LIVEKIT_API_SECRET
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
 
 esp32:
   # Client signaling URL for ESP32 / browsers (see resolve_eidolon_livekit_client_url)

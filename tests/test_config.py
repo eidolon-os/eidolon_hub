@@ -80,8 +80,23 @@ def test_config_web_missing_params(client: TestClient):
 
 
 def test_livekit_rejects_inline_secrets_in_yaml():
-    with pytest.raises(ValueError, match="must stay empty"):
+    with pytest.raises(ValueError, match="placeholder"):
         _livekit_from_yaml_and_env({"livekit": {"api_key": "leaked"}})
+
+
+def test_livekit_accepts_env_name_placeholders(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_API_KEY", "k")
+    monkeypatch.setenv("LIVEKIT_API_SECRET", "s")
+    cfg = _livekit_from_yaml_and_env(
+        {
+            "livekit": {
+                "api_key": "LIVEKIT_API_KEY",
+                "api_secret": "LIVEKIT_API_SECRET",
+            }
+        }
+    )
+    assert cfg.api_key == "k"
+    assert cfg.api_secret == "s"
 
 
 def test_resolve_full_url_override():

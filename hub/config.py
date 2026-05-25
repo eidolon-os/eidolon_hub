@@ -59,6 +59,17 @@ def _load_yaml() -> dict[str, Any]:
     return data
 
 
+def _yaml_secret_value(section: dict[str, Any], field: str, env_var: str) -> str:
+    """Read secret from env; yaml may use ``env_var`` as placeholder."""
+    val = str(section.get(field) or "").strip()
+    if not val or val == env_var:
+        return os.environ.get(env_var, "").strip()
+    raise ValueError(
+        f"livekit.{field} must be empty or the placeholder {env_var}; "
+        f"set {env_var} in config/.env"
+    )
+
+
 def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
     sec = data.get(key) or {}
     return sec if isinstance(sec, dict) else {}
@@ -201,15 +212,19 @@ def _livekit_from_yaml_and_env(y: dict[str, Any]) -> LiveKitConfig:
     sec = _section(y, "livekit")
     yaml_key = str(sec.get("api_key") or "").strip()
     yaml_secret = str(sec.get("api_secret") or "").strip()
-    if yaml_key or yaml_secret:
-        raise ValueError(
-            "livekit.api_key / livekit.api_secret must stay empty in settings.yaml; "
-            "set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in config/.env"
-        )
+    for val, field, env_var in (
+        (yaml_key, "api_key", "LIVEKIT_API_KEY"),
+        (yaml_secret, "api_secret", "LIVEKIT_API_SECRET"),
+    ):
+        if val and val != env_var:
+            raise ValueError(
+                f"livekit.{field} must be empty or the placeholder {env_var}; "
+                f"set {env_var} in config/.env"
+            )
     return LiveKitConfig(
         api_url=str(sec.get("api_url") or "").strip(),
-        api_key=os.environ.get("LIVEKIT_API_KEY", "").strip(),
-        api_secret=os.environ.get("LIVEKIT_API_SECRET", "").strip(),
+        api_key=_yaml_secret_value(sec, "api_key", "LIVEKIT_API_KEY"),
+        api_secret=_yaml_secret_value(sec, "api_secret", "LIVEKIT_API_SECRET"),
     )
 
 
