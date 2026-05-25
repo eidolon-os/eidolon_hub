@@ -3,10 +3,10 @@
 ## 快速开始
 
 ```bash
-# 1) 在仓库根目录准备 .env
-cp .env.example .env
-#   - 必填：LIVEKIT_API_KEY / LIVEKIT_API_SECRET（须与本目录 livekit.yaml 的 keys 一致）
-#   - ESP32 / 浏览器看到的 LiveKit URL：从三策略中任选一种填入（见下方表）
+# 1) 准备 config/settings.yaml + config/.env
+./deploy/dev/init.sh
+#   - settings.yaml：api / logging / livekit.api_url / esp32 / mdns / admin_probe
+#   - .env：仅 LIVEKIT_API_KEY / LIVEKIT_API_SECRET（须与 livekit.yaml 的 keys 一致）
 
 # 2) 一键启动
 cd deploy/dev
@@ -22,48 +22,47 @@ chmod +x run_all.sh
 
 ```bash
 export DEV_URL_HOST=192.168.1.10   # 仅影响 _print_urls.sh 打印的链接文案
-export HUB_PORT=8081               # 同上；与 Hub 实际端口保持一致即可
+export HUB_PORT=8082               # 可选；与 settings.yaml 的 api.port 一致，仅影响打印
 ```
 
-> 注意：`DEV_URL_HOST` / `HUB_PORT` 只影响**打印**，不改变实际监听端口。Hub 端口由 `.env` 里的 `HUB_PORT` 决定，LiveKit 端口由 `livekit.yaml` 决定。
+> 注意：`DEV_URL_HOST` / `HUB_PORT` 只影响**打印**。Hub 监听地址/端口由 `config/settings.yaml` 的 `api.host` / `api.port` 决定；LiveKit 端口由 `livekit.yaml` 决定。
 
 ## 配置文件关系
 
-只有**一份** `.env` 真正生效 —— 位于仓库根目录，由 `hub/config.py` 在导入时通过 `python-dotenv` 的 `load_dotenv()` 加载（向上搜索 cwd）。`.env.example` 仅是模板，永远不会被代码读到。
-
 ```
-仓库根 .env  ──load_dotenv()──▶  hub/config.py  ──▶  Hub API (uvicorn)
+config/settings.yaml  ──▶  hub/config.py  ──▶  Hub API (uvicorn)
+config/.env (密钥)     ──load_dotenv()──▶       LIVEKIT_API_KEY / LIVEKIT_API_SECRET
                                               ╲
-                                               ╲──▶  GET /api/config  ──▶  ESP32 / Web 客户端
-                                                          │  用 LIVEKIT_API_KEY/SECRET 签 JWT
-                                                          │  用 EIDOLON_LIVEKIT_* 解析 ws URL
+                                               ╲──▶  GET /api/config  ──▶  ESP32 / Web
+                                                          │  JWT 用 .env 密钥
+                                                          │  ws URL 用 settings.yaml 的 esp32.*
 
 deploy/dev/livekit.yaml  ──▶  run-livekit.sh  ──▶  LiveKit server (7880)
         │
-        └─ keys.eidolon 当前需 **手动** 与 .env 的 LIVEKIT_API_KEY / LIVEKIT_API_SECRET 保持一致
+        └─ keys 须与 config/.env 的 LIVEKIT_API_KEY / LIVEKIT_API_SECRET 一致
 
-client/web/.env.local      ──▶  Next.js (3000)    NEXT_PUBLIC_LIVEKIT_URL / NEXT_PUBLIC_LIVEKIT_TOKEN_URL
+client/web/.env.local      ──▶  Next.js (3000)    NEXT_PUBLIC_*
 client/admin/.env (可选)   ──▶  Vite     (5174)   VITE_ADMIN_API_BASE
 ```
 
 关键约束：
 
-- **`.env` 必须放仓库根**。`deploy/dev/` 下不再维护独立的 `.env.example`，仓库根 `.env.example` 是 dev / prod 通用模板。
-- **`livekit.yaml` 的 `keys:` 与 `.env` 的 `LIVEKIT_API_KEY/SECRET` 是同一份凭据写两遍**，修改时要两边一起改（默认模板已对齐：`eidolon` / `eidolon-livekit-secret-2026`）。
-- **前端两套 env 独立**：Next.js 需要 `NEXT_PUBLIC_*` 变量在 `client/web/.env.local`，Vite 需要 `VITE_*` 变量在 `client/admin/.env`。它们不会从仓库根 `.env` 读取。
+- **`config/settings.yaml` 必填**（缺失则启动报错）；`config/settings.example.yaml` 仅作模板。
+- **`config/.env` 只放密钥**；业务项（端口、mDNS、Admin 探测、esp32 URL 策略等）一律写在 YAML。
+- **前端 env 独立**：Next / Vite 各自 `.env.local`，不读取 hub 的 `config/.env`。
 
-## 核心环境变量
+## 核心配置（settings.yaml）
 
-| 变量 | 默认 | 说明 |
+| 段 | 字段 | 说明 |
 |---|---|---|
-| `LIVEKIT_API_KEY` | `eidolon` | LiveKit API Key，与 `livekit.yaml` 的 keys 一致 |
-| `LIVEKIT_API_SECRET` | `eidolon-livekit-secret-2026` | LiveKit API Secret，与 `livekit.yaml` 的 keys 一致 |
-| `LIVEKIT_API_URL` | （空）| Hub 后端调 LiveKit **服务端管理 API** 的地址，**必须 `http://` 或 `https://`**，如 `http://127.0.0.1:7880` |
-| `EIDOLON_LIVEKIT_URL` / `EIDOLON_LIVEKIT_IP` / `EIDOLON_LIVEKIT_PORT` | — | 下发给客户端的 LiveKit 信令地址（三策略，见下） |
-| `HUB_HOST` / `HUB_PORT` | `0.0.0.0` / `8081` | Hub API 监听地址 / 端口 |
-| `LOG_LEVEL` | `INFO` | Python 日志级别 |
+| `api` | `host`, `port` | Hub API 监听 |
+| `logging` | `level` | Python 日志级别 |
+| `livekit` | `api_url` | Hub 调 LiveKit **管理 API**（`http://` 或 `https://`） |
+| `esp32` | `livekit_url` / `livekit_ip` / `livekit_port` / `livekit_scheme` | 下发给客户端的信令 URL（三策略，见下） |
+| `mdns` | `service_type`, `service_name`, … | mDNS 发现 |
+| `admin_probe` | `enabled`, `interval_seconds`, … | Admin 在线探测 |
 
-完整变量列表（含 `MDNS_*`、`ADMIN_*`）见仓库根 `.env.example`。
+`config/.env` 仅：`LIVEKIT_API_KEY`、`LIVEKIT_API_SECRET`。完整示例见 `config/settings.example.yaml`。
 
 ## LiveKit 客户端 URL 三策略
 
@@ -71,9 +70,9 @@ client/admin/.env (可选)   ──▶  Vite     (5174)   VITE_ADMIN_API_BASE
 
 | 策略 | 用法 | 适用场景 |
 |---|---|---|
-| 1. 完整 URL | `EIDOLON_LIVEKIT_URL=wss://livekit.example.com` | 生产 / 已有完整地址 |
-| 2. IP + 端口 | `EIDOLON_LIVEKIT_IP=192.168.x.x` + `EIDOLON_LIVEKIT_PORT=7880` | 局域网固定 IP |
-| 3. auto | `EIDOLON_LIVEKIT_IP=auto`（或留空） | 跟随请求 Hub 的 Host；若是 loopback 则自动换成本机 LAN IPv4（见 [hub/config.py](../../hub/config.py)） |
+| 1. 完整 URL | `esp32.livekit_url=wss://livekit.example.com` | 生产 / 已有完整地址 |
+| 2. IP + 端口 | `esp32.livekit_ip=192.168.x.x` + `livekit_port` | 局域网固定 IP |
+| 3. auto | `esp32.livekit_ip=auto`（或留空） | 跟随请求 Hub 的 Host；loopback 时换 LAN IPv4（见 [hub/config.py](../../hub/config.py)） |
 
 ## 分进程启动（可选）
 
@@ -116,7 +115,7 @@ client/admin/.env (可选)   ──▶  Vite     (5174)   VITE_ADMIN_API_BASE
 | 服务    | 端口  |
 |---------|-------|
 | LiveKit | 7880 (TCP/WS) + 3478 (UDP TURN) + 50000–60000 (UDP RTC) |
-| Hub API | 8081 |
+| Hub API | 8082（`config/settings.yaml` → `api.port`） |
 | Web     | 3000 |
 | Admin   | 5174 |
 
@@ -124,8 +123,8 @@ client/admin/.env (可选)   ──▶  Vite     (5174)   VITE_ADMIN_API_BASE
 
 | 改谁 | 改哪些地方 |
 |---|---|
-| Hub API 端口 | `.env` 的 `HUB_PORT`；`export HUB_PORT=` 用于打印；`client/web/.env.local` 的 `NEXT_PUBLIC_LIVEKIT_TOKEN_URL`；`client/admin/.env` 的 `VITE_ADMIN_API_BASE` |
-| LiveKit 端口 | `livekit.yaml` 的 `port`；`.env` 的 `EIDOLON_LIVEKIT_PORT` / `EIDOLON_LIVEKIT_URL`；`client/web/.env.local` 的 `NEXT_PUBLIC_LIVEKIT_URL` |
+| Hub API 端口 | `config/settings.yaml` 的 `api.port`；`export HUB_PORT=` 仅用于打印；前端 `NEXT_PUBLIC_*` / `VITE_ADMIN_API_BASE` |
+| LiveKit 端口 | `livekit.yaml` 的 `port`；`settings.yaml` 的 `esp32.livekit_port`；`client/web/.env.local` 的 `NEXT_PUBLIC_LIVEKIT_URL` |
 
 ## 防火墙 / WebRTC（局域网）
 

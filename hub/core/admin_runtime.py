@@ -46,9 +46,9 @@ class LiveKitAdminRuntime:
 
     def _build_livekit_api(self) -> api.LiveKitAPI:
         cfg = self._config.livekit
-        url = cfg.url
+        url = cfg.api_url
         if not url:
-            raise ValueError("LIVEKIT_API_URL is not configured")
+            raise ValueError("livekit.api_url is not configured in settings.yaml")
         if not (url.startswith("http://") or url.startswith("https://")):
             raise ValueError(
                 f"LIVEKIT_API_URL must be an http(s):// URL (got: {url!r}). "

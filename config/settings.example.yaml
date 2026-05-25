@@ -1,0 +1,36 @@
+# Hub structured settings (copy to config/settings.yaml).
+# livekit.api_key / api_secret 须在 yaml 中留空；值由 config/.env 注入。
+
+api:
+  host: 0.0.0.0
+  port: 8082
+
+logging:
+  level: INFO
+
+livekit:
+  api_url: http://127.0.0.1:7880
+  api_key: ""      # env: LIVEKIT_API_KEY
+  api_secret: ""   # env: LIVEKIT_API_SECRET
+
+esp32:
+  # Client signaling URL for ESP32 / browsers (see resolve_eidolon_livekit_client_url)
+  livekit_url: ""
+  livekit_ip: auto
+  livekit_port: 7880
+  livekit_scheme: ws
+
+mdns:
+  service_type: _eidolon-hub._tcp.local.
+  service_name: Eidolon Hub._eidolon-hub._tcp.local.
+  hostname: eidolon-hub
+  txt_version: "1"
+  api_version: v1
+  config_path: /api/config
+
+admin_probe:
+  enabled: true
+  interval_seconds: 10
+  degraded_after_missed_probes: 2
+  offline_after_missed_probes: 3
+  command_timeout_seconds: 30

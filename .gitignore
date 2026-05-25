@@ -17,6 +17,8 @@ venv-langgraph-new/
 
 # Environment variables
 .env
+config/.env
+config/settings.yaml
 
 # user conf
 conf.yaml

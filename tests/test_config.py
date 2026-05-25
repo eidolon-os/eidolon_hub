@@ -8,7 +8,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import hub.config as hub_config
-from hub.config import AppConfig, Esp32Config, resolve_eidolon_livekit_client_url
+from hub.config import AppConfig, Esp32Config, _livekit_from_yaml_and_env, resolve_eidolon_livekit_client_url
 from hub.main import create_app
 
 
@@ -77,6 +77,11 @@ def test_config_web(client: TestClient):
 def test_config_web_missing_params(client: TestClient):
     r = client.get("/api/config", params={"client_type": "web", "room_name": "r"})
     assert r.status_code == 422
+
+
+def test_livekit_rejects_inline_secrets_in_yaml():
+    with pytest.raises(ValueError, match="must stay empty"):
+        _livekit_from_yaml_and_env({"livekit": {"api_key": "leaked"}})
 
 
 def test_resolve_full_url_override():

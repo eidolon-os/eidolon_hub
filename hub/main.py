@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 from contextlib import suppress
 from pathlib import Path
@@ -105,10 +104,11 @@ app = get_app()
 if __name__ == "__main__":
     import uvicorn
 
+    cfg = load_config()
     uvicorn.run(
         "hub.main:app",
-        host=os.environ.get("HUB_HOST", "0.0.0.0"),
-        port=int(os.environ.get("HUB_PORT", 8000)),
+        host=cfg.api.host,
+        port=cfg.api.port,
         reload=False,
         proxy_headers=True,
         forwarded_allow_ips="*",

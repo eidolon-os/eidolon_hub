@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 在仓库根目录启动 Hub API（热重载）
+# 在仓库根目录启动 Hub API（热重载）；host/port 来自 config/settings.yaml
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -25,8 +25,13 @@ REPO_ROOT="$(repo_root)" || {
 
 cd "$REPO_ROOT"
 
-export HUB_HOST="${HUB_HOST:-0.0.0.0}"
-export HUB_PORT="${HUB_PORT:-8081}"
+PY="${REPO_ROOT}/.venv/bin/python"
+if [[ ! -x "$PY" ]]; then
+  PY="python3"
+fi
+HOST_PORT="$("$PY" -c "from hub.config import load_config; c=load_config(); print(c.api.host, c.api.port)")"
+read -r HUB_HOST HUB_PORT <<<"$HOST_PORT"
+export HUB_PORT
 
 dev_print_access_urls
 

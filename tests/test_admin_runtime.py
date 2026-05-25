@@ -52,7 +52,7 @@ class _FailingLiveKitAPI:
 @pytest.mark.asyncio
 async def test_probe_cycle_updates_presence():
     cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(url="http://localhost:7880", api_key="k", api_secret="s")
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     fake_api = _FakeLiveKitAPI()
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
@@ -68,7 +68,7 @@ async def test_probe_cycle_updates_presence():
 @pytest.mark.asyncio
 async def test_send_command_to_online_device():
     cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(url="http://localhost:7880", api_key="k", api_secret="s")
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     fake_api = _FakeLiveKitAPI()
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
@@ -87,7 +87,7 @@ async def test_send_command_to_online_device():
 @pytest.mark.asyncio
 async def test_probe_failure_marks_unknown():
     cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(url="http://localhost:7880", api_key="k", api_secret="s")
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     runtime._build_livekit_api = lambda: _FailingLiveKitAPI()  # type: ignore[method-assign]
 
@@ -100,7 +100,7 @@ async def test_probe_failure_marks_unknown():
 @pytest.mark.asyncio
 async def test_mark_command_timeout_and_metrics():
     cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(url="http://localhost:7880", api_key="k", api_secret="s")
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     fake_api = _FakeLiveKitAPI()
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]

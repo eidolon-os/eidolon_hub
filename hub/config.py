@@ -1,89 +1,117 @@
-"""Hub unified config loader — reads exclusively from environment variables."""
+"""Hub unified config — structured settings in YAML, secrets in config/.env."""
 
 from __future__ import annotations
 
 import os
 import socket
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
+_LEGACY_ENV = _REPO_ROOT / ".env"
+_DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
+
+
+def _resolve_settings_yaml() -> Path:
+    explicit = os.environ.get("EIDOLON_HUB_SETTINGS_YAML", "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"EIDOLON_HUB_SETTINGS_YAML missing: {p}")
+        return p.resolve()
+    if _DEFAULT_YAML.is_file():
+        return _DEFAULT_YAML.resolve()
+    raise FileNotFoundError(
+        f"hub settings not found: {_DEFAULT_YAML}. Run ./deploy/dev/init.sh"
+    )
+
+
+def _resolve_env_file() -> Path:
+    explicit = os.environ.get("EIDOLON_HUB_ENV_FILE", "").strip()
+    if explicit:
+        p = Path(explicit).expanduser()
+        if not p.is_file():
+            raise FileNotFoundError(f"EIDOLON_HUB_ENV_FILE missing: {p}")
+        return p.resolve()
+    if _DEFAULT_ENV.is_file():
+        return _DEFAULT_ENV.resolve()
+    if _LEGACY_ENV.is_file():
+        return _LEGACY_ENV.resolve()
+    raise FileNotFoundError(
+        f"hub env not found: {_DEFAULT_ENV}. Run ./deploy/dev/init.sh"
+    )
 
 
 def _bootstrap_dotenv() -> None:
     from dotenv import load_dotenv
 
-    load_dotenv()
+    load_dotenv(_resolve_env_file(), override=False)
 
 
-_bootstrap_dotenv()
+def _load_yaml() -> dict[str, Any]:
+    data = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
+    if not isinstance(data, dict):
+        raise ValueError("hub settings.yaml must be a mapping")
+    return data
+
+
+def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
+    sec = data.get(key) or {}
+    return sec if isinstance(sec, dict) else {}
 
 
 @dataclass
 class ApiConfig:
     host: str = "0.0.0.0"
-    port: int = 8081
-
-    @classmethod
-    def from_env(cls) -> "ApiConfig":
-        return cls(
-            host=os.environ.get("HUB_HOST", "0.0.0.0"),
-            port=int(os.environ.get("HUB_PORT", "8081")),
-        )
+    port: int = 8082
 
 
 @dataclass
 class LoggingConfig:
     level: str = "INFO"
 
-    @classmethod
-    def from_env(cls) -> "LoggingConfig":
-        return cls(level=os.environ.get("LOG_LEVEL", "INFO"))
-
 
 @dataclass
 class LiveKitConfig:
-    url: str = ""
+    """Server-side LiveKit API (management). URL in yaml; credentials in .env."""
+
+    api_url: str = ""
     api_key: str = ""
     api_secret: str = ""
-
-    @classmethod
-    def from_env(cls) -> "LiveKitConfig":
-        return cls(
-            url=os.environ.get("LIVEKIT_API_URL", ""),
-            api_key=os.environ.get("LIVEKIT_API_KEY", ""),
-            api_secret=os.environ.get("LIVEKIT_API_SECRET", ""),
-        )
 
 
 @dataclass
 class Esp32Config:
-    """LiveKit URL as seen by ESP32 / browsers (ws or wss).
-
-    Resolution (see ``resolve_eidolon_livekit_client_url``):
-
-    1. ``livekit_url`` (``EIDOLON_LIVEKIT_URL``) non-empty → use as-is.
-    2. ``livekit_ip`` non-empty and not ``auto`` → ``{scheme}://{ip}:{port}``.
-    3. ``livekit_ip`` empty or ``auto`` → ``{scheme}://{host}:{port}`` where
-       ``host`` is the request ``Host`` if it is a non-loopback address; otherwise
-       the machine's LAN IPv4 (same strategy as mDNS registration), so other
-       devices never receive ``127.0.0.1`` when auto is intended for LAN access.
-    """
-
     livekit_url: str = ""
-    livekit_ip: str = ""
+    livekit_ip: str = "auto"
     livekit_port: int = 7880
-    livekit_scheme: str = ""
+    livekit_scheme: str = "ws"
 
-    @classmethod
-    def from_env(cls) -> "Esp32Config":
-        return cls(
-            livekit_url=os.environ.get("EIDOLON_LIVEKIT_URL", "").strip(),
-            livekit_ip=os.environ.get("EIDOLON_LIVEKIT_IP", "").strip(),
-            livekit_port=int(os.environ.get("EIDOLON_LIVEKIT_PORT", "7880")),
-            livekit_scheme=os.environ.get("EIDOLON_LIVEKIT_SCHEME", "").strip().lower(),
-        )
+
+@dataclass
+class DiscoveryConfig:
+    service_type: str = "_eidolon-hub._tcp.local."
+    service_name: str = ""
+    hostname: str = "eidolon-hub"
+    txt_version: str = "1"
+    api_version: str = "v1"
+    config_path: str = "/api/config"
+
+
+@dataclass
+class AdminConfig:
+    probe_enabled: bool = True
+    probe_interval_seconds: int = 10
+    offline_after_missed_probes: int = 3
+    degraded_after_missed_probes: int = 2
+    command_timeout_seconds: int = 30
 
 
 def _outbound_ipv4() -> str:
-    """Return local IPv4 used for outbound UDP (typically LAN, not loopback)."""
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         s.connect(("8.8.8.8", 80))
@@ -113,7 +141,6 @@ def _ws_scheme_from_config_and_request(
     *,
     explicit_host: bool,
 ) -> str:
-    """Pick ws or wss for composed client URLs."""
     if configured in ("ws", "wss"):
         return configured
     if explicit_host:
@@ -127,7 +154,6 @@ def resolve_eidolon_livekit_client_url(
     request_host: str,
     request_scheme: str,
 ) -> str:
-    """Build LiveKit WebSocket URL returned in ``GET /api/config`` (esp32)."""
     if esp32.livekit_url:
         return esp32.livekit_url
 
@@ -146,8 +172,7 @@ def resolve_eidolon_livekit_client_url(
         if lan == "127.0.0.1":
             raise ValueError(
                 "Cannot resolve a LAN-reachable LiveKit URL: outbound IPv4 is "
-                "127.0.0.1. Set EIDOLON_LIVEKIT_URL or EIDOLON_LIVEKIT_IP to an "
-                "explicit address other machines can use."
+                "127.0.0.1. Set esp32.livekit_url or esp32.livekit_ip in settings.yaml."
             )
         hub_host = lan
 
@@ -159,44 +184,78 @@ def resolve_eidolon_livekit_client_url(
     return f"{scheme}://{hub_host}:{esp32.livekit_port}"
 
 
-@dataclass
-class DiscoveryConfig:
-    service_type: str = "_eidolon-hub._tcp.local."
-    service_name: str = ""
-    hostname: str = "eidolon-hub"
-    txt_version: str = "1"
-    api_version: str = "v1"
-    config_path: str = "/api/config"
+def _api_from_yaml(y: dict[str, Any]) -> ApiConfig:
+    sec = _section(y, "api")
+    return ApiConfig(
+        host=str(sec.get("host", "0.0.0.0")),
+        port=int(sec.get("port", 8082)),
+    )
 
-    @classmethod
-    def from_env(cls) -> "DiscoveryConfig":
-        return cls(
-            service_type=os.environ.get("MDNS_SERVICE_TYPE", "_eidolon-hub._tcp.local."),
-            service_name=os.environ.get("MDNS_SERVICE_NAME", ""),
-            hostname=os.environ.get("MDNS_HOSTNAME", "eidolon-hub"),
-            txt_version=os.environ.get("MDNS_TXT_VERSION", "1"),
-            api_version=os.environ.get("MDNS_API_VERSION", "v1"),
-            config_path=os.environ.get("MDNS_CONFIG_PATH", "/api/config"),
+
+def _logging_from_yaml(y: dict[str, Any]) -> LoggingConfig:
+    sec = _section(y, "logging")
+    return LoggingConfig(level=str(sec.get("level", "INFO")))
+
+
+def _livekit_from_yaml_and_env(y: dict[str, Any]) -> LiveKitConfig:
+    sec = _section(y, "livekit")
+    yaml_key = str(sec.get("api_key") or "").strip()
+    yaml_secret = str(sec.get("api_secret") or "").strip()
+    if yaml_key or yaml_secret:
+        raise ValueError(
+            "livekit.api_key / livekit.api_secret must stay empty in settings.yaml; "
+            "set LIVEKIT_API_KEY and LIVEKIT_API_SECRET in config/.env"
         )
+    return LiveKitConfig(
+        api_url=str(sec.get("api_url") or "").strip(),
+        api_key=os.environ.get("LIVEKIT_API_KEY", "").strip(),
+        api_secret=os.environ.get("LIVEKIT_API_SECRET", "").strip(),
+    )
 
 
-@dataclass
-class AdminConfig:
-    probe_enabled: bool = True
-    probe_interval_seconds: int = 10
-    offline_after_missed_probes: int = 3
-    degraded_after_missed_probes: int = 2
-    command_timeout_seconds: int = 30
+def _esp32_from_yaml(y: dict[str, Any]) -> Esp32Config:
+    sec = _section(y, "esp32")
+    return Esp32Config(
+        livekit_url=str(sec.get("livekit_url") or "").strip(),
+        livekit_ip=str(sec.get("livekit_ip", "auto")).strip(),
+        livekit_port=int(sec.get("livekit_port", 7880)),
+        livekit_scheme=str(sec.get("livekit_scheme", "ws")).strip().lower(),
+    )
 
-    @classmethod
-    def from_env(cls) -> "AdminConfig":
-        return cls(
-            probe_enabled=os.environ.get("ADMIN_PROBE_ENABLED", "true").lower() in {"1", "true", "yes"},
-            probe_interval_seconds=int(os.environ.get("ADMIN_PROBE_INTERVAL_SECONDS", "10")),
-            offline_after_missed_probes=int(os.environ.get("ADMIN_OFFLINE_AFTER_MISSED_PROBES", "3")),
-            degraded_after_missed_probes=int(os.environ.get("ADMIN_DEGRADED_AFTER_MISSED_PROBES", "2")),
-            command_timeout_seconds=int(os.environ.get("ADMIN_COMMAND_TIMEOUT_SECONDS", "30")),
-        )
+
+def _discovery_from_yaml(y: dict[str, Any]) -> DiscoveryConfig:
+    sec = _section(y, "mdns")
+    if not sec:
+        sec = _section(y, "discovery")
+    return DiscoveryConfig(
+        service_type=str(sec.get("service_type", "_eidolon-hub._tcp.local.")),
+        service_name=str(sec.get("service_name") or ""),
+        hostname=str(sec.get("hostname", "eidolon-hub")),
+        txt_version=str(sec.get("txt_version", "1")),
+        api_version=str(sec.get("api_version", "v1")),
+        config_path=str(sec.get("config_path", "/api/config")),
+    )
+
+
+def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
+    sec = _section(y, "admin_probe")
+    if not sec:
+        sec = _section(y, "admin")
+    return AdminConfig(
+        probe_enabled=bool(sec.get("enabled", sec.get("probe_enabled", True))),
+        probe_interval_seconds=int(
+            sec.get("interval_seconds", sec.get("probe_interval_seconds", 10))
+        ),
+        offline_after_missed_probes=int(
+            sec.get("offline_after_missed_probes", 3)
+        ),
+        degraded_after_missed_probes=int(
+            sec.get("degraded_after_missed_probes", 2)
+        ),
+        command_timeout_seconds=int(
+            sec.get("command_timeout_seconds", 30)
+        ),
+    )
 
 
 @dataclass
@@ -210,13 +269,15 @@ class AppConfig:
 
     @classmethod
     def load(cls) -> "AppConfig":
+        _bootstrap_dotenv()
+        y = _load_yaml()
         return cls(
-            api=ApiConfig.from_env(),
-            logging=LoggingConfig.from_env(),
-            livekit=LiveKitConfig.from_env(),
-            esp32=Esp32Config.from_env(),
-            discovery=DiscoveryConfig.from_env(),
-            admin=AdminConfig.from_env(),
+            api=_api_from_yaml(y),
+            logging=_logging_from_yaml(y),
+            livekit=_livekit_from_yaml_and_env(y),
+            esp32=_esp32_from_yaml(y),
+            discovery=_discovery_from_yaml(y),
+            admin=_admin_from_yaml(y),
         )
 
 
