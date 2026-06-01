@@ -111,6 +111,26 @@ class LiveKitAdminRuntime:
         async with self._lock:
             return list(self._state.values())
 
+    async def forget_presence(self, device_id: str) -> bool:
+        """Drop the presence cache entry for a device. Returns True if one
+        was present. Idempotent.
+
+        Used by the unregister-device flow: after the device is gone from
+        ``device_manager``, presence-cached state would otherwise linger
+        until the next probe cycle, briefly showing a ghost row in admin
+        UI. Cleaning here keeps the view consistent.
+
+        Note: if the device is still physically connected to LiveKit,
+        the next probe will repopulate the cache; that's correct — the
+        device will then re-appear in admin as a *new* unapproved record
+        (because device_manager forgot the persistent approval state).
+        """
+        async with self._lock:
+            if device_id not in self._state:
+                return False
+            del self._state[device_id]
+        return True
+
     def get_probe_health(self) -> ProbeHealth:
         return self._probe_health
 

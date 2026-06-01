@@ -6,6 +6,7 @@ from hub.api.routers.admin.schemas import (
     AdminDevice,
     AdminDeviceListResponse,
     ApproveDeviceResponse,
+    UnregisterDeviceResponse,
 )
 from hub.api.routers.admin.service import build_admin_devices
 
@@ -58,4 +59,35 @@ async def approve_device(device_id: str, request: Request):
         device_id=device.device_id,
         approved=device.approved,
         approved_at=device.approved_at,
+    )
+
+
+@router.delete("/{device_id}", response_model=UnregisterDeviceResponse)
+async def unregister_device(device_id: str, request: Request):
+    """注销设备: 从 hub 的持久记录中移除并清理 admin runtime 的 presence 缓存.
+
+    幂等: 已经不存在的 device_id 也返回 200 (``existed=false``),便于
+    调用方安全重试.
+
+    清理范围 (仅 hub 内部):
+        - device_manager._devices: 持久记录 (devices.json)
+        - admin_runtime._state: presence 缓存 (LiveKit 探测内存视图)
+
+    不清理 (跨项目,admin 负责级联):
+        - admin 项目内 device→agent binding (admin 自己 KV)
+        - 任何运行时会话 (channel/livekit room 等)
+
+    设备如果稍后通过 mDNS / GET /api/config 再次出现,会作为**全新**
+    unapproved device 重新进入 discovery 流程,符合"显式批准"的设计。
+    """
+    device_manager = request.app.state.device_manager
+    admin_runtime = request.app.state.admin_runtime
+    existed = await device_manager.unregister(device_id)
+    presence_existed = False
+    if admin_runtime is not None:
+        presence_existed = await admin_runtime.forget_presence(device_id)
+    return UnregisterDeviceResponse(
+        device_id=device_id,
+        existed=existed,
+        presence_cleared=presence_existed,
     )

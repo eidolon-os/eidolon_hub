@@ -153,10 +153,31 @@ class DeviceManager:
         return [d for d in self._devices.values() if d.paired]
 
     def remove(self, device_id: str) -> None:
-        """删除设备."""
+        """删除设备 (in-memory only, no disk save). 调用方负责持久化."""
         if device_id in self._devices:
             del self._devices[device_id]
             logger.info("Removed device: %s", device_id)
+
+    async def unregister(self, device_id: str) -> bool:
+        """完整注销设备: 从内存移除 + 落盘 devices.json. 幂等.
+
+        Returns True if a record was found and removed, False if the device
+        was already absent. async 是因为我们在持锁的同时做了文件写入 ——
+        跟 ``approve`` 的"完成即持久化"契约保持一致。
+
+        注意:
+            - 这里只清 hub 内部的 device 记录;管理域的关联 (例如 admin 的
+              device→agent binding) 由 admin 项目级联清理,hub 不感知。
+            - 如果设备稍后通过 mDNS 重新出现,会作为全新的 unapproved
+              device 重新进入 discovery 流程 (符合"显式批准"的设计意图)。
+        """
+        async with self._lock:
+            if device_id not in self._devices:
+                return False
+            del self._devices[device_id]
+            await self._save_unlocked()
+        logger.info("Unregistered device: %s", device_id)
+        return True
 
     def __len__(self) -> int:
         return len(self._devices)

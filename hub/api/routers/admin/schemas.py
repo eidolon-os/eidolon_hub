@@ -32,6 +32,22 @@ class ApproveDeviceResponse(BaseModel):
     approved_at: datetime | None
 
 
+class UnregisterDeviceResponse(BaseModel):
+    """DELETE /devices/{id} 的响应. 幂等接口,即使 device 不存在也返回 200,
+    用 ``existed``/``presence_cleared`` 标志告诉调用方实际清理了什么."""
+
+    device_id: str
+    # True if a persistent record was removed from devices.json. False
+    # means the device was already absent (idempotent retry / never
+    # registered).
+    existed: bool
+    # True if a presence cache entry was cleared from admin_runtime.
+    # Independent from ``existed``: a device with no persistent record
+    # can still have a presence-only entry if it was seen by a LiveKit
+    # probe before completing first-time registration.
+    presence_cleared: bool
+
+
 class CommandRequest(BaseModel):
     topic: str = Field(default="admin.command")
     payload: dict[str, Any] = Field(default_factory=dict)
