@@ -122,6 +122,24 @@ class AdminConfig:
     command_timeout_seconds: int = 30
 
 
+@dataclass
+class RuntimeAdminConfig:
+    """Phase 32.A: hub queries admin to validate ``user_id`` at
+    ``/api/config`` time. We follow LiveKit's "trust participant.identity,
+    look up the rest server-side" pattern — hub mints the LK token but
+    does NOT sign any device JWT here. channel does the runtime token
+    signing under plan D, using the PAIRING_JWT_SECRET it shares with
+    eidolon-agent.
+
+    ``enabled=false`` keeps the legacy code path (no admin lookup, no
+    user_id required) for ops rollback. Defaults to ``true`` on fresh
+    installs.
+    """
+
+    enabled: bool = True
+    admin_api_url: str = "http://127.0.0.1:9000"
+
+
 def _outbound_ipv4() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -252,6 +270,32 @@ def _discovery_from_yaml(y: dict[str, Any]) -> DiscoveryConfig:
     )
 
 
+def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
+    """Load ``runtime_admin`` section.
+
+    ``admin_api_url`` may be a literal URL or an env var name (matching
+    hub's livekit/secret-placeholder convention) — if no scheme, treat
+    it as an env var to look up.
+    """
+    sec = _section(y, "runtime_admin")
+    # backward compat: older yaml used the ``runtime_tokens`` block name
+    # before plan D moved token signing out of hub.
+    if not sec:
+        sec = _section(y, "runtime_tokens")
+
+    yaml_url = str(sec.get("admin_api_url") or "").strip()
+    if yaml_url and not yaml_url.startswith(("http://", "https://")):
+        yaml_url = os.environ.get(yaml_url, "").strip()
+    admin_url = yaml_url or os.environ.get(
+        "EIDOLON_ADMIN_API_URL", "http://127.0.0.1:9000"
+    )
+
+    return RuntimeAdminConfig(
+        enabled=bool(sec.get("enabled", True)),
+        admin_api_url=admin_url,
+    )
+
+
 def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     sec = _section(y, "admin_probe")
     if not sec:
@@ -281,6 +325,7 @@ class AppConfig:
     esp32: Esp32Config = field(default_factory=Esp32Config)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     admin: AdminConfig = field(default_factory=AdminConfig)
+    runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -293,6 +338,7 @@ class AppConfig:
             esp32=_esp32_from_yaml(y),
             discovery=_discovery_from_yaml(y),
             admin=_admin_from_yaml(y),
+            runtime_admin=_runtime_admin_from_yaml_and_env(y),
         )
 
 

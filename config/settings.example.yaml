@@ -34,3 +34,10 @@ admin_probe:
   degraded_after_missed_probes: 2
   offline_after_missed_probes: 3
   command_timeout_seconds: 30
+
+# Phase 32.A: hub validates user_id at /api/config time via this admin
+# URL. Hub does NOT sign device JWTs — channel does that under plan D
+# (LiveKit-standard: trust participant.identity, look up server-side).
+runtime_admin:
+  enabled: true
+  admin_api_url: http://127.0.0.1:9000

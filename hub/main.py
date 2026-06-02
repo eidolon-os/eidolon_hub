@@ -8,9 +8,11 @@ import signal
 from contextlib import suppress
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI
 
 import hub
+from hub.api.clients import AdminClient
 from hub.api.routers.admin import admin_commands_router, admin_devices_router, admin_events_router
 from hub.api.routers.system import config_router
 from hub.config import AppConfig, load_config
@@ -34,9 +36,21 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         await device_manager.load()
         admin_runtime = LiveKitAdminRuntime(app_config)
 
+        # Phase 32.A: process-wide httpx client + admin REST wrapper
+        # used by /api/config (web) to validate user_id + resolve the
+        # template before signing the device JWT. trust_env=False so a
+        # macOS Clash on :7890 can't intercept the loopback request.
+        http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(10.0, connect=3.0),
+            trust_env=False,
+        )
+        admin_client = AdminClient(http_client, app_config.runtime_admin.admin_api_url)
+
         app.state.device_manager = device_manager
         app.state.admin_runtime = admin_runtime
         app.state.config = app_config
+        app.state.http_client = http_client
+        app.state.admin_client = admin_client
 
         probe_task = None
         if app_config.admin.probe_enabled:
@@ -68,6 +82,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             with suppress(asyncio.CancelledError):
                 await probe_task
         await device_manager.save()
+        await http_client.aclose()
         logger.info("Hub stopped")
 
     app = FastAPI(

@@ -16,8 +16,18 @@ from hub.main import create_app
 def client():
     cfg = AppConfig()
     cfg.esp32.livekit_url = "wss://example.test"
+    # Phase 32.A: legacy path (no admin lookup). New behavior with
+    # user_id validation lives in test_config_web_user_id.py.
+    cfg.runtime_admin.enabled = False
     with patch("hub.api.routers.system.config.load_config", return_value=cfg):
         app = create_app(cfg)
+        # The router reads ``request.app.state.config.runtime_tokens.
+        # enabled`` to decide on legacy vs new behavior. Lifespan would
+        # normally populate that, but lifespan also builds heavyweight
+        # things (LiveKitAdminRuntime, mDNS) that need a real config.
+        # Bypass lifespan by stashing config on app.state directly —
+        # tests that need the new path can override admin_client too.
+        app.state.config = cfg
         yield TestClient(app)
 
 
@@ -56,6 +66,10 @@ def test_config_esp32_missing_header(client: TestClient):
 
 
 def test_config_web(client: TestClient):
+    """Legacy fallback path (runtime_admin.enabled=false fixture):
+    user_id is still required because Phase 32.A dropped participant_name
+    as a query param; user_id is the only identity field. The legacy
+    flag just skips admin validation, not the schema requirement."""
     with patch(
         "hub.api.routers.system.config.generate_token",
         return_value=("user-a", "web-jwt"),
@@ -65,7 +79,7 @@ def test_config_web(client: TestClient):
             params={
                 "client_type": "web",
                 "room_name": "room-x",
-                "participant_name": "user-a",
+                "user_id": "user-a",
             },
         )
     assert r.status_code == 200
