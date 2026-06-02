@@ -16,17 +16,12 @@ from hub.main import create_app
 def client():
     cfg = AppConfig()
     cfg.esp32.livekit_url = "wss://example.test"
-    # Phase 32.A: legacy path (no admin lookup). New behavior with
-    # user_id validation lives in test_config_web_user_id.py.
-    cfg.runtime_admin.enabled = False
     with patch("hub.api.routers.system.config.load_config", return_value=cfg):
         app = create_app(cfg)
-        # The router reads ``request.app.state.config.runtime_tokens.
-        # enabled`` to decide on legacy vs new behavior. Lifespan would
-        # normally populate that, but lifespan also builds heavyweight
-        # things (LiveKitAdminRuntime, mDNS) that need a real config.
-        # Bypass lifespan by stashing config on app.state directly —
-        # tests that need the new path can override admin_client too.
+        # Bypass lifespan (which boots LiveKitAdminRuntime + mDNS) by
+        # stashing config directly on app.state. Tests that need the
+        # admin-lookup path override app.state.admin_client too — see
+        # test_config_web_user_id.py.
         app.state.config = cfg
         yield TestClient(app)
 
@@ -65,32 +60,25 @@ def test_config_esp32_missing_header(client: TestClient):
     assert r.status_code == 422
 
 
-def test_config_web(client: TestClient):
-    """Legacy fallback path (runtime_admin.enabled=false fixture):
-    user_id is still required because Phase 32.A dropped participant_name
-    as a query param; user_id is the only identity field. The legacy
-    flag just skips admin validation, not the schema requirement."""
-    with patch(
-        "hub.api.routers.system.config.generate_token",
-        return_value=("user-a", "web-jwt"),
-    ):
-        r = client.get(
-            "/api/config",
-            params={
-                "client_type": "web",
-                "room_name": "room-x",
-                "user_id": "user-a",
-            },
-        )
-    assert r.status_code == 200
-    data = r.json()
-    assert data["identity"] == "user-a"
-    assert data["accessToken"] == "web-jwt"
-
-
-def test_config_web_missing_params(client: TestClient):
-    r = client.get("/api/config", params={"client_type": "web", "room_name": "r"})
+def test_config_web_missing_room(client: TestClient):
+    """Web path requires both ``room_name`` and ``user_id``."""
+    r = client.get(
+        "/api/config",
+        params={"client_type": "web", "user_id": "manson"},
+    )
     assert r.status_code == 422
+
+
+def test_config_web_missing_user_id(client: TestClient):
+    """Phase 33.A6: ``user_id`` is unconditionally required (rollback
+    bypass removed). Happy path lives in test_config_web_user_id.py
+    where admin_client is mocked."""
+    r = client.get(
+        "/api/config",
+        params={"client_type": "web", "room_name": "r"},
+    )
+    assert r.status_code == 422
+    assert "user_id" in r.json()["detail"]
 
 
 def test_livekit_rejects_inline_secrets_in_yaml():

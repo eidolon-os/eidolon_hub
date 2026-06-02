@@ -131,12 +131,13 @@ class RuntimeAdminConfig:
     signing under plan D, using the PAIRING_JWT_SECRET it shares with
     eidolon-agent.
 
-    ``enabled=false`` keeps the legacy code path (no admin lookup, no
-    user_id required) for ops rollback. Defaults to ``true`` on fresh
-    installs.
+    Phase 33.A6: removed the ``enabled=false`` rollback flag. Channel
+    already deleted its static-token fallback in 32.D, so any hub-side
+    bypass would only mint LK tokens that channel will immediately
+    reject at admin /api/resolve. Removing it forces a single,
+    consistent runtime path through admin.
     """
 
-    enabled: bool = True
     admin_api_url: str = "http://127.0.0.1:9000"
 
 
@@ -290,10 +291,10 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
         "EIDOLON_ADMIN_API_URL", "http://127.0.0.1:9000"
     )
 
-    return RuntimeAdminConfig(
-        enabled=bool(sec.get("enabled", True)),
-        admin_api_url=admin_url,
-    )
+    # Phase 33.A6: ``enabled`` was removed from RuntimeAdminConfig.
+    # If a legacy yaml still has ``enabled: false``, the loader silently
+    # ignores it — the runtime is unconditional now.
+    return RuntimeAdminConfig(admin_api_url=admin_url)
 
 
 def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:

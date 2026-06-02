@@ -179,16 +179,23 @@ def test_web_metadata_carries_no_device_token(
         assert meta.get("user_id") == "manson"
 
 
-def test_web_legacy_rollback_skips_admin_lookup(
-    client: TestClient, fake_admin_client, cfg: AppConfig
+def test_web_admin_lookup_is_unconditional(
+    client: TestClient, fake_admin_client
 ):
-    """``runtime_admin.enabled=false`` is the ops escape hatch — hub
-    skips admin validation entirely and mints a token. Useful when
-    admin is down but you need to bring the dev stack back."""
-    cfg.runtime_admin.enabled = False
+    """Phase 33.A6: removed the ``runtime_admin.enabled=false``
+    rollback path — admin lookup is now mandatory for the web flow.
+    Any user_id MUST round-trip through admin first; channel 32.D
+    already has no static-token fallback, so a bypass would only mint
+    LK tokens channel rejects on next /api/resolve call."""
+    # Hub always reaches out — even for a perfectly valid token request
+    # we expect get_user to be invoked.
+    from hub.api.clients import AdminNotFound
+    fake_admin_client.get_user.side_effect = AdminNotFound("unknown")
     r = client.get(
         "/api/config",
         params={"client_type": "web", "room_name": "R", "user_id": "anyone"},
     )
-    assert r.status_code == 200
-    fake_admin_client.get_user.assert_not_called()
+    # 404 not 200 — the rollback path that would have minted a token
+    # for an unverified user is gone.
+    assert r.status_code == 404
+    fake_admin_client.get_user.assert_called_once_with("anyone")

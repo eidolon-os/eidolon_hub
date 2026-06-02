@@ -132,16 +132,14 @@ async def _web_response(
     channel reads participant.identity at join time and signs the
     device JWT itself (it shares ``PAIRING_JWT_SECRET`` with agent).
     """
-    rt_cfg: RuntimeAdminConfig = request.app.state.config.runtime_admin
     admin_client: AdminClient | None = getattr(
         request.app.state, "admin_client", None
     )
 
-    if not rt_cfg.enabled:
-        # Operator-toggled rollback path: don't validate, don't lookup,
-        # just mint the LK token using user_id as both identity & name.
-        identity, token = _token_pair(room_name, user_id, agent_mode)
-        return TokenResponse(identity=identity, accessToken=token)
+    # Phase 33.A6: enabled rollback removed — admin validation is now
+    # unconditional. Channel 32.D already removed its symmetric
+    # static-token fallback, so any hub bypass would only mint a
+    # doomed LK token (channel /api/resolve would 404 the next step).
 
     if admin_client is None:
         raise HTTPException(
@@ -265,21 +263,16 @@ async def get_config(
             detail="room_name is required when client_type=web",
         )
 
-    rt_enabled = request.app.state.config.runtime_admin.enabled
-    if rt_enabled and not user_id:
+    # Phase 33.A6: user_id is unconditionally required for web — the
+    # rollback path that allowed bypass was removed because channel
+    # 32.D no longer has a matching static-token fallback anyway.
+    if not user_id:
         raise HTTPException(
             status_code=422,
             detail=(
                 "user_id is required when client_type=web (Phase 32.A); "
                 "create the user in admin UI first if you don't have one."
             ),
-        )
-    if not rt_enabled and not user_id:
-        # Legacy rollback path needs SOMETHING to use as identity.
-        # Reject rather than synthesize — operator must adapt the call.
-        raise HTTPException(
-            status_code=422,
-            detail="user_id is required when client_type=web",
         )
 
     return await _web_response(
