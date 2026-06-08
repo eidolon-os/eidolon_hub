@@ -1,0 +1,43 @@
+# Hub structured settings — 密钥占位符 = 环境变量名，值由 config/.env 注入
+
+api:
+  host: 0.0.0.0
+  port: 8082
+
+logging:
+  level: DEBUG
+
+livekit:
+  api_url: http://127.0.0.1:7880
+  api_key: LIVEKIT_API_KEY
+  api_secret: LIVEKIT_API_SECRET
+
+esp32:
+  livekit_url: ""
+  livekit_ip: auto
+  livekit_port: 7880
+  livekit_scheme: ws
+
+mdns:
+  service_type: _eidolon-hub._tcp.local.
+  service_name: Eidolon Hub._eidolon-hub._tcp.local.
+  hostname: eidolon-hub
+  txt_version: "1"
+  api_version: v1
+  config_path: /api/config
+
+admin_probe:
+  enabled: true
+  interval_seconds: 10
+  degraded_after_missed_probes: 2
+  offline_after_missed_probes: 3
+  command_timeout_seconds: 30
+
+# Phase 32.A: hub validates user_id at /api/config time via this admin
+# URL (LiveKit-standard pattern: trust participant.identity, look up
+# the rest server-side). Hub does NOT sign device JWTs — channel does
+# that under plan D. Phase 33.A6 removed the ``enabled`` flag — admin
+# lookup is unconditional now (the legacy bypass was inconsistent
+# with channel's already-removed static-token fallback).
+runtime_admin:
+  admin_api_url: http://127.0.0.1:9000
