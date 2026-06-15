@@ -8,10 +8,10 @@ from contextlib import suppress
 from pathlib import Path
 
 import httpx
+from eidolon_sdk.admin import AdminClient
 from fastapi import FastAPI
 
 import hub
-from hub.api.clients import AdminClient
 from hub.api.routers.admin import admin_commands_router, admin_devices_router, admin_events_router
 from hub.api.routers.system import config_router
 from hub.config import AppConfig, load_config

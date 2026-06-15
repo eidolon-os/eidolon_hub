@@ -6,17 +6,17 @@ import logging
 from enum import Enum
 from typing import Any
 
-from eidolon_sdk.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
-from fastapi import APIRouter, Header, HTTPException, Query, Request
-from pydantic import BaseModel
-
-from hub.api.clients import (
+from eidolon_sdk.admin import (
     AdminClient,
     AdminNotFound,
     AdminPrecondition,
     AdminUnreachable,
     AdminUpstreamError,
 )
+from eidolon_sdk.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
+from fastapi import APIRouter, Header, HTTPException, Query, Request
+from pydantic import BaseModel
+
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
 from hub.config import AppConfig, load_config, resolve_eidolon_livekit_client_url
 
