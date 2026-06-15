@@ -62,6 +62,26 @@ async def approve_device(device_id: str, request: Request):
     )
 
 
+@router.post("/{device_id}/enable", response_model=AdminDevice)
+async def set_device_enabled(
+    device_id: str,
+    request: Request,
+    enabled: bool = Query(default=True, description="Enable or disable the device"),
+):
+    """启用/禁用设备: 保留设备记录, 但改变是否允许它参与运行时使用."""
+    runtime = request.app.state.admin_runtime
+    device_manager = request.app.state.device_manager
+    try:
+        await device_manager.set_enabled(device_id, enabled=enabled)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=f"Device not found: {device_id}") from exc
+    devices = await build_admin_devices(runtime=runtime, device_manager=device_manager)
+    for device in devices:
+        if device.device_id == device_id:
+            return device
+    raise HTTPException(status_code=404, detail=f"Device not found: {device_id}")
+
+
 @router.delete("/{device_id}", response_model=UnregisterDeviceResponse)
 async def unregister_device(device_id: str, request: Request):
     """注销设备: 从 hub 的持久记录中移除并清理 admin runtime 的 presence 缓存.

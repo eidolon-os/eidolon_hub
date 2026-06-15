@@ -125,6 +125,24 @@ class DeviceManager:
         logger.info("Disabled device: %s", device_id)
         return device
 
+    async def set_enabled(self, device_id: str, *, enabled: bool) -> Device:
+        """Set device enabled state and persist devices.json immediately."""
+        async with self._lock:
+            device = self.get_or_raise(device_id)
+            previous = device.enabled
+            if enabled:
+                device.enable()
+            else:
+                device.disable()
+            await self._save_unlocked()
+        if previous != enabled:
+            logger.info(
+                "%s device: %s",
+                "Enabled" if enabled else "Disabled",
+                device_id,
+            )
+        return device
+
     async def approve(self, device_id: str) -> Device:
         """操作员批准设备. 幂等, 已批准则 no-op (保留首次 approved_at).
 

@@ -126,6 +126,43 @@ def test_approve_unknown_device_returns_404_with_actionable_message(
     assert "/api/config" in detail
 
 
+# ---- enable / disable -----------------------------------------------------
+
+
+def test_set_enabled_returns_full_device_view(client: TestClient) -> None:
+    resp = client.post("/api/admin/devices/dev-001/enable", params={"enabled": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["device_id"] == "dev-001"
+    assert body["enabled"] is False
+
+    listed = client.get("/api/admin/devices").json()
+    devices = {d["device_id"]: d for d in listed["devices"]}
+    assert devices["dev-001"]["enabled"] is False
+
+
+def test_set_enabled_persists_to_devices_json(tmp_path: Path) -> None:
+    import asyncio
+
+    devices_file = tmp_path / "devices.json"
+    dm = DeviceManager(devices_file)
+    asyncio.run(dm.load())
+    dm.register(device_id="dev-001", name="Test Device")
+    asyncio.run(dm.set_enabled("dev-001", enabled=False))
+
+    reloaded = DeviceManager(devices_file)
+    asyncio.run(reloaded.load())
+    device = reloaded.get("dev-001")
+    assert device is not None
+    assert device.enabled is False
+
+
+def test_set_enabled_unknown_device_returns_404(client: TestClient) -> None:
+    resp = client.post("/api/admin/devices/ghost/enable", params={"enabled": False})
+    assert resp.status_code == 404
+    assert "Device not found" in resp.json()["detail"]
+
+
 # ---- backward compatibility with legacy devices.json ---------------------
 
 
