@@ -79,6 +79,7 @@ class TestMdnsLifespan:
         mock_aiozc = MagicMock()
         mock_aiozc.async_register_service = AsyncMock(return_value=None)
         mock_aiozc.async_unregister_service = AsyncMock(return_value=None)
+        mock_aiozc.async_update_service = AsyncMock(return_value=None)
         mock_aiozc.async_close = AsyncMock(return_value=None)
 
         async def _register(info):
@@ -126,6 +127,35 @@ class TestMdnsLifespan:
         mock_zeroconf["mock"].async_unregister_service.assert_awaited_once_with(
             mock_zeroconf["captured"][0]
         )
+
+    @pytest.mark.asyncio
+    async def test_readvertises_on_ip_change(self, mock_zeroconf, monkeypatch):
+        # When the host LAN IP moves (DHCP / network change) the advertisement
+        # must follow it, so devices that discover us never get a dead address.
+        monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
+        ips = iter(["192.168.3.150", "192.168.3.152"])
+        monkeypatch.setattr(
+            "hub.core.discovery._local_ipv4",
+            lambda: next(ips, "192.168.3.152"),
+        )
+        update = mock_zeroconf["mock"].async_update_service
+        async with mdns_lifespan(port=8081, version="0.1.0"):
+            for _ in range(50):
+                if update.await_count:
+                    break
+                await asyncio.sleep(0.01)
+        update.assert_awaited()
+        new_info = update.await_args.args[0]
+        assert socket.inet_aton("192.168.3.152") in new_info.addresses
+        assert b"192.168.3.152" in new_info.properties[b"config_url"]
+
+    @pytest.mark.asyncio
+    async def test_does_not_readvertise_when_ip_stable(self, mock_zeroconf, monkeypatch):
+        monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
+        monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.168.3.152")
+        async with mdns_lifespan(port=8081, version="0.1.0"):
+            await asyncio.sleep(0.05)
+        mock_zeroconf["mock"].async_update_service.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_registers_ipv4_only_zeroconf(self, mock_zeroconf):
