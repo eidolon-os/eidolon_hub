@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [
-    "eidolon-sdk[devices]",
+    "eidolon-sdk[devices,livekit]",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml",

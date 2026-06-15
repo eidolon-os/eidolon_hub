@@ -8,7 +8,7 @@ from contextlib import suppress
 from typing import Any
 
 from eidolon_sdk.control import CONTROL_TOPIC
-from livekit import api
+from eidolon_sdk.livekit import build_livekit_token
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
@@ -105,20 +105,16 @@ class LiveKitControlBridge:
     def _token(self, room_name: str) -> str:
         cfg = self._config.livekit
         identity = _identity(self._config.control_bridge.identity_prefix, room_name)
-        return (
-            api.AccessToken(cfg.api_key, cfg.api_secret)
-            .with_identity(identity)
-            .with_name(identity)
-            .with_grants(
-                api.VideoGrants(
-                    room_join=True,
-                    room=room_name,
-                    can_publish=False,
-                    can_subscribe=True,
-                    can_publish_data=False,
-                )
-            )
-            .to_jwt()
+        return build_livekit_token(
+            api_key=cfg.api_key,
+            api_secret=cfg.api_secret,
+            room_name=room_name,
+            identity=identity,
+            name=identity,
+            dispatch_agent=False,
+            can_publish=False,
+            can_subscribe=True,
+            can_publish_data=False,
         )
 
     def _install_handler(self, room: Any) -> None:
@@ -154,4 +150,3 @@ class LiveKitControlBridge:
                 sender_identity,
                 envelope.get("ref") or envelope.get("command_id"),
             )
-

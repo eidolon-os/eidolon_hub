@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-import json
 from enum import Enum
 from typing import Mapping
 
+from eidolon_sdk.livekit import build_livekit_token
 from pydantic import BaseModel
 
 
@@ -52,44 +52,22 @@ def generate_token(
     Returns:
         A tuple of (identity, access_token).
     """
-    from livekit import api
-
     from hub.config import load_config
 
     cfg = load_config().livekit
-
-    if not cfg.api_key or not cfg.api_secret:
-        raise ValueError("LIVEKIT_API_KEY or LIVEKIT_API_SECRET not configured")
-
-    builder = (
-        api.AccessToken(cfg.api_key, cfg.api_secret)
-        .with_identity(participant_name)
-        .with_name(participant_name)
-        .with_grants(
-            api.VideoGrants(
-                room_join=True,
-                room=room_name,
-                can_publish=can_publish,
-                can_subscribe=can_subscribe,
-                can_publish_data=can_publish_data,
-            )
-        )
+    token = build_livekit_token(
+        api_key=cfg.api_key,
+        api_secret=cfg.api_secret,
+        room_name=room_name,
+        identity=participant_name,
+        name=participant_name,
+        participant_metadata=participant_metadata,
+        dispatch_agent=dispatch_agent,
+        agent_name="eidolon",
+        agent_metadata={"agent_mode": agent_mode.value} if dispatch_agent else None,
+        can_publish=can_publish,
+        can_subscribe=can_subscribe,
+        can_publish_data=can_publish_data,
     )
-    if dispatch_agent:
-        builder = builder.with_room_config(
-            api.RoomConfiguration(
-                agents=[
-                    api.RoomAgentDispatch(
-                        agent_name="eidolon",
-                        metadata=json.dumps({"agent_mode": agent_mode.value}),
-                    )
-                ],
-            )
-        )
-    if participant_metadata is not None:
-        # LiveKit accepts free-form string here; we JSON-encode so channel
-        # can parse a structured payload. Empty dict still emits "{}" —
-        # that's fine, channel just reads no keys.
-        builder = builder.with_metadata(json.dumps(dict(participant_metadata)))
 
-    return participant_name, builder.to_jwt()
+    return participant_name, token
