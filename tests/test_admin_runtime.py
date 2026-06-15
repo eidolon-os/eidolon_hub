@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 
 import pytest
+from eidolon_sdk.control import CONTROL_TOPIC
 
 from hub.config import AppConfig, LiveKitConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
@@ -14,6 +16,7 @@ class _FakeRoomService:
         self._participants = {
             "room-a": [
                 SimpleNamespace(identity="esp32-1", sid="PA_1"),
+                SimpleNamespace(identity="agent-AJ_noise", sid="PA_AGENT"),
             ]
         }
         self.sent_payloads = []
@@ -49,6 +52,14 @@ class _FailingLiveKitAPI:
         return None
 
 
+class _FakeControlBridge:
+    def __init__(self):
+        self.rooms = []
+
+    async def ensure_room(self, room_name: str):
+        self.rooms.append(room_name)
+
+
 @pytest.mark.asyncio
 async def test_probe_cycle_updates_presence():
     cfg = AppConfig()
@@ -66,22 +77,48 @@ async def test_probe_cycle_updates_presence():
 
 
 @pytest.mark.asyncio
-async def test_send_command_to_online_device():
+async def test_probe_cycle_ignores_unregistered_livekit_participants():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     fake_api = _FakeLiveKitAPI()
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
 
+    await runtime.run_probe_cycle([])
+    devices = await runtime.get_presence_snapshot()
+    assert devices == []
+
+
+@pytest.mark.asyncio
+async def test_send_command_to_online_device():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+    bridge = _FakeControlBridge()
+    runtime.set_control_bridge(bridge)
+
     await runtime.run_probe_cycle(["esp32-1"])
-    command = await runtime.send_command("esp32-1", {"power": "on"}, "admin.command")
+    command = await runtime.send_command("esp32-1", {"reason": "test"}, op="config.refresh")
 
     assert command["status"] == "sent"
     assert command["device_id"] == "esp32-1"
+    assert command["topic"] == CONTROL_TOPIC
+    assert command["op"] == "config.refresh"
     assert fake_api.room.sent_payloads
     sent = fake_api.room.sent_payloads[0]
     assert sent.room == "room-a"
+    assert sent.topic == CONTROL_TOPIC
     assert "esp32-1" in sent.destination_identities
+    assert bridge.rooms == ["room-a"]
+    envelope = json.loads(sent.data.decode("utf-8"))
+    assert envelope["v"] == 1
+    assert envelope["kind"] == "cmd"
+    assert envelope["id"] == command["command_id"]
+    assert envelope["op"] == "config.refresh"
+    assert envelope["dst"]["id"] == "esp32-1"
+    assert envelope["payload"] == {"reason": "test"}
 
 
 @pytest.mark.asyncio
@@ -120,3 +157,61 @@ async def test_mark_command_timeout_and_metrics():
 
     metrics = await runtime.get_metrics()
     assert metrics["commands"]["timeout"] == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_command_ack_updates_command_status():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command("esp32-1", {"reason": "test"}, op="config.refresh")
+
+    updated = await runtime.apply_command_ack(
+        {
+            "v": 1,
+            "kind": "result",
+            "ref": command["command_id"],
+            "device_id": "esp32-1",
+            "op": "config.refresh",
+            "status": "succeeded",
+            "code": "OK",
+            "result": {"status": "active"},
+        }
+    )
+
+    assert updated is not None
+    assert updated["status"] == "succeeded"
+    assert updated["ack"]["code"] == "OK"
+    assert updated["result"] == {"status": "active"}
+
+
+@pytest.mark.asyncio
+async def test_apply_command_ack_rejects_wrong_sender():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command("esp32-1", {"reason": "test"}, op="config.refresh")
+
+    updated = await runtime.apply_command_ack(
+        {
+            "v": 1,
+            "kind": "ack",
+            "ref": command["command_id"],
+            "device_id": "esp32-1",
+            "op": "config.refresh",
+            "status": "succeeded",
+            "code": "OK",
+        },
+        sender_identity="esp32-other",
+    )
+
+    assert updated is None
+    assert runtime.get_command(command["command_id"])["status"] == "sent"

@@ -35,6 +35,13 @@ admin_probe:
   offline_after_missed_probes: 3
   command_timeout_seconds: 30
 
+control_bridge:
+  # Optional: join LiveKit rooms as a data-only participant to receive
+  # ESP32 ack/result envelopes on eidolon.control. Requires livekit.rtc.
+  enabled: false
+  livekit_url: ""
+  identity_prefix: eidolon-hub-control
+
 # Phase 32.A: hub validates user_id at /api/config time via this admin
 # URL. Hub does NOT sign device JWTs — channel does that under plan D
 # (LiveKit-standard: trust participant.identity, look up server-side).

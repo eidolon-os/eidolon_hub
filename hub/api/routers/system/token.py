@@ -24,6 +24,11 @@ def generate_token(
     participant_name: str,
     agent_mode: AgentMode = AgentMode.STREAMING,
     participant_metadata: Mapping[str, object] | None = None,
+    *,
+    dispatch_agent: bool = True,
+    can_publish: bool = True,
+    can_subscribe: bool = True,
+    can_publish_data: bool = True,
 ) -> tuple[str, str]:
     """Generate a LiveKit access token.
 
@@ -38,6 +43,11 @@ def generate_token(
             without exposing it to the browser JS. ``None`` (default) emits
             no participant metadata so behavior is unchanged for callers
             that don't opt in (esp32 path, tests).
+        dispatch_agent: Whether LiveKit should dispatch the Eidolon channel
+            worker for this room. Pending-device rooms set this to false.
+        can_publish: Media publish grant. Pending-device rooms keep this false.
+        can_subscribe: Media/data subscribe grant.
+        can_publish_data: Data-channel publish grant, useful for command ack.
 
     Returns:
         A tuple of (identity, access_token).
@@ -59,12 +69,14 @@ def generate_token(
             api.VideoGrants(
                 room_join=True,
                 room=room_name,
-                can_publish=True,
-                can_subscribe=True,
-                can_publish_data=True,
+                can_publish=can_publish,
+                can_subscribe=can_subscribe,
+                can_publish_data=can_publish_data,
             )
         )
-        .with_room_config(
+    )
+    if dispatch_agent:
+        builder = builder.with_room_config(
             api.RoomConfiguration(
                 agents=[
                     api.RoomAgentDispatch(
@@ -74,7 +86,6 @@ def generate_token(
                 ],
             )
         )
-    )
     if participant_metadata is not None:
         # LiveKit accepts free-form string here; we JSON-encode so channel
         # can parse a structured payload. Empty dict still emits "{}" —

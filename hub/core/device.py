@@ -20,6 +20,7 @@ class Device(BaseModel):
 
     device_id: str
     name: str = ""
+    kind: str = "unknown"
     enabled: bool = True
     psk_hash: Optional[str] = None
     paired: bool = False
@@ -57,6 +58,7 @@ class Device(BaseModel):
         return {
             "device_id": self.device_id,
             "name": self.name,
+            "kind": self.kind,
             "enabled": self.enabled,
             "paired": self.paired,
             "approved": self.approved,
@@ -78,6 +80,7 @@ class Device(BaseModel):
         data = dict(data)
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         data["last_seen"] = datetime.fromisoformat(data["last_seen"])
+        data.setdefault("kind", "unknown")
         if data.get("approved_at"):
             data["approved_at"] = datetime.fromisoformat(data["approved_at"])
         return cls(**data)

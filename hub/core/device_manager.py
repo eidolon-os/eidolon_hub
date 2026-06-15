@@ -46,6 +46,11 @@ class DeviceManager:
                         v["approved"] = True
                         v["approved_at"] = v.get("created_at")
                         migrated += 1
+                    if not v.get("kind") or v.get("kind") == "unknown":
+                        metadata = v.get("metadata") or {}
+                        if metadata.get("public_key") and metadata.get("fingerprint"):
+                            v["kind"] = "esp32"
+                            migrated += 1
                 self._devices = {
                     k: Device.from_storage_dict(v) for k, v in devices_list.items()
                 }
@@ -80,12 +85,20 @@ class DeviceManager:
         tmp_path.replace(self._storage_path)
         logger.debug("Saved %d devices to %s", len(self._devices), self._storage_path)
 
-    def register(self, device_id: str, name: str = "", psk_hash: Optional[str] = None) -> Device:
+    def register(
+        self,
+        device_id: str,
+        name: str = "",
+        psk_hash: Optional[str] = None,
+        kind: str = "unknown",
+    ) -> Device:
         """注册新设备或更新已存在设备."""
         if device_id in self._devices:
             device = self._devices[device_id]
             if name:
                 device.name = name
+            if kind and kind != "unknown":
+                device.kind = kind
             if psk_hash:
                 device.mark_paired(psk_hash)
             device.touch()
@@ -93,12 +106,69 @@ class DeviceManager:
             device = Device(
                 device_id=device_id,
                 name=name,
+                kind=kind,
                 psk_hash=psk_hash,
                 paired=psk_hash is not None,
             )
             self._devices[device_id] = device
             logger.info("Registered new device: %s (%s)", device_id, name or "unnamed")
         return device
+
+    async def register_seen(
+        self,
+        device_id: str,
+        name: str = "",
+        psk_hash: Optional[str] = None,
+        metadata: Optional[dict] = None,
+    ) -> Device:
+        """Register/touch a device observed through ``GET /api/config``.
+
+        Unlike the legacy synchronous ``register`` helper, this method is
+        safe for request handlers: it holds the manager lock and persists
+        the updated ``devices.json`` before returning so admin can approve
+        the device immediately.
+        """
+        async with self._lock:
+            kind = str((metadata or {}).get("kind") or "unknown")
+            device = self.register(
+                device_id=device_id,
+                name=name,
+                psk_hash=psk_hash,
+                kind=kind,
+            )
+            if metadata:
+                device.metadata.update(metadata)
+            await self._save_unlocked()
+            return device
+
+    async def register_signed_seen(
+        self,
+        *,
+        device_id: str,
+        public_key: str,
+        fingerprint: str,
+        nonce: str,
+        name: str = "",
+    ) -> Device:
+        """Register/touch a signed device config request.
+
+        Public key storage is TOFU: the first signed request locks the key for
+        the device_id. Later requests may omit the key, but if they provide it
+        the auth layer must already have confirmed it matches.
+        """
+        async with self._lock:
+            device = self.register(device_id=device_id, name=name, kind="esp32")
+            metadata = device.metadata
+            if not metadata.get("public_key"):
+                metadata["public_key"] = public_key
+                metadata["fingerprint"] = fingerprint
+            recent = metadata.setdefault("recent_nonces", [])
+            if nonce in recent:
+                raise ValueError("replayed device nonce")
+            recent.append(nonce)
+            del recent[:-32]
+            await self._save_unlocked()
+            return device
 
     def get(self, device_id: str) -> Optional[Device]:
         """根据 device_id 查询设备."""

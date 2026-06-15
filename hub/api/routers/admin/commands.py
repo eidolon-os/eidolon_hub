@@ -15,7 +15,15 @@ async def send_device_command(
 ):
     runtime = request.app.state.admin_runtime
     try:
-        command = await runtime.send_command(device_id=device_id, payload=req.payload, topic=req.topic)
+        command = await runtime.send_command(
+            device_id=device_id,
+            payload=req.payload,
+            topic=req.topic,
+            op=req.op,
+            ttl_ms=req.ttl_ms,
+            qos=req.qos,
+            priority=req.priority,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
 

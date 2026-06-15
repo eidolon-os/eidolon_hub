@@ -3,12 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
+from eidolon_sdk.control import CONTROL_TOPIC
 from pydantic import BaseModel, Field
 
 
 class AdminDevice(BaseModel):
     device_id: str
     name: str = ""
+    kind: str = "unknown"
     enabled: bool
     paired: bool
     # Phase 25: 操作员批准位 + 时间戳; 跟 paired 是独立维度.
@@ -42,26 +44,36 @@ class UnregisterDeviceResponse(BaseModel):
     # registered).
     existed: bool
     # True if a presence cache entry was cleared from admin_runtime.
-    # Independent from ``existed``: a device with no persistent record
-    # can still have a presence-only entry if it was seen by a LiveKit
-    # probe before completing first-time registration.
+    # Independent from ``existed``: the cache can temporarily retain a
+    # previously registered device until the next LiveKit probe cycle.
     presence_cleared: bool
 
 
 class CommandRequest(BaseModel):
-    topic: str = Field(default="admin.command")
+    topic: str = Field(default=CONTROL_TOPIC)
+    op: str | None = Field(default=None)
     payload: dict[str, Any] = Field(default_factory=dict)
+    ttl_ms: int = Field(default=30_000, ge=1_000, le=600_000)
+    qos: str = Field(default="ack", pattern="^(fire_and_forget|ack|result)$")
+    priority: str = Field(default="normal", pattern="^(low|normal|high|urgent)$")
 
 
 class CommandResponse(BaseModel):
     command_id: str
     device_id: str
     topic: str
+    op: str = ""
     status: str
     created_at: str
     payload: dict[str, Any]
+    envelope: dict[str, Any] = Field(default_factory=dict)
+    ttl_ms: int = 30_000
+    qos: str = "ack"
+    priority: str = "normal"
     updated_at: str
     error: str = ""
+    ack: dict[str, Any] | None = None
+    result: Any = None
 
 
 class CommandListResponse(BaseModel):

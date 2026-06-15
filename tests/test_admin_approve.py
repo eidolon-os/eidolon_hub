@@ -202,3 +202,38 @@ def test_legacy_paired_device_loads_as_approved(tmp_path: Path) -> None:
     assert legacy is not None
     assert legacy.approved is True
     assert legacy.approved_at is not None
+
+
+def test_signed_legacy_device_loads_as_esp32(tmp_path: Path) -> None:
+    """Signed device records created before ``kind`` existed should still
+    show as ESP32 in admin. The public key/fingerprint pair is only written
+    by the ESP32 signed config flow, so it is a stable migration signal."""
+    import asyncio
+    import json
+
+    devices_file = tmp_path / "devices.json"
+    devices_file.write_text(json.dumps({
+        "version": 1,
+        "devices": {
+            "1c:db:d4:7a:ef:0c": {
+                "device_id": "1c:db:d4:7a:ef:0c",
+                "name": "",
+                "enabled": True,
+                "paired": False,
+                "approved": True,
+                "approved_at": "2026-06-12T11:38:06+00:00",
+                "psk_hash": None,
+                "created_at": "2026-06-12T11:35:14+00:00",
+                "last_seen": "2026-06-12T16:33:38+00:00",
+                "metadata": {
+                    "public_key": "pub",
+                    "fingerprint": "p256:abc",
+                },
+            }
+        },
+    }))
+    dm = DeviceManager(devices_file)
+    asyncio.run(dm.load())
+    device = dm.get("1c:db:d4:7a:ef:0c")
+    assert device is not None
+    assert device.kind == "esp32"

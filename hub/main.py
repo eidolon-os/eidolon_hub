@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import signal
 from contextlib import suppress
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from hub.api.routers.admin import admin_commands_router, admin_devices_router, a
 from hub.api.routers.system import config_router
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
 from hub.core.discovery import mdns_lifespan
 from hub.logging import setup_logging
@@ -35,6 +35,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         device_manager = DeviceManager(Path("data/devices.json"))
         await device_manager.load()
         admin_runtime = LiveKitAdminRuntime(app_config)
+        control_bridge = LiveKitControlBridge(app_config, admin_runtime)
+        admin_runtime.set_control_bridge(control_bridge)
 
         # Phase 32.A: process-wide httpx client + admin REST wrapper
         # used by /api/config (web) to validate user_id + resolve the
@@ -48,11 +50,13 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         app.state.device_manager = device_manager
         app.state.admin_runtime = admin_runtime
+        app.state.control_bridge = control_bridge
         app.state.config = app_config
         app.state.http_client = http_client
         app.state.admin_client = admin_client
 
         probe_task = None
+        await control_bridge.start()
         if app_config.admin.probe_enabled:
             admin_runtime.get_probe_health().running = True
 
@@ -60,6 +64,10 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 while True:
                     device_ids = [device.device_id for device in device_manager.list_all()]
                     await admin_runtime.run_probe_cycle(device_ids)
+                    presence = await admin_runtime.get_presence_snapshot()
+                    await control_bridge.sync_rooms(
+                        [item.room_name for item in presence if item.room_name]
+                    )
                     await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
                     await asyncio.sleep(app_config.admin.probe_interval_seconds)
 
@@ -81,6 +89,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             probe_task.cancel()
             with suppress(asyncio.CancelledError):
                 await probe_task
+        await control_bridge.stop()
         await device_manager.save()
         await http_client.aclose()
         logger.info("Hub stopped")

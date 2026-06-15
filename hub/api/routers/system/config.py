@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 import logging
-import secrets
 from enum import Enum
+from typing import Any
 
+from eidolon_sdk.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from hub.api.clients import (
     AdminClient,
     AdminNotFound,
+    AdminPrecondition,
     AdminUnreachable,
     AdminUpstreamError,
 )
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
-from hub.config import RuntimeAdminConfig, load_config, resolve_eidolon_livekit_client_url
+from hub.config import AppConfig, load_config, resolve_eidolon_livekit_client_url
 
 _log = logging.getLogger(__name__)
 
@@ -28,9 +30,25 @@ class ClientType(str, Enum):
     WEB = "web"
 
 
+class ESP32ConfigStatus(str, Enum):
+    PENDING_APPROVAL = "pending_approval"
+    WAITING_BINDING = "waiting_binding"
+    ACTIVE = "active"
+
+
+PENDING_ROOM_NAME = "eidolon-pending"
+
+
 class AudioConfig(BaseModel):
     sample_rate: int = 16000
     channels: int = 1
+
+
+class ESP32ControlConfig(BaseModel):
+    server_url: str
+    token: str
+    identity: str
+    room_name: str
 
 
 class ESP32Config(BaseModel):
@@ -39,11 +57,14 @@ class ESP32Config(BaseModel):
     identity: str
     room_name: str
     audio: AudioConfig
+    control: ESP32ControlConfig | None = None
 
 
 class ESP32ConfigResponse(BaseModel):
     success: bool
+    status: ESP32ConfigStatus = ESP32ConfigStatus.ACTIVE
     config: ESP32Config
+    device: dict[str, Any] | None = None
 
 
 def _token_pair(
@@ -57,14 +78,184 @@ def _token_pair(
         raise HTTPException(status_code=500, detail=str(e)) from e
 
 
-def _esp32_response(
+def _app_config(request: Request) -> AppConfig:
+    cfg = getattr(request.app.state, "config", None)
+    return cfg if isinstance(cfg, AppConfig) else load_config()
+
+
+def _default_active_room_name(device_id: str) -> str:
+    safe = "".join(ch if ch.isalnum() else "-" for ch in device_id.lower())
+    safe = "-".join(part for part in safe.split("-") if part)
+    return f"device-{safe or 'esp32'}"
+
+
+def _default_control_room_name(device_id: str) -> str:
+    return f"{_default_active_room_name(device_id)}-control"
+
+
+def _server_url(request: Request) -> str:
+    cfg = _app_config(request).esp32
+    try:
+        return resolve_eidolon_livekit_client_url(
+            cfg,
+            request_host=request.url.hostname or "",
+            request_scheme=request.url.scheme or "http",
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e)) from e
+
+
+def _build_device_payload(
+    *,
+    device_id: str,
+    approved: bool,
+    bound: bool,
+    fingerprint: str = "",
+) -> dict[str, Any]:
+    return {
+        "device_id": device_id,
+        "approved": approved,
+        "bound": bound,
+        "fingerprint": fingerprint,
+    }
+
+
+def _pending_esp32_response(
+    *,
+    request: Request,
+    device_id: str,
+    status: ESP32ConfigStatus,
+    approved: bool,
+    fingerprint: str = "",
+) -> ESP32ConfigResponse:
+    try:
+        _identity, token = generate_token(
+            room_name=PENDING_ROOM_NAME,
+            participant_name=device_id,
+            participant_metadata={
+                "kind": "device_pending",
+                "device_id": device_id,
+                "status": status.value,
+            },
+            dispatch_agent=False,
+            can_publish=True,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return ESP32ConfigResponse(
+        success=True,
+        status=status,
+        config=ESP32Config(
+            server_url=_server_url(request),
+            token=token,
+            identity=device_id,
+            room_name=PENDING_ROOM_NAME,
+            audio=AudioConfig(),
+        ),
+        device=_build_device_payload(
+            device_id=device_id,
+            approved=approved,
+            bound=False,
+            fingerprint=fingerprint,
+        ),
+    )
+
+
+async def _esp32_response(
     *,
     request: Request,
     room_name: str | None,
     device_id: str,
     agent_mode: AgentMode,
+    auth_headers: DeviceAuthHeaders,
 ) -> ESP32ConfigResponse:
-    resolved_room = room_name or f"esp32-{secrets.token_hex(4)}"
+    device_manager = getattr(request.app.state, "device_manager", None)
+    if device_manager is None:
+        raise HTTPException(
+            status_code=503,
+            detail="hub device_manager not initialized — restart hub",
+        )
+
+    existing = device_manager.get(device_id)
+    stored_public_key = None
+    if existing is not None:
+        stored_public_key = str((existing.metadata or {}).get("public_key") or "") or None
+        recent_nonces = (existing.metadata or {}).get("recent_nonces") or []
+        if auth_headers.nonce in recent_nonces:
+            raise HTTPException(status_code=409, detail="replayed device nonce")
+
+    path_query = request.url.path
+    if request.url.query:
+        path_query += "?" + request.url.query
+    try:
+        fingerprint = verify_device_signature(
+            headers=auth_headers,
+            stored_public_key=stored_public_key,
+            path_query=path_query,
+        )
+    except DeviceAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+
+    public_key = auth_headers.public_key or stored_public_key
+    if not public_key:
+        raise HTTPException(status_code=401, detail="missing device public key")
+    try:
+        device = await device_manager.register_signed_seen(
+            device_id=device_id,
+            public_key=public_key,
+            fingerprint=fingerprint,
+            nonce=auth_headers.nonce,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    fingerprint = str((device.metadata or {}).get("fingerprint") or "")
+
+    if not device.approved:
+        return _pending_esp32_response(
+            request=request,
+            device_id=device_id,
+            status=ESP32ConfigStatus.PENDING_APPROVAL,
+            approved=False,
+            fingerprint=fingerprint,
+        )
+
+    admin_client: AdminClient | None = getattr(request.app.state, "admin_client", None)
+    if admin_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="hub admin_client not initialized — restart hub",
+        )
+
+    try:
+        await admin_client.resolve_device(device_id)
+    except AdminPrecondition as exc:
+        _log.info("device waiting binding device=%s detail=%s", device_id, exc.message)
+        return _pending_esp32_response(
+            request=request,
+            device_id=device_id,
+            status=ESP32ConfigStatus.WAITING_BINDING,
+            approved=True,
+            fingerprint=fingerprint,
+        )
+    except AdminNotFound as exc:
+        _log.warning("device resolve not found device=%s detail=%s", device_id, exc)
+        return _pending_esp32_response(
+            request=request,
+            device_id=device_id,
+            status=ESP32ConfigStatus.WAITING_BINDING,
+            approved=True,
+            fingerprint=fingerprint,
+        )
+    except AdminUnreachable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AdminUpstreamError as exc:
+        raise HTTPException(
+            status_code=502, detail=f"admin upstream: {exc.message}"
+        ) from exc
+
+    resolved_room = room_name or _default_active_room_name(device_id)
     # Phase 32.B: tag the ESP32 token with kind=device so channel knows
     # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
     # the web flow). Symmetric to _web_response's metadata.
@@ -75,25 +266,43 @@ def _esp32_response(
             agent_mode=agent_mode,
             participant_metadata={"kind": "device", "device_id": device_id},
         )
+        _control_identity, control_token = generate_token(
+            room_name=_default_control_room_name(device_id),
+            participant_name=device_id,
+            participant_metadata={
+                "kind": "device_control",
+                "device_id": device_id,
+                "voice_room": resolved_room,
+            },
+            dispatch_agent=False,
+            can_publish=False,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-    cfg = load_config().esp32
-    try:
-        server_url = resolve_eidolon_livekit_client_url(
-            cfg,
-            request_host=request.url.hostname or "",
-            request_scheme=request.url.scheme or "http",
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=500, detail=str(e)) from e
+    server_url = _server_url(request)
     return ESP32ConfigResponse(
         success=True,
+        status=ESP32ConfigStatus.ACTIVE,
         config=ESP32Config(
             server_url=server_url,
             token=token,
             identity=device_id,
             room_name=resolved_room,
             audio=AudioConfig(),
+            control=ESP32ControlConfig(
+                server_url=server_url,
+                token=control_token,
+                identity=device_id,
+                room_name=_default_control_room_name(device_id),
+            ),
+        ),
+        device=_build_device_payload(
+            device_id=device_id,
+            approved=True,
+            bound=True,
+            fingerprint=fingerprint,
         ),
     )
 
@@ -243,6 +452,10 @@ async def get_config(
         description="Agent mode: streaming or ptt",
     ),
     x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
+    x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
+    x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
+    x_device_public_key: str | None = Header(default=None, alias="X-Device-Public-Key"),
+    x_device_signature: str | None = Header(default=None, alias="X-Device-Signature"),
 ):
     if client_type == ClientType.ESP32:
         if not x_device_id:
@@ -250,11 +463,32 @@ async def get_config(
                 status_code=422,
                 detail="X-Device-ID header is required when client_type=esp32",
             )
-        return _esp32_response(
+        missing_auth = [
+            name
+            for name, value in [
+                ("X-Device-Nonce", x_device_nonce),
+                ("X-Device-Timestamp", x_device_timestamp),
+                ("X-Device-Signature", x_device_signature),
+            ]
+            if not value
+        ]
+        if missing_auth:
+            raise HTTPException(
+                status_code=422,
+                detail=f"missing device auth headers: {', '.join(missing_auth)}",
+            )
+        return await _esp32_response(
             request=request,
             room_name=room_name,
             device_id=x_device_id,
             agent_mode=agent_mode,
+            auth_headers=DeviceAuthHeaders(
+                device_id=x_device_id,
+                nonce=x_device_nonce or "",
+                timestamp=x_device_timestamp or "",
+                public_key=x_device_public_key,
+                signature=x_device_signature or "",
+            ),
         )
 
     if not room_name:

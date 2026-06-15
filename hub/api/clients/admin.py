@@ -35,6 +35,15 @@ class AdminNotFound(AdminClientError):
     """admin returned 404 (user id doesn't exist)."""
 
 
+class AdminPrecondition(AdminClientError):
+    """admin returned 409/412: entity exists but is not configured."""
+
+    def __init__(self, status_code: int, message: str) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.message = message
+
+
 class AdminUpstreamError(AdminClientError):
     """admin returned a non-2xx response other than 404."""
 
@@ -87,6 +96,29 @@ class AdminClient:
 
         if r.status_code == 404:
             raise AdminNotFound(_unwrap_detail(r.text))
+        if r.status_code >= 400:
+            raise AdminUpstreamError(r.status_code, _unwrap_detail(r.text))
+        return r.json()
+
+    async def resolve_device(self, device_id: str) -> dict[str, Any]:
+        """``GET /api/resolve/device/{device_id}``.
+
+        Hub uses this only as a preflight before minting an active ESP32
+        LiveKit token. The channel worker will resolve again at first turn,
+        so this is not a source of runtime identity facts.
+        """
+        url = f"{self._base}/api/resolve/device/{quote(device_id, safe='')}"
+        try:
+            r = await self._http.get(url, timeout=5.0)
+        except (httpx.ConnectError, httpx.TimeoutException) as exc:
+            raise AdminUnreachable(
+                f"admin GET /api/resolve/device failed: {exc}"
+            ) from exc
+
+        if r.status_code == 404:
+            raise AdminNotFound(_unwrap_detail(r.text))
+        if r.status_code in (409, 412):
+            raise AdminPrecondition(r.status_code, _unwrap_detail(r.text))
         if r.status_code >= 400:
             raise AdminUpstreamError(r.status_code, _unwrap_detail(r.text))
         return r.json()

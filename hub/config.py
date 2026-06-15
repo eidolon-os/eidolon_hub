@@ -123,6 +123,13 @@ class AdminConfig:
 
 
 @dataclass
+class ControlBridgeConfig:
+    enabled: bool = False
+    livekit_url: str = ""
+    identity_prefix: str = "eidolon-hub-control"
+
+
+@dataclass
 class RuntimeAdminConfig:
     """Phase 32.A: hub queries admin to validate ``user_id`` at
     ``/api/config`` time. We follow LiveKit's "trust participant.identity,
@@ -231,13 +238,13 @@ def _livekit_from_yaml_and_env(y: dict[str, Any]) -> LiveKitConfig:
     sec = _section(y, "livekit")
     yaml_key = str(sec.get("api_key") or "").strip()
     yaml_secret = str(sec.get("api_secret") or "").strip()
-    for val, field, env_var in (
+    for val, field_name, env_var in (
         (yaml_key, "api_key", "LIVEKIT_API_KEY"),
         (yaml_secret, "api_secret", "LIVEKIT_API_SECRET"),
     ):
         if val and val != env_var:
             raise ValueError(
-                f"livekit.{field} must be empty or the placeholder {env_var}; "
+                f"livekit.{field_name} must be empty or the placeholder {env_var}; "
                 f"set {env_var} in config/.env"
             )
     return LiveKitConfig(
@@ -318,6 +325,16 @@ def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     )
 
 
+def _control_bridge_from_yaml(y: dict[str, Any]) -> ControlBridgeConfig:
+    sec = _section(y, "control_bridge")
+    return ControlBridgeConfig(
+        enabled=bool(sec.get("enabled", False)),
+        livekit_url=str(sec.get("livekit_url") or "").strip(),
+        identity_prefix=str(sec.get("identity_prefix", "eidolon-hub-control")).strip()
+        or "eidolon-hub-control",
+    )
+
+
 @dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
@@ -326,6 +343,7 @@ class AppConfig:
     esp32: Esp32Config = field(default_factory=Esp32Config)
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     admin: AdminConfig = field(default_factory=AdminConfig)
+    control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
 
     @classmethod
@@ -339,6 +357,7 @@ class AppConfig:
             esp32=_esp32_from_yaml(y),
             discovery=_discovery_from_yaml(y),
             admin=_admin_from_yaml(y),
+            control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
         )
 

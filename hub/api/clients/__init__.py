@@ -10,6 +10,7 @@ from hub.api.clients.admin import (
     AdminClient,
     AdminClientError,
     AdminNotFound,
+    AdminPrecondition,
     AdminUnreachable,
     AdminUpstreamError,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "AdminClient",
     "AdminClientError",
     "AdminNotFound",
+    "AdminPrecondition",
     "AdminUnreachable",
     "AdminUpstreamError",
 ]

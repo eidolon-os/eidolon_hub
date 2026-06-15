@@ -8,6 +8,15 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from eidolon_sdk.control import (
+    CONTROL_TOPIC,
+    CommandPriority,
+    CommandQoS,
+    build_command_envelope,
+    command_status_from_ack,
+    infer_op,
+    normalize_ack_status,
+)
 from livekit import api
 
 from hub.config import AppConfig
@@ -43,6 +52,10 @@ class LiveKitAdminRuntime:
         self._subscribers: set[asyncio.Queue[str]] = set()
         self._commands: dict[str, dict[str, Any]] = {}
         self._command_order: list[str] = []
+        self._control_bridge: Any | None = None
+
+    def set_control_bridge(self, bridge: Any | None) -> None:
+        self._control_bridge = bridge
 
     def _build_livekit_api(self) -> api.LiveKitAPI:
         cfg = self._config.livekit
@@ -60,6 +73,7 @@ class LiveKitAdminRuntime:
     async def run_probe_cycle(self, known_device_ids: list[str]) -> None:
         self._probe_health.total_cycles += 1
         detected: dict[str, tuple[str, str]] = {}
+        known = set(known_device_ids)
         livekit_api = self._build_livekit_api()
 
         try:
@@ -73,7 +87,8 @@ class LiveKitAdminRuntime:
 
             now = datetime.now(UTC)
             async with self._lock:
-                for device_id in set(known_device_ids) | set(detected.keys()) | set(self._state.keys()):
+                next_state: dict[str, DevicePresence] = {}
+                for device_id in known:
                     current = self._state.get(device_id) or DevicePresence(device_id=device_id)
                     if device_id in detected:
                         room_name, participant_sid = detected[device_id]
@@ -89,8 +104,16 @@ class LiveKitAdminRuntime:
                             current.status = "offline"
                         elif current.missed_probes >= self._config.admin.degraded_after_missed_probes:
                             current.status = "degraded"
-                    self._state[device_id] = current
-            await self._emit_event({"type": "probe_cycle", "at": now.isoformat(), "detected": len(detected)})
+                    next_state[device_id] = current
+                self._state = next_state
+            await self._emit_event(
+                {
+                    "type": "probe_cycle",
+                    "at": now.isoformat(),
+                    "detected": len(set(detected.keys()) & known),
+                    "ignored": len(set(detected.keys()) - known),
+                }
+            )
             self._probe_health.last_success_at = now
             self._probe_health.consecutive_failures = 0
             self._probe_health.last_error = ""
@@ -134,38 +157,65 @@ class LiveKitAdminRuntime:
     def get_probe_health(self) -> ProbeHealth:
         return self._probe_health
 
-    async def send_command(self, device_id: str, payload: dict[str, Any], topic: str) -> dict[str, Any]:
+    async def send_command(
+        self,
+        device_id: str,
+        payload: dict[str, Any],
+        topic: str = CONTROL_TOPIC,
+        *,
+        op: str | None = None,
+        ttl_ms: int = 30_000,
+        qos: CommandQoS = "ack",
+        priority: CommandPriority = "normal",
+    ) -> dict[str, Any]:
         async with self._lock:
             presence = self._state.get(device_id)
-            if not presence or not presence.room_name:
+            if not presence or not presence.room_name or presence.status == "offline":
                 raise ValueError(f"Device {device_id} is not currently connected")
+            room_name = presence.room_name
+
+        if self._control_bridge is not None:
+            await self._control_bridge.ensure_room(room_name)
 
         command_id = str(uuid4())
+        now = datetime.now(UTC)
+        resolved_op = infer_op(payload, op)
+        envelope = build_command_envelope(
+            command_id=command_id,
+            device_id=device_id,
+            payload=payload,
+            op=resolved_op,
+            ttl_ms=ttl_ms,
+            qos=qos,
+            priority=priority,
+            created_at=now,
+        )
         command = {
             "command_id": command_id,
             "device_id": device_id,
             "topic": topic,
+            "op": resolved_op,
             "payload": payload,
+            "envelope": envelope,
+            "ttl_ms": ttl_ms,
+            "qos": qos,
+            "priority": priority,
             "status": "queued",
-            "created_at": datetime.now(UTC).isoformat(),
-            "updated_at": datetime.now(UTC).isoformat(),
+            "created_at": now.isoformat(),
+            "updated_at": now.isoformat(),
             "error": "",
+            "ack": None,
+            "result": None,
         }
-        message = json.dumps(
-            {
-                "type": "admin_command",
-                "command_id": command_id,
-                "device_id": device_id,
-                "topic": topic,
-                "payload": payload,
-            }
-        ).encode("utf-8")
+        self._commands[command_id] = command
+        self._command_order.append(command_id)
+        message = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
 
         livekit_api = self._build_livekit_api()
         try:
             await livekit_api.room.send_data(
                 api.SendDataRequest(
-                    room=presence.room_name,
+                    room=room_name,
                     data=message,
                     kind=0,
                     destination_identities=[device_id],
@@ -180,13 +230,61 @@ class LiveKitAdminRuntime:
             command["updated_at"] = datetime.now(UTC).isoformat()
         finally:
             await livekit_api.aclose()
-        self._commands[command_id] = command
-        self._command_order.append(command_id)
         await self._emit_event({"type": "command_updated", **command})
         if command["status"] == "failed":
             raise ValueError(command["error"])
         return command
-        
+
+    async def apply_command_ack(
+        self,
+        envelope: dict[str, Any],
+        *,
+        sender_identity: str = "",
+    ) -> dict[str, Any] | None:
+        """Apply a device ack/result envelope.
+
+        LiveKit server API can inject packets into a room, but receiving
+        device-published packets requires a participant bridge. This method
+        keeps status normalization in one place for that bridge or a fallback
+        HTTP endpoint.
+        """
+        command_id = envelope.get("ref") or envelope.get("command_id")
+        if not isinstance(command_id, str) or not command_id:
+            return None
+        command = self._commands.get(command_id)
+        if not command:
+            return None
+        ack_device_id = envelope.get("device_id")
+        if isinstance(ack_device_id, str) and ack_device_id and ack_device_id != command["device_id"]:
+            logger.warning(
+                "Ignoring command ack with mismatched device_id command_id=%s expected=%s got=%s",
+                command_id,
+                command["device_id"],
+                ack_device_id,
+            )
+            return None
+        if sender_identity and sender_identity != command["device_id"]:
+            logger.warning(
+                "Ignoring command ack with mismatched sender command_id=%s expected=%s got=%s",
+                command_id,
+                command["device_id"],
+                sender_identity,
+            )
+            return None
+
+        status_value = envelope.get("status")
+        status = normalize_ack_status(status_value if isinstance(status_value, str) else "failed")
+        command["status"] = command_status_from_ack(status)
+        command["ack"] = envelope
+        if envelope.get("kind") == "result" or "result" in envelope:
+            command["result"] = envelope.get("result", envelope)
+        if command["status"] in {"failed", "rejected", "expired"}:
+            message = envelope.get("message") or envelope.get("code") or command["status"]
+            command["error"] = str(message)
+        command["updated_at"] = datetime.now(UTC).isoformat()
+        await self._emit_event({"type": "command_updated", **command})
+        return command
+
     async def fail_command(
         self, command_id: str, error: str, status: str = "failed"
     ) -> dict[str, Any] | None:
@@ -211,7 +309,7 @@ class LiveKitAdminRuntime:
         now = datetime.now(UTC)
         touched = 0
         for command in self._commands.values():
-            if command["status"] != "sent":
+            if command["status"] not in {"sent", "accepted", "running"}:
                 continue
             created_at = datetime.fromisoformat(command["created_at"])
             if (now - created_at).total_seconds() < timeout_seconds:

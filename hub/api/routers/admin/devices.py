@@ -42,8 +42,8 @@ async def approve_device(device_id: str, request: Request):
     """操作员批准设备进入系统.
 
     幂等: 重复调返回相同状态. 必须先在 device_manager 里有记录 ——
-    presence-only 设备 (出现在 room 但还没注册) 不能直接批准,
-    要等设备至少完成一次 ``GET /api/config`` 自动注册才能批.
+    LiveKit presence 不再创建设备记录;必须等设备至少完成一次
+    ``GET /api/config`` 自动注册后才能批准.
     """
     device_manager = request.app.state.device_manager
     if device_manager.get(device_id) is None:
