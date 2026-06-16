@@ -7,7 +7,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 
 dependencies = [
-    "eidolon-sdk[admin,devices,livekit]",
+    "eidolon-sdk",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml",
@@ -38,7 +38,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-eidolon-sdk = { path = "../eidolon_sdk", editable = true }
+eidolon-sdk = { path = "../eidolon_sdk" }
 
 [tool.ruff]
 line-length = 100
