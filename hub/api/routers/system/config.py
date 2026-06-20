@@ -67,6 +67,22 @@ def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
     return default
 
 
+def _admin_interaction_mode_override(resolved: Any) -> str | None:
+    """Extract a per-device interaction_mode override from admin's resolve
+    response (Phase 6). Returns a valid mode, or ``None`` when admin set no
+    override (or returned an unrecognized value — we don't let a bad admin
+    value override the device's own declaration)."""
+    if not isinstance(resolved, dict):
+        return None
+    context = resolved.get("context")
+    context = context if isinstance(context, dict) else resolved
+    raw = context.get("interaction_mode")
+    if not raw:
+        return None
+    candidate = str(raw).strip().lower()
+    return candidate if candidate in _VALID_INTERACTION_MODES else None
+
+
 class AudioConfig(BaseModel):
     sample_rate: int = 16000
     channels: int = 1
@@ -258,7 +274,7 @@ async def _esp32_response(
         )
 
     try:
-        await admin_client.resolve_device(device_id)
+        resolved = await admin_client.resolve_device(device_id)
     except AdminPrecondition as exc:
         _log.info("device waiting binding device=%s detail=%s", device_id, exc.message)
         return _pending_esp32_response(
@@ -283,6 +299,13 @@ async def _esp32_response(
         raise HTTPException(
             status_code=502, detail=f"admin upstream: {exc.message}"
         ) from exc
+
+    # Phase 6: an admin per-device override (set on the device binding) takes
+    # priority over the device's self-declared header. Unset / unknown → keep
+    # the (already-defaulted) device-declared value.
+    admin_override = _admin_interaction_mode_override(resolved)
+    if admin_override is not None:
+        interaction_mode = admin_override
 
     resolved_room = room_name or _default_active_room_name(device_id)
     # Phase 32.B: tag the ESP32 token with kind=device so channel knows

@@ -251,6 +251,71 @@ def test_config_esp32_invalid_mode_degrades_to_half(client: TestClient):
     assert voice_meta["interaction_mode"] == "half_duplex"
 
 
+def test_config_esp32_admin_override_beats_device_header(client: TestClient):
+    """Phase 6: an admin per-device interaction_mode (on the binding) wins over
+    the device's self-declared header."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-override", key)
+    client.app.state.admin_client.resolve_device.return_value = {
+        "context": {
+            "device_id": "dev-override",
+            "user_id": "u",
+            "agent_id": "a",
+            "interaction_mode": "full_duplex",
+        }
+    }
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-override", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-override",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-override",
+                    key=key,
+                    include_public_key=False,
+                ),
+                # Device says half; admin override says full → admin wins.
+                "X-Device-Interaction-Mode": "half_duplex",
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["interaction_mode"] == "full_duplex"
+
+
+def test_config_esp32_no_admin_override_keeps_device_header(client: TestClient):
+    """Without an admin override, the device-declared header value is used."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-noov", key)
+    # _approve_and_resolve sets a context WITHOUT interaction_mode.
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-noov", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-noov",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-noov",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Interaction-Mode": "full_duplex",
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["interaction_mode"] == "full_duplex"
+
+
 def test_config_esp32_approved_waits_for_binding(client: TestClient):
     dm = client.app.state.device_manager
     key = ec.generate_private_key(ec.SECP256R1())
