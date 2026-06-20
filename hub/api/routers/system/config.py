@@ -38,6 +38,34 @@ class ESP32ConfigStatus(str, Enum):
 
 PENDING_ROOM_NAME = "eidolon-pending"
 
+# Interaction-mode contract (see plan Phase 4/5). The device declares its
+# capability via the ``X-Device-Interaction-Mode`` header; hub stamps the
+# resolved mode into the LiveKit token's ``participant_metadata`` so channel
+# can pick a per-session turn policy. ``half_duplex`` = push-to-talk (mic
+# closed during playback, explicit turn boundary); ``full_duplex`` = open mic
+# with hardware AEC (server-judged barge-in).
+INTERACTION_MODE_HALF_DUPLEX = "half_duplex"
+INTERACTION_MODE_FULL_DUPLEX = "full_duplex"
+_VALID_INTERACTION_MODES = frozenset(
+    {INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_FULL_DUPLEX}
+)
+
+
+def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
+    """Map the (untrusted, unsigned) header value to a known mode.
+
+    Defense default (plan §1): anything missing or unrecognized degrades to
+    ``default`` — ``half_duplex`` for devices (safe: no accidental barge-in on
+    boards with poor AEC), ``full_duplex`` for web. The header is NOT part of
+    the device signature (``canonical_request`` excludes it), so it is a hint,
+    not a security artifact; the authoritative per-device override is the admin
+    path (plan Phase 6).
+    """
+    candidate = (raw or "").strip().lower()
+    if candidate in _VALID_INTERACTION_MODES:
+        return candidate
+    return default
+
 
 class AudioConfig(BaseModel):
     sample_rate: int = 16000
@@ -169,6 +197,7 @@ async def _esp32_response(
     room_name: str | None,
     device_id: str,
     agent_mode: AgentMode,
+    interaction_mode: str,
     auth_headers: DeviceAuthHeaders,
 ) -> ESP32ConfigResponse:
     device_manager = getattr(request.app.state, "device_manager", None)
@@ -259,12 +288,18 @@ async def _esp32_response(
     # Phase 32.B: tag the ESP32 token with kind=device so channel knows
     # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
     # the web flow). Symmetric to _web_response's metadata.
+    # Phase 4: carry the device-declared interaction_mode so channel can
+    # pick a per-session turn policy (half_duplex → no barge-in).
     try:
         _identity, token = generate_token(
             room_name=resolved_room,
             participant_name=device_id,
             agent_mode=agent_mode,
-            participant_metadata={"kind": "device", "device_id": device_id},
+            participant_metadata={
+                "kind": "device",
+                "device_id": device_id,
+                "interaction_mode": interaction_mode,
+            },
         )
         _control_identity, control_token = generate_token(
             room_name=_default_control_room_name(device_id),
@@ -334,6 +369,7 @@ async def _web_response(
     room_name: str,
     user_id: str,
     agent_mode: AgentMode,
+    interaction_mode: str,
 ) -> TokenResponse:
     """Mint a LiveKit token whose ``identity`` is the admin user_id.
 
@@ -387,6 +423,7 @@ async def _web_response(
                 "kind": "user",
                 "user_id": user_id,
                 "display_name": display_name,
+                "interaction_mode": interaction_mode,
             },
         )
     except ValueError as exc:
@@ -456,6 +493,9 @@ async def get_config(
     x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
     x_device_public_key: str | None = Header(default=None, alias="X-Device-Public-Key"),
     x_device_signature: str | None = Header(default=None, alias="X-Device-Signature"),
+    x_device_interaction_mode: str | None = Header(
+        default=None, alias="X-Device-Interaction-Mode"
+    ),
 ):
     if client_type == ClientType.ESP32:
         if not x_device_id:
@@ -482,6 +522,10 @@ async def get_config(
             room_name=room_name,
             device_id=x_device_id,
             agent_mode=agent_mode,
+            interaction_mode=_normalize_interaction_mode(
+                x_device_interaction_mode,
+                default=INTERACTION_MODE_HALF_DUPLEX,
+            ),
             auth_headers=DeviceAuthHeaders(
                 device_id=x_device_id,
                 nonce=x_device_nonce or "",
@@ -514,4 +558,8 @@ async def get_config(
         room_name=room_name,
         user_id=user_id,
         agent_mode=agent_mode,
+        interaction_mode=_normalize_interaction_mode(
+            x_device_interaction_mode,
+            default=INTERACTION_MODE_FULL_DUPLEX,
+        ),
     )

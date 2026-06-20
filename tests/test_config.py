@@ -150,6 +150,107 @@ def test_config_esp32_explicit_client_type(client: TestClient):
     assert r.json()["device"]["bound"] is True
 
 
+def _approve_and_resolve(client: TestClient, device_id: str, key) -> None:
+    """Drive a device to ACTIVE: first config (pending) → approve → admin
+    resolve_device returns a context."""
+    dm = client.app.state.device_manager
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=(device_id, "pending-jwt"),
+    ):
+        r0 = client.get(
+            "/api/config",
+            headers=_signed_device_headers(device_id=device_id, key=key),
+        )
+    assert r0.status_code == 200
+    asyncio.run(dm.approve(device_id))
+    client.app.state.admin_client.resolve_device.return_value = {
+        "context": {"device_id": device_id, "user_id": "u", "agent_id": "a"}
+    }
+
+
+def test_config_esp32_stamps_interaction_mode_from_header(client: TestClient):
+    """Phase 4: the device-declared mode lands in the voice-room token's
+    participant_metadata so channel can pick a per-session turn policy."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-mode", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-mode", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-mode",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-mode",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Interaction-Mode": "full_duplex",
+            },
+        )
+    assert r.status_code == 200
+    # First generate_token call mints the voice-room token.
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["kind"] == "device"
+    assert voice_meta["interaction_mode"] == "full_duplex"
+
+
+def test_config_esp32_defaults_half_duplex_when_header_absent(client: TestClient):
+    """Defense default (plan §1): a device that doesn't declare a mode is
+    treated as half_duplex — no accidental barge-in."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-default", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-default", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers=_signed_device_headers(
+                device_id="dev-default",
+                path_query="/api/config?client_type=esp32",
+                nonce="nonce-default",
+                key=key,
+                include_public_key=False,
+            ),
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["interaction_mode"] == "half_duplex"
+
+
+def test_config_esp32_invalid_mode_degrades_to_half(client: TestClient):
+    """An unrecognized header value degrades to the safe device default."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-bad", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-bad", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-bad",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-bad",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Interaction-Mode": "duplexish",
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["interaction_mode"] == "half_duplex"
+
+
 def test_config_esp32_approved_waits_for_binding(client: TestClient):
     dm = client.app.state.device_manager
     key = ec.generate_private_key(ec.SECP256R1())

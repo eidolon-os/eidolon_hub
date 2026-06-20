@@ -154,6 +154,35 @@ def test_web_happy_path_lk_identity_is_user_id(client: TestClient, fake_admin_cl
     assert meta["user_id"] == "manson"
 
 
+def test_web_defaults_full_duplex(client: TestClient, fake_admin_client):
+    """Phase 4: web clients default to full_duplex (browser tab has no
+    half-duplex hardware constraint); the header can still override."""
+    fake_admin_client.get_user.return_value = _user_view("manson")
+    r = client.get(
+        "/api/config",
+        params={"client_type": "web", "room_name": "R", "user_id": "manson"},
+    )
+    assert r.status_code == 200, r.text
+    lk_payload = jwt.decode(
+        r.json()["accessToken"], options={"verify_signature": False}
+    )
+    meta = json.loads(lk_payload["metadata"])
+    assert meta["interaction_mode"] == "full_duplex"
+
+    r2 = client.get(
+        "/api/config",
+        params={"client_type": "web", "room_name": "R", "user_id": "manson"},
+        headers={"X-Device-Interaction-Mode": "half_duplex"},
+    )
+    assert r2.status_code == 200, r2.text
+    meta2 = json.loads(
+        jwt.decode(r2.json()["accessToken"], options={"verify_signature": False})[
+            "metadata"
+        ]
+    )
+    assert meta2["interaction_mode"] == "half_duplex"
+
+
 def test_web_metadata_carries_no_device_token(
     client: TestClient, fake_admin_client
 ):
