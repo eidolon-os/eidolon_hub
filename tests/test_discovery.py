@@ -12,6 +12,7 @@ import pytest
 from hub.config import DiscoveryConfig
 from hub.core.discovery import (
     DEFAULT_HOSTNAME,
+    MdnsDiscoveryState,
     SERVICE_NAME,
     SERVICE_TYPE,
     _local_ipv4,
@@ -126,6 +127,46 @@ class TestMdnsLifespan:
         mock_zeroconf["mock"].async_unregister_service.assert_awaited_once_with(
             mock_zeroconf["captured"][0]
         )
+
+    @pytest.mark.asyncio
+    async def test_lifespan_updates_discovery_state(self, mock_zeroconf, monkeypatch):
+        monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.168.1.50")
+        state = MdnsDiscoveryState()
+        async with mdns_lifespan(
+            port=8081,
+            version="0.1.0",
+            discovery_state=state,
+        ):
+            snap = state.snapshot()
+            assert snap["registered"] is True
+            assert snap["ip"] == "192.168.1.50"
+            assert snap["config_url"] == "http://192.168.1.50:8081/api/config"
+            assert snap["last_registered_at"] is not None
+            assert snap["last_error"] == ""
+        assert state.snapshot()["registered"] is False
+
+    @pytest.mark.asyncio
+    async def test_lifespan_records_registration_error(self, monkeypatch):
+        monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.168.1.50")
+        state = MdnsDiscoveryState()
+        with patch("hub.core.discovery.AsyncZeroconf") as MockAZC:
+            mock_instance = MagicMock()
+            mock_instance.async_register_service = AsyncMock(
+                side_effect=RuntimeError("network unavailable")
+            )
+            mock_instance.async_unregister_service = AsyncMock()
+            mock_instance.async_close = AsyncMock()
+            MockAZC.return_value = mock_instance
+
+            async with mdns_lifespan(
+                port=8081,
+                version="0.1.0",
+                discovery_state=state,
+            ):
+                snap = state.snapshot()
+                assert snap["registered"] is False
+                assert snap["ip"] == "192.168.1.50"
+                assert snap["last_error"] == "network unavailable"
 
     @pytest.mark.asyncio
     async def test_readvertises_on_ip_change(self, mock_zeroconf, monkeypatch):

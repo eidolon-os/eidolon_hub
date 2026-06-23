@@ -12,13 +12,18 @@ from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqlit
 from fastapi import FastAPI
 
 import hub
-from hub.api.routers.admin import admin_commands_router, admin_devices_router, admin_events_router
+from hub.api.routers.admin import (
+    admin_commands_router,
+    admin_devices_router,
+    admin_discovery_router,
+    admin_events_router,
+)
 from hub.api.routers.system import config_router
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
-from hub.core.discovery import mdns_lifespan
+from hub.core.discovery import MdnsDiscoveryState, mdns_lifespan
 from hub.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -38,6 +43,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         admin_runtime = LiveKitAdminRuntime(app_config)
         control_bridge = LiveKitControlBridge(app_config, admin_runtime)
         admin_runtime.set_control_bridge(control_bridge)
+        discovery_state = MdnsDiscoveryState()
 
         # Phase 32.A: process-wide httpx client + admin REST wrapper
         # used by /api/config (web) to validate user_id + resolve the
@@ -53,6 +59,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.registry_store = registry_store
         app.state.admin_runtime = admin_runtime
         app.state.control_bridge = control_bridge
+        app.state.discovery_state = discovery_state
         app.state.config = app_config
         app.state.http_client = http_client
         app.state.admin_client = admin_client
@@ -90,6 +97,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             port=app_config.api.port,
             version=hub.__version__,
             discovery_config=app_config.discovery,
+            discovery_state=discovery_state,
         ):
             yield
 
@@ -122,6 +130,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app.include_router(config_router)
     app.include_router(admin_devices_router)
+    app.include_router(admin_discovery_router)
     app.include_router(admin_commands_router)
     app.include_router(admin_events_router)
 

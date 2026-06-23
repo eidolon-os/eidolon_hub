@@ -27,6 +27,19 @@ class AdminDeviceListResponse(BaseModel):
     devices: list[AdminDevice]
 
 
+class DiscoveryStatusResponse(BaseModel):
+    service_type: str
+    service_name: str
+    hostname: str
+    port: int
+    registered: bool
+    ip: str = ""
+    config_url: str = ""
+    last_registered_at: str | None = None
+    last_updated_at: str | None = None
+    last_error: str = ""
+
+
 class ApproveDeviceResponse(BaseModel):
     """POST /devices/{id}/approve 的响应. 返回新状态以便前端直接更新视图."""
     device_id: str
