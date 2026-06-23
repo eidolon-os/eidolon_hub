@@ -190,6 +190,89 @@ class TestMdnsLifespan:
         assert b"192.168.3.152" in new_info.properties[b"config_url"]
 
     @pytest.mark.asyncio
+    async def test_retries_registration_after_startup_failure(self, monkeypatch):
+        monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
+        monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.168.1.50")
+        state = MdnsDiscoveryState()
+        with patch("hub.core.discovery.AsyncZeroconf") as MockAZC:
+            mock_instance = MagicMock()
+            mock_instance.async_register_service = AsyncMock(
+                side_effect=[RuntimeError("network unavailable"), None]
+            )
+            mock_instance.async_unregister_service = AsyncMock()
+            mock_instance.async_update_service = AsyncMock()
+            mock_instance.async_close = AsyncMock()
+            MockAZC.return_value = mock_instance
+
+            async with mdns_lifespan(
+                port=8081,
+                version="0.1.0",
+                discovery_state=state,
+            ):
+                for _ in range(50):
+                    if mock_instance.async_register_service.await_count >= 2:
+                        break
+                    await asyncio.sleep(0.01)
+                assert mock_instance.async_register_service.await_count >= 2
+                assert state.snapshot()["registered"] is True
+
+    @pytest.mark.asyncio
+    async def test_suspends_advertisement_when_lan_ip_disappears(
+        self, mock_zeroconf, monkeypatch,
+    ):
+        monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
+        ips = iter(["192.168.1.50", "127.0.0.1"])
+        monkeypatch.setattr(
+            "hub.core.discovery._local_ipv4",
+            lambda: next(ips, "127.0.0.1"),
+        )
+        state = MdnsDiscoveryState()
+
+        async with mdns_lifespan(
+            port=8081,
+            version="0.1.0",
+            discovery_state=state,
+        ):
+            for _ in range(50):
+                if mock_zeroconf["mock"].async_unregister_service.await_count:
+                    break
+                await asyncio.sleep(0.01)
+            snap = state.snapshot()
+            assert snap["registered"] is False
+            assert snap["config_url"] == ""
+            assert snap["last_error"] == "no LAN IPv4 address available"
+
+    @pytest.mark.asyncio
+    async def test_update_failure_rebuilds_advertisement(
+        self, mock_zeroconf, monkeypatch,
+    ):
+        monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
+        ips = iter(["192.168.1.50", "192.168.1.60"])
+        monkeypatch.setattr(
+            "hub.core.discovery._local_ipv4",
+            lambda: next(ips, "192.168.1.60"),
+        )
+        mock_zeroconf["mock"].async_update_service = AsyncMock(
+            side_effect=RuntimeError("update failed")
+        )
+        state = MdnsDiscoveryState()
+
+        async with mdns_lifespan(
+            port=8081,
+            version="0.1.0",
+            discovery_state=state,
+        ):
+            for _ in range(50):
+                if mock_zeroconf["mock"].async_register_service.await_count >= 2:
+                    break
+                await asyncio.sleep(0.01)
+            assert mock_zeroconf["mock"].async_update_service.await_count >= 1
+            assert mock_zeroconf["mock"].async_unregister_service.await_count >= 1
+            assert mock_zeroconf["mock"].async_register_service.await_count >= 2
+            assert state.snapshot()["ip"] == "192.168.1.60"
+            assert state.snapshot()["registered"] is True
+
+    @pytest.mark.asyncio
     async def test_does_not_readvertise_when_ip_stable(self, mock_zeroconf, monkeypatch):
         monkeypatch.setattr("hub.core.discovery._IP_REFRESH_INTERVAL_SEC", 0.01)
         monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.168.3.152")

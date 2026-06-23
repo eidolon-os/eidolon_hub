@@ -93,6 +93,12 @@ class MdnsDiscoveryState:
         self._snapshot.last_updated_at = _utc_now_iso()
         self._snapshot.last_error = str(exc)
 
+    def mark_unavailable(self, message: str) -> None:
+        self._snapshot.registered = False
+        self._snapshot.config_url = ""
+        self._snapshot.last_updated_at = _utc_now_iso()
+        self._snapshot.last_error = message
+
     def mark_stopped(self) -> None:
         self._snapshot.registered = False
         self._snapshot.last_updated_at = _utc_now_iso()
@@ -115,6 +121,10 @@ def _local_ipv4() -> str:
         return "127.0.0.1"
     finally:
         s.close()
+
+
+def _is_advertisable_ipv4(ip: str) -> bool:
+    return bool(ip) and ip != "0.0.0.0" and not ip.startswith("127.")
 
 
 @asynccontextmanager
@@ -159,63 +169,105 @@ async def mdns_lifespan(
             server=f"{hostname}.local.",
         )
 
-    current_ip = _local_ipv4()
-    info = _service_info(current_ip)
-    if discovery_state is not None:
-        discovery_state.configure(
-            service_type=service_type,
-            service_name=service_name,
-            hostname=hostname,
-            port=port,
-            ip=current_ip,
-            config_url=_config_url(current_ip),
-        )
+    current_ip = ""
+    info: ServiceInfo | None = None
     registered = False
-    try:
-        await aiozc.async_register_service(info)
-        registered = True
-        if discovery_state is not None:
-            discovery_state.mark_registered()
-        logger.info("mDNS registered: %s.local:%d -> %s", hostname, port, current_ip)
-    except Exception as exc:  # pragma: no cover
-        if discovery_state is not None:
-            discovery_state.mark_error(exc)
-        logger.warning(
-            "mDNS registration failed: %s — Hub continues without LAN discovery",
-            exc,
-        )
 
-    async def _readvertise_on_ip_change() -> None:
+    def _configure_state(ip: str) -> None:
+        if discovery_state is not None:
+            discovery_state.configure(
+                service_type=service_type,
+                service_name=service_name,
+                hostname=hostname,
+                port=port,
+                ip=ip if _is_advertisable_ipv4(ip) else "",
+                config_url=_config_url(ip) if _is_advertisable_ipv4(ip) else "",
+            )
+
+    async def _unregister_current() -> None:
+        nonlocal registered
+        if not registered or info is None:
+            registered = False
+            return
+        try:
+            await aiozc.async_unregister_service(info)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("mDNS unregister failed during network update: %s", exc)
+        registered = False
+
+    async def _register(ip: str) -> None:
+        nonlocal current_ip, info, registered
+        current_ip = ip
+        _configure_state(ip)
+        if not _is_advertisable_ipv4(ip):
+            await _unregister_current()
+            if discovery_state is not None:
+                discovery_state.mark_unavailable("no LAN IPv4 address available")
+            logger.warning("mDNS not registered: no LAN IPv4 address available")
+            return
+
+        info = _service_info(ip)
+        try:
+            await aiozc.async_register_service(info)
+            registered = True
+            if discovery_state is not None:
+                discovery_state.mark_registered()
+            logger.info("mDNS registered: %s.local:%d -> %s", hostname, port, ip)
+        except Exception as exc:  # pragma: no cover
+            registered = False
+            if discovery_state is not None:
+                discovery_state.mark_error(exc)
+            logger.warning(
+                "mDNS registration failed: %s — will retry while Hub is running",
+                exc,
+            )
+
+    async def _move_advertisement(ip: str) -> None:
+        nonlocal current_ip, info, registered
+        if not _is_advertisable_ipv4(ip):
+            current_ip = ip
+            await _unregister_current()
+            if discovery_state is not None:
+                discovery_state.mark_unavailable("no LAN IPv4 address available")
+            logger.warning("mDNS suspended: no LAN IPv4 address available")
+            return
+
+        if not registered or info is None:
+            await _register(ip)
+            return
+
+        new_info = _service_info(ip)
+        try:
+            await aiozc.async_update_service(new_info)
+            current_ip = ip
+            info = new_info
+            if discovery_state is not None:
+                discovery_state.mark_updated(
+                    ip=ip,
+                    config_url=_config_url(ip),
+                )
+            logger.info("mDNS re-advertised after IP change -> %s", ip)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("mDNS update failed; rebuilding advertisement: %s", exc)
+            await _unregister_current()
+            await _register(ip)
+
+    await _register(_local_ipv4())
+
+    async def _maintain_advertisement() -> None:
         # The advertised A record and config_url are pinned to the IP captured at
         # registration time. On a DHCP renewal / network change the host IP can
         # move, leaving devices discovering a dead address (and the served
-        # config_url / livekit_url, both derived from this IP, stale). Poll for IP
-        # changes and re-advertise the current address so devices self-repair
-        # without a Hub restart.
-        nonlocal current_ip, info
+        # config_url / livekit_url stale). Poll and keep the advertisement
+        # aligned with the current LAN address; also retry after startup failure.
         while True:
             await asyncio.sleep(_IP_REFRESH_INTERVAL_SEC)
             new_ip = _local_ipv4()
-            if new_ip in (current_ip, "127.0.0.1"):
+            if registered and new_ip == current_ip:
                 continue
-            current_ip = new_ip
-            info = _service_info(new_ip)
-            try:
-                await aiozc.async_update_service(info)
-                if discovery_state is not None:
-                    discovery_state.mark_updated(
-                        ip=new_ip,
-                        config_url=_config_url(new_ip),
-                    )
-                logger.info("mDNS re-advertised after IP change -> %s", new_ip)
-            except Exception as exc:  # pragma: no cover
-                if discovery_state is not None:
-                    discovery_state.mark_error(exc)
-                logger.warning("mDNS re-advertise failed: %s", exc)
+            await _move_advertisement(new_ip)
 
-    watcher = (
-        asyncio.create_task(_readvertise_on_ip_change()) if registered else None
-    )
+    watcher = asyncio.create_task(_maintain_advertisement())
 
     try:
         yield
@@ -224,11 +276,7 @@ async def mdns_lifespan(
             watcher.cancel()
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await watcher
-        if registered:
-            try:
-                await aiozc.async_unregister_service(info)
-            except Exception:  # pragma: no cover
-                pass
+        await _unregister_current()
         if discovery_state is not None:
             discovery_state.mark_stopped()
         await aiozc.async_close()
