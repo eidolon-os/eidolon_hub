@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from eidolon_sdk.admin import AdminPrecondition
+from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
 from eidolon_sdk.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
 
@@ -19,6 +20,7 @@ from hub.config import (
     AppConfig,
     Esp32Config,
     _livekit_from_yaml_and_env,
+    _storage_from_yaml_and_env,
     resolve_eidolon_livekit_client_url,
 )
 from hub.core.device_manager import DeviceManager
@@ -29,6 +31,7 @@ from hub.main import create_app
 def client(tmp_path):
     cfg = AppConfig()
     cfg.esp32.livekit_url = "wss://example.test"
+    store = RegistrySqliteStore(tmp_path / "registry.sqlite3")
     with patch("hub.api.routers.system.config.load_config", return_value=cfg):
         app = create_app(cfg)
         # Bypass lifespan (which boots LiveKitAdminRuntime + mDNS) by
@@ -36,15 +39,36 @@ def client(tmp_path):
         # admin-lookup path override app.state.admin_client too — see
         # test_config_web_user_id.py.
         app.state.config = cfg
-        dm = DeviceManager(tmp_path / "devices.json")
+        dm = DeviceManager(DeviceRepository(store))
         asyncio.run(dm.load())
         app.state.device_manager = dm
         app.state.admin_client = AsyncMock()
         yield TestClient(app)
+    asyncio.run(store.dispose())
 
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def test_storage_registry_db_path_precedence(monkeypatch, tmp_path):
+    yaml_path = tmp_path / "yaml.sqlite3"
+    shared_path = tmp_path / "shared.sqlite3"
+
+    monkeypatch.delenv("EIDOLON_REGISTRY_DB_PATH", raising=False)
+    assert _storage_from_yaml_and_env(
+        {"storage": {"registry_db_path": str(yaml_path)}}
+    ).registry_db_path == yaml_path
+
+    monkeypatch.setenv("EIDOLON_REGISTRY_DB_PATH", str(shared_path))
+    assert _storage_from_yaml_and_env(
+        {"storage": {"registry_db_path": str(yaml_path)}}
+    ).registry_db_path == shared_path
+
+    monkeypatch.delenv("EIDOLON_REGISTRY_DB_PATH", raising=False)
+    assert _storage_from_yaml_and_env(
+        {"storage": {"registry_db_path": str(yaml_path)}}
+    ).registry_db_path == yaml_path
 
 
 def _signed_device_headers(

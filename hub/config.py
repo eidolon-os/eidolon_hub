@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from eidolon_sdk.registry import resolve_registry_db_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
@@ -146,6 +147,13 @@ class RuntimeAdminConfig:
     """
 
     admin_api_url: str = "http://127.0.0.1:9000"
+
+
+@dataclass
+class StorageConfig:
+    registry_db_path: Path | str = field(
+        default_factory=resolve_registry_db_path
+    )
 
 
 def _outbound_ipv4() -> str:
@@ -304,6 +312,15 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
     return RuntimeAdminConfig(admin_api_url=admin_url)
 
 
+def _storage_from_yaml_and_env(y: dict[str, Any]) -> StorageConfig:
+    sec = _section(y, "storage")
+    return StorageConfig(
+        registry_db_path=resolve_registry_db_path(
+            str(sec.get("registry_db_path") or "").strip() or None
+        )
+    )
+
+
 def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     sec = _section(y, "admin_probe")
     if not sec:
@@ -345,6 +362,7 @@ class AppConfig:
     admin: AdminConfig = field(default_factory=AdminConfig)
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -359,6 +377,7 @@ class AppConfig:
             admin=_admin_from_yaml(y),
             control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
+            storage=_storage_from_yaml_and_env(y),
         )
 
 

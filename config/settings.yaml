@@ -7,6 +7,9 @@ api:
 logging:
   level: DEBUG
 
+storage:
+  registry_db_path: ~/eidolon/db/registry.sqlite3
+
 livekit:
   api_url: http://127.0.0.1:7880
   api_key: LIVEKIT_API_KEY

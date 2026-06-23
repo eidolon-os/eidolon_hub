@@ -24,8 +24,7 @@ class Device(BaseModel):
     enabled: bool = True
     psk_hash: Optional[str] = None
     paired: bool = False
-    # NEW (Phase 25): 操作员批准位. 旧 devices.json 中若 paired=true 但缺这两个字段,
-    # DeviceManager.load() 会自动回填 approved=true (见 device_manager.py).
+    # Phase 25: 操作员批准位. 与 paired 独立; 新设备必须由 admin 显式批准.
     approved: bool = False
     approved_at: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -54,7 +53,7 @@ class Device(BaseModel):
         self.approved_at = datetime.now(timezone.utc)
 
     def to_storage_dict(self) -> dict:
-        """序列化供 JSON 持久化使用."""
+        """Serialize to a plain storage dict."""
         return {
             "device_id": self.device_id,
             "name": self.name,
@@ -71,12 +70,7 @@ class Device(BaseModel):
 
     @classmethod
     def from_storage_dict(cls, data: dict) -> "Device":
-        """从 JSON 数据反序列化.
-
-        向后兼容:
-        - 旧记录缺 ``approved``/``approved_at`` -> 在 DeviceManager.load() 里
-          按 paired 推导后再实例化, 这里只负责把字符串时间戳还原回 datetime.
-        """
+        """Deserialize from a plain storage dict."""
         data = dict(data)
         data["created_at"] = datetime.fromisoformat(data["created_at"])
         data["last_seen"] = datetime.fromisoformat(data["last_seen"])

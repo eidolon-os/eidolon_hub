@@ -74,6 +74,58 @@ async def test_control_bridge_applies_livekit_ack_packet():
     assert stored["ack"]["code"] == "OK"
 
 
+class _FakeRoom:
+    def __init__(self):
+        self.connected = False
+        self.disconnected = False
+
+    def on(self, _event):
+        def _deco(fn):
+            return fn
+
+        return _deco
+
+    async def connect(self, _url, _token):
+        self.connected = True
+
+    async def disconnect(self):
+        self.disconnected = True
+
+
+class _FakeRtc:
+    def __init__(self):
+        self.rooms: list[_FakeRoom] = []
+
+    def Room(self):
+        room = _FakeRoom()
+        self.rooms.append(room)
+        return room
+
+
+@pytest.mark.asyncio
+async def test_sync_rooms_reconciles_joins_and_leaves():
+    """I3: sync_rooms is reconciling — it joins missing rooms AND leaves rooms no
+    longer desired (an offline device's control room is dropped → bridge leaves →
+    room reclaimed)."""
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    bridge = LiveKitControlBridge(cfg, runtime)
+    bridge._rtc = _FakeRtc()  # type: ignore[attr-defined]
+    bridge._started = True
+
+    # Both devices present → join both control rooms.
+    await bridge.sync_rooms(["room-a", "room-b"])
+    assert set(bridge._rooms.keys()) == {"room-a", "room-b"}
+    room_b = bridge._rooms["room-b"]
+
+    # room-b's device goes offline → caller drops it → bridge leaves room-b only.
+    await bridge.sync_rooms(["room-a"])
+    assert set(bridge._rooms.keys()) == {"room-a"}
+    assert room_b.disconnected is True
+    assert bridge._rooms["room-a"].disconnected is False
+
+
 @pytest.mark.asyncio
 async def test_control_bridge_ignores_non_ack_control_packet():
     cfg = AppConfig()

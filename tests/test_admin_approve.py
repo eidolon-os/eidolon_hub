@@ -21,6 +21,7 @@ from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
+from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
 from fastapi.testclient import TestClient
 
 from hub.config import AppConfig
@@ -46,27 +47,36 @@ class _NoopAdminRuntime:
         )
 
 
+def _new_device_manager(db_path: Path) -> tuple[DeviceManager, RegistrySqliteStore]:
+    import asyncio
+
+    store = RegistrySqliteStore(db_path)
+    manager = DeviceManager(DeviceRepository(store))
+    asyncio.run(manager.load())
+    return manager, store
+
+
 @pytest.fixture
 def client(tmp_path: Path) -> Iterator[TestClient]:
-    """Real FastAPI app, real DeviceManager backed by a tmp_path JSON file,
+    """Real FastAPI app, real DeviceManager backed by a tmp_path SQLite DB,
     stubbed admin_runtime (LiveKit-free)."""
-    devices_file = tmp_path / "devices.json"
+    import asyncio
+
+    registry_db = tmp_path / "registry.sqlite3"
     cfg = AppConfig()
     app = create_app(cfg)
 
-    dm = DeviceManager(devices_file)
-    # ``load()`` is a no-op when the file is missing — by-design starts empty.
-    import asyncio
-    asyncio.run(dm.load())
+    dm, store = _new_device_manager(registry_db)
     app.state.device_manager = dm
     app.state.admin_runtime = _NoopAdminRuntime()
 
     # Seed one device so approve has something to act on. Direct use of the
     # manager mirrors how production registers devices (no public HTTP
     # registration endpoint exists yet).
-    dm.register(device_id="dev-001", name="Test Device")
+    asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
 
     yield TestClient(app)
+    asyncio.run(store.dispose())
 
 
 # ---- happy path -----------------------------------------------------------
@@ -141,20 +151,20 @@ def test_set_enabled_returns_full_device_view(client: TestClient) -> None:
     assert devices["dev-001"]["enabled"] is False
 
 
-def test_set_enabled_persists_to_devices_json(tmp_path: Path) -> None:
+def test_set_enabled_persists_to_registry_db(tmp_path: Path) -> None:
     import asyncio
 
-    devices_file = tmp_path / "devices.json"
-    dm = DeviceManager(devices_file)
-    asyncio.run(dm.load())
-    dm.register(device_id="dev-001", name="Test Device")
+    registry_db = tmp_path / "registry.sqlite3"
+    dm, store = _new_device_manager(registry_db)
+    asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
     asyncio.run(dm.set_enabled("dev-001", enabled=False))
+    asyncio.run(store.dispose())
 
-    reloaded = DeviceManager(devices_file)
-    asyncio.run(reloaded.load())
+    reloaded, reloaded_store = _new_device_manager(registry_db)
     device = reloaded.get("dev-001")
     assert device is not None
     assert device.enabled is False
+    asyncio.run(reloaded_store.dispose())
 
 
 def test_set_enabled_unknown_device_returns_404(client: TestClient) -> None:
@@ -163,77 +173,12 @@ def test_set_enabled_unknown_device_returns_404(client: TestClient) -> None:
     assert "Device not found" in resp.json()["detail"]
 
 
-# ---- backward compatibility with legacy devices.json ---------------------
-
-
-def test_legacy_paired_device_loads_as_approved(tmp_path: Path) -> None:
-    """Phase 25 migration: if devices.json was written before this phase,
-    a record with ``paired=true`` but no ``approved`` field auto-upgrades
-    to ``approved=true`` on load.
-
-    Without this, every existing paired device would show as "discovered"
-    after the upgrade — the admin UI would treat live, working devices
-    as fresh-and-pending. The test pins the migration so a regression
-    here is immediately obvious.
-    """
+def test_device_manager_does_not_create_devices_json(tmp_path: Path) -> None:
     import asyncio
-    import json
 
-    devices_file = tmp_path / "devices.json"
-    devices_file.write_text(json.dumps({
-        "version": 1,
-        "devices": {
-            "legacy-001": {
-                "device_id": "legacy-001",
-                "name": "Old Paired Device",
-                "enabled": True,
-                "paired": True,
-                "psk_hash": "sha256:fake",
-                "created_at": "2024-01-01T00:00:00+00:00",
-                "last_seen": "2024-06-01T00:00:00+00:00",
-                "metadata": {},
-                # ← intentionally NO approved / approved_at
-            }
-        },
-    }))
-    dm = DeviceManager(devices_file)
-    asyncio.run(dm.load())
-    legacy = dm.get("legacy-001")
-    assert legacy is not None
-    assert legacy.approved is True
-    assert legacy.approved_at is not None
+    dm, store = _new_device_manager(tmp_path / "registry.sqlite3")
+    asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
+    asyncio.run(dm.set_enabled("dev-001", enabled=False))
 
-
-def test_signed_legacy_device_loads_as_esp32(tmp_path: Path) -> None:
-    """Signed device records created before ``kind`` existed should still
-    show as ESP32 in admin. The public key/fingerprint pair is only written
-    by the ESP32 signed config flow, so it is a stable migration signal."""
-    import asyncio
-    import json
-
-    devices_file = tmp_path / "devices.json"
-    devices_file.write_text(json.dumps({
-        "version": 1,
-        "devices": {
-            "1c:db:d4:7a:ef:0c": {
-                "device_id": "1c:db:d4:7a:ef:0c",
-                "name": "",
-                "enabled": True,
-                "paired": False,
-                "approved": True,
-                "approved_at": "2026-06-12T11:38:06+00:00",
-                "psk_hash": None,
-                "created_at": "2026-06-12T11:35:14+00:00",
-                "last_seen": "2026-06-12T16:33:38+00:00",
-                "metadata": {
-                    "public_key": "pub",
-                    "fingerprint": "p256:abc",
-                },
-            }
-        },
-    }))
-    dm = DeviceManager(devices_file)
-    asyncio.run(dm.load())
-    device = dm.get("1c:db:d4:7a:ef:0c")
-    assert device is not None
-    assert device.kind == "esp32"
+    assert not (tmp_path / "devices.json").exists()
+    asyncio.run(store.dispose())

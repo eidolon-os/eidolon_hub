@@ -90,11 +90,11 @@ async def unregister_device(device_id: str, request: Request):
     调用方安全重试.
 
     清理范围 (仅 hub 内部):
-        - device_manager._devices: 持久记录 (devices.json)
+        - device_manager._devices: registry DB backed 持久记录
         - admin_runtime._state: presence 缓存 (LiveKit 探测内存视图)
 
     不清理 (跨项目,admin 负责级联):
-        - admin 项目内 device→agent binding (admin 自己 KV)
+        - admin 项目内 device→agent binding (registry DB)
         - 任何运行时会话 (channel/livekit room 等)
 
     设备如果稍后通过 mDNS / GET /api/config 再次出现,会作为**全新**

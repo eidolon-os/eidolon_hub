@@ -5,10 +5,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import suppress
-from pathlib import Path
 
 import httpx
 from eidolon_sdk.admin import AdminClient
+from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
 from fastapi import FastAPI
 
 import hub
@@ -32,7 +32,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         setup_logging(level=app_config.logging.level)
         logger.info("Starting Eidolon Hub v%s", hub.__version__)
 
-        device_manager = DeviceManager(Path("data/devices.json"))
+        registry_store = RegistrySqliteStore(app_config.storage.registry_db_path)
+        device_manager = DeviceManager(DeviceRepository(registry_store))
         await device_manager.load()
         admin_runtime = LiveKitAdminRuntime(app_config)
         control_bridge = LiveKitControlBridge(app_config, admin_runtime)
@@ -49,6 +50,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         admin_client = AdminClient(http_client, app_config.runtime_admin.admin_api_url)
 
         app.state.device_manager = device_manager
+        app.state.registry_store = registry_store
         app.state.admin_runtime = admin_runtime
         app.state.control_bridge = control_bridge
         app.state.config = app_config
@@ -65,8 +67,16 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     device_ids = [device.device_id for device in device_manager.list_all()]
                     await admin_runtime.run_probe_cycle(device_ids)
                     presence = await admin_runtime.get_presence_snapshot()
+                    # I3: only keep the control bridge in rooms of devices that
+                    # are still present. Dropping offline devices' rooms makes the
+                    # reconciling sync_rooms() disconnect the bridge from them, so
+                    # the empty control room is reclaimed (no保活 of dead devices).
                     await control_bridge.sync_rooms(
-                        [item.room_name for item in presence if item.room_name]
+                        [
+                            item.room_name
+                            for item in presence
+                            if item.room_name and item.status != "offline"
+                        ]
                     )
                     await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
                     await asyncio.sleep(app_config.admin.probe_interval_seconds)
@@ -91,6 +101,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                 await probe_task
         await control_bridge.stop()
         await device_manager.save()
+        await registry_store.dispose()
         await http_client.aclose()
         logger.info("Hub stopped")
 

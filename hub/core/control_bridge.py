@@ -78,10 +78,34 @@ class LiveKitControlBridge:
                 await room.disconnect()
 
     async def sync_rooms(self, room_names: list[str]) -> None:
+        """Reconcile the bridge's joined rooms to exactly ``room_names``.
+
+        Joins rooms we're missing AND leaves rooms no longer in the desired set
+        (plan §4.2.5 / I3): when a device goes offline the caller drops its
+        control room from the list, so the bridge participant disconnects and the
+        now-empty control room is reclaimed by LiveKit's empty_timeout. Previously
+        this only ever added rooms, so an offline device's control room was kept
+        alive forever by the lingering bridge participant.
+        """
         if not self._started:
             return
-        for room_name in sorted({item for item in room_names if item}):
+        desired = {item for item in room_names if item}
+        async with self._lock:
+            current = set(self._rooms.keys())
+        for room_name in sorted(desired - current):
             await self.ensure_room(room_name)
+        for room_name in sorted(current - desired):
+            await self.leave_room(room_name)
+
+    async def leave_room(self, room_name: str) -> None:
+        """Disconnect the bridge from one room (releasing it for reclamation)."""
+        async with self._lock:
+            room = self._rooms.pop(room_name, None)
+        if room is None:
+            return
+        with suppress(Exception):
+            await room.disconnect()
+        logger.info("LiveKit control bridge left room=%s (reclaimed)", room_name)
 
     async def ensure_room(self, room_name: str) -> None:
         if not self._started or not self._rtc or not room_name:

@@ -39,7 +39,7 @@ class UnregisterDeviceResponse(BaseModel):
     用 ``existed``/``presence_cleared`` 标志告诉调用方实际清理了什么."""
 
     device_id: str
-    # True if a persistent record was removed from devices.json. False
+    # True if a persistent registry record was removed. False
     # means the device was already absent (idempotent retry / never
     # registered).
     existed: bool
