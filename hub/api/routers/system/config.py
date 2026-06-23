@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 from enum import Enum
 from typing import Any
 
@@ -135,6 +136,17 @@ def _default_active_room_name(device_id: str) -> str:
 
 def _default_control_room_name(device_id: str) -> str:
     return f"{_default_active_room_name(device_id)}-control"
+
+
+def _session_voice_room_name(device_id: str) -> str:
+    # Per-session voice room: a fresh nonce on every /api/config call so a prior
+    # session's late delete-by-name (the old agent deletes device-<id> on
+    # device-left / shutdown) can never tear down THIS session's room. The fixed
+    # reused name was the root cause of the rapid-rejoin ROOM_DELETED race
+    # (JOIN -> X -> quick JOIN -> "Room Deleted", device can't enter). Only the
+    # voice room is per-session; the control room stays stable
+    # (device-<id>-control), so control-bridge / presence keying is unaffected.
+    return f"{_default_active_room_name(device_id)}-{uuid.uuid4().hex[:8]}"
 
 
 def _server_url(request: Request) -> str:
@@ -307,7 +319,9 @@ async def _esp32_response(
     if admin_override is not None:
         interaction_mode = admin_override
 
-    resolved_room = room_name or _default_active_room_name(device_id)
+    # An explicit ?room_name= override (web / tests) is honored verbatim; the
+    # default device path gets a fresh per-session voice room each call.
+    resolved_room = room_name or _session_voice_room_name(device_id)
     # Phase 32.B: tag the ESP32 token with kind=device so channel knows
     # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
     # the web flow). Symmetric to _web_response's metadata.
