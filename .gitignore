@@ -36,6 +36,7 @@ logs/
 app/SQLlite/SQLGen.db
 
 data/
+**/.trash/
 .cursorignore
 
 .cursor
@@ -43,4 +44,3 @@ data/
 uv.lock
 
 **/.env.local
-
