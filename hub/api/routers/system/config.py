@@ -52,6 +52,35 @@ _VALID_INTERACTION_MODES = frozenset(
 )
 
 
+# Session-intent contract (plan §3.2 / Phase 3). The device declares why this
+# voice session exists via the ``X-Device-Session-Intent`` header; hub stamps the
+# resolved value into the voice token's ``participant_metadata`` so channel can
+# suppress the welcome + run the proactive short-window. ``proactive_initiated``
+# = an orchestrator-driven wake (a long task finished); ``user_initiated`` = a
+# normal user JOIN. Values MUST match channel's ``_VALID_INTENTS``.
+SESSION_INTENT_USER_INITIATED = "user_initiated"
+SESSION_INTENT_PROACTIVE = "proactive_initiated"
+_VALID_SESSION_INTENTS = frozenset(
+    {SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE}
+)
+
+
+def _normalize_session_intent(
+    raw: str | None, *, default: str = SESSION_INTENT_USER_INITIATED
+) -> str:
+    """Map the (untrusted, unsigned) intent header to a known value.
+
+    Same defense default as interaction_mode: anything missing or unrecognized
+    degrades to ``user_initiated`` (a normal session — welcome plays). The header
+    is not part of the device signature, so a bad value can only ever produce a
+    *less* surprising session, never a spoofed proactive one without a real wake.
+    """
+    candidate = (raw or "").strip().lower()
+    if candidate in _VALID_SESSION_INTENTS:
+        return candidate
+    return default
+
+
 def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
     """Map the (untrusted, unsigned) header value to a known mode.
 
@@ -226,6 +255,7 @@ async def _esp32_response(
     device_id: str,
     agent_mode: AgentMode,
     interaction_mode: str,
+    session_intent: str = SESSION_INTENT_USER_INITIATED,
     auth_headers: DeviceAuthHeaders,
 ) -> ESP32ConfigResponse:
     device_manager = getattr(request.app.state, "device_manager", None)
@@ -336,6 +366,10 @@ async def _esp32_response(
                 "kind": "device",
                 "device_id": device_id,
                 "interaction_mode": interaction_mode,
+                # Phase 3: why this session exists. proactive_initiated (an
+                # orchestrator wake) makes channel suppress the welcome + run the
+                # short proactive window; user_initiated is a normal JOIN.
+                "session_intent": session_intent,
             },
         )
         _control_identity, control_token = generate_token(
@@ -533,6 +567,9 @@ async def get_config(
     x_device_interaction_mode: str | None = Header(
         default=None, alias="X-Device-Interaction-Mode"
     ),
+    x_device_session_intent: str | None = Header(
+        default=None, alias="X-Device-Session-Intent"
+    ),
 ):
     if client_type == ClientType.ESP32:
         if not x_device_id:
@@ -563,6 +600,7 @@ async def get_config(
                 x_device_interaction_mode,
                 default=INTERACTION_MODE_HALF_DUPLEX,
             ),
+            session_intent=_normalize_session_intent(x_device_session_intent),
             auth_headers=DeviceAuthHeaders(
                 device_id=x_device_id,
                 nonce=x_device_nonce or "",

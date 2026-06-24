@@ -275,6 +275,63 @@ def test_config_esp32_invalid_mode_degrades_to_half(client: TestClient):
     assert voice_meta["interaction_mode"] == "half_duplex"
 
 
+def test_config_esp32_stamps_proactive_session_intent_from_header(client: TestClient):
+    """Phase 3 (B2): a proactive wake's X-Device-Session-Intent lands in the
+    voice-token metadata so channel suppresses the welcome. Value must be the
+    canonical channel literal (proactive_initiated), not a bare 'proactive'."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-intent", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-intent", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-intent",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-intent",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Session-Intent": "proactive_initiated",
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["session_intent"] == "proactive_initiated"
+
+
+def test_config_esp32_session_intent_defaults_user_initiated(client: TestClient):
+    """Absent / unrecognized intent header degrades to user_initiated (welcome
+    plays) — a bad value can never spoof a proactive session."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-intent2", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-intent2", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-intent2",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-intent2",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Session-Intent": "proactive",  # not the canonical literal
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["session_intent"] == "user_initiated"
+
+
 def test_config_esp32_admin_override_beats_device_header(client: TestClient):
     """Phase 6: an admin per-device interaction_mode (on the binding) wins over
     the device's self-declared header."""

@@ -23,6 +23,7 @@ from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
+from hub.core.proactive_wake import ProactiveWakeOrchestrator
 from hub.core.discovery import MdnsDiscoveryState, mdns_lifespan
 from hub.logging import setup_logging
 
@@ -66,6 +67,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         probe_task = None
         await control_bridge.start()
+        # Phase 3: proactive wake — subscribe to the agent's proactive events and
+        # route each to a room.join wake (pure router; device_id comes in the event).
+        proactive_wake = ProactiveWakeOrchestrator(app_config, admin_runtime)
+        app.state.proactive_wake = proactive_wake
+        await proactive_wake.start()
         if app_config.admin.probe_enabled:
             admin_runtime.get_probe_health().running = True
 
@@ -107,6 +113,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             probe_task.cancel()
             with suppress(asyncio.CancelledError):
                 await probe_task
+        await proactive_wake.stop()
         await control_bridge.stop()
         await device_manager.save()
         await registry_store.dispose()

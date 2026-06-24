@@ -150,6 +150,19 @@ class RuntimeAdminConfig:
 
 
 @dataclass
+class ProactiveWakeConfig:
+    """Phase 3: hub subscribes to the agent's proactive-trigger events on NATS
+    and wakes the target device via a room.join control command. Pure router —
+    the publisher (agent) stamps device_id + full payload into the event; hub
+    does no instance->device mapping. Opt-in (needs a running NATS)."""
+
+    enabled: bool = False
+    nats_url: str = "nats://127.0.0.1:4222"
+    wake_subject: str = "agent.proactive.triggered.*"
+    command_ttl_ms: int = 30_000
+
+
+@dataclass
 class StorageConfig:
     registry_db_path: Path | str = field(
         default_factory=resolve_registry_db_path
@@ -352,6 +365,19 @@ def _control_bridge_from_yaml(y: dict[str, Any]) -> ControlBridgeConfig:
     )
 
 
+def _proactive_wake_from_yaml(y: dict[str, Any]) -> ProactiveWakeConfig:
+    sec = _section(y, "proactive_wake")
+    default = ProactiveWakeConfig()
+    nats_url = (os.getenv("NATS_URL") or str(sec.get("nats_url") or "")).strip()
+    return ProactiveWakeConfig(
+        enabled=bool(sec.get("enabled", default.enabled)),
+        nats_url=nats_url or default.nats_url,
+        wake_subject=str(sec.get("wake_subject") or default.wake_subject).strip()
+        or default.wake_subject,
+        command_ttl_ms=int(sec.get("command_ttl_ms", default.command_ttl_ms)),
+    )
+
+
 @dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
@@ -363,6 +389,7 @@ class AppConfig:
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
+    proactive_wake: ProactiveWakeConfig = field(default_factory=ProactiveWakeConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -378,6 +405,7 @@ class AppConfig:
             control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
             storage=_storage_from_yaml_and_env(y),
+            proactive_wake=_proactive_wake_from_yaml(y),
         )
 
 

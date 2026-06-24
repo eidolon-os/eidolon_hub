@@ -44,3 +44,14 @@ admin_probe:
 # with channel's already-removed static-token fallback).
 runtime_admin:
   admin_api_url: http://127.0.0.1:9000
+
+# Phase 3: subscribe to the agent's proactive-trigger events on NATS and wake the
+# target device via a room.join control command (pure router — device_id + full
+# payload come in the event). Needs a running NATS at nats_url. The subject must
+# match the agent's publish subject (agent.proactive.triggered.<instance_id>);
+# NATS_URL env overrides nats_url when set.
+proactive_wake:
+  enabled: true
+  nats_url: nats://127.0.0.1:4222
+  wake_subject: agent.proactive.triggered.*
+  command_ttl_ms: 30000
