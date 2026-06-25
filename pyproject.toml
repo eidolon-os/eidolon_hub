@@ -39,7 +39,7 @@ dev = [
 ]
 
 [tool.uv.sources]
-eidolon-sdk = { path = "../eidolon_sdk" }
+eidolon-sdk = { path = "../eidolon_sdk", editable = true }
 
 [tool.ruff]
 line-length = 100
