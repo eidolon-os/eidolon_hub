@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Mapping
 
-from eidolon_sdk.livekit import build_livekit_token
+from eidolon_sdk.integrations.livekit import build_livekit_token
 from pydantic import BaseModel
 
 

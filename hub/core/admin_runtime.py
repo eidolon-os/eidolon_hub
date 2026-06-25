@@ -8,8 +8,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from eidolon_sdk.control import (
-    CONTROL_TOPIC,
+from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+from eidolon_sdk.biz.control import (
     CommandPriority,
     CommandQoS,
     build_command_envelope,

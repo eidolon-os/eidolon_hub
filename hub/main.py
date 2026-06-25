@@ -7,8 +7,8 @@ import logging
 from contextlib import suppress
 
 import httpx
-from eidolon_sdk.admin import AdminClient
 from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
+from eidolon_sdk.biz.admin import AdminClient
 from fastapi import FastAPI
 
 import hub
@@ -23,8 +23,8 @@ from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
-from hub.core.proactive_wake import ProactiveWakeOrchestrator
 from hub.core.discovery import MdnsDiscoveryState, mdns_lifespan
+from hub.core.proactive_wake import ProactiveWakeOrchestrator
 from hub.logging import setup_logging
 
 logger = logging.getLogger(__name__)

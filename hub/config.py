@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from eidolon_sdk.registry import resolve_registry_db_path
+from eidolon_sdk.biz.registry import resolve_registry_db_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"

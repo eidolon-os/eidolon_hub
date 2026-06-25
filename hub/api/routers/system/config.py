@@ -7,14 +7,21 @@ import uuid
 from enum import Enum
 from typing import Any
 
-from eidolon_sdk.admin import (
+from eidolon_sdk.biz.admin import (
     AdminClient,
     AdminNotFound,
     AdminPrecondition,
     AdminUnreachable,
     AdminUpstreamError,
 )
-from eidolon_sdk.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
+from eidolon_sdk.biz.contracts import (
+    INTERACTION_MODE_FULL_DUPLEX,
+    INTERACTION_MODE_HALF_DUPLEX,
+    SESSION_INTENT_USER_INITIATED,
+    VALID_INTERACTION_MODES,
+    VALID_SESSION_INTENTS,
+)
+from eidolon_sdk.biz.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
@@ -39,30 +46,12 @@ class ESP32ConfigStatus(str, Enum):
 
 PENDING_ROOM_NAME = "eidolon-pending"
 
-# Interaction-mode contract (see plan Phase 4/5). The device declares its
-# capability via the ``X-Device-Interaction-Mode`` header; hub stamps the
-# resolved mode into the LiveKit token's ``participant_metadata`` so channel
-# can pick a per-session turn policy. ``half_duplex`` = push-to-talk (mic
-# closed during playback, explicit turn boundary); ``full_duplex`` = open mic
-# with hardware AEC (server-judged barge-in).
-INTERACTION_MODE_HALF_DUPLEX = "half_duplex"
-INTERACTION_MODE_FULL_DUPLEX = "full_duplex"
-_VALID_INTERACTION_MODES = frozenset(
-    {INTERACTION_MODE_HALF_DUPLEX, INTERACTION_MODE_FULL_DUPLEX}
-)
-
-
-# Session-intent contract (plan §3.2 / Phase 3). The device declares why this
-# voice session exists via the ``X-Device-Session-Intent`` header; hub stamps the
-# resolved value into the voice token's ``participant_metadata`` so channel can
-# suppress the welcome + run the proactive short-window. ``proactive_initiated``
-# = an orchestrator-driven wake (a long task finished); ``user_initiated`` = a
-# normal user JOIN. Values MUST match channel's ``_VALID_INTENTS``.
-SESSION_INTENT_USER_INITIATED = "user_initiated"
-SESSION_INTENT_PROACTIVE = "proactive_initiated"
-_VALID_SESSION_INTENTS = frozenset(
-    {SESSION_INTENT_USER_INITIATED, SESSION_INTENT_PROACTIVE}
-)
+# Interaction-mode + session-intent contracts (plan Phase 3/4/5) are sourced
+# from the single source ``eidolon_sdk.biz.contracts`` and re-exported above so hub
+# and channel can never drift. The device declares both via the
+# ``X-Device-Interaction-Mode`` / ``X-Device-Session-Intent`` headers; hub stamps
+# the resolved values into the voice token's ``participant_metadata`` and channel
+# reads them once per session.
 
 
 def _normalize_session_intent(
@@ -76,7 +65,7 @@ def _normalize_session_intent(
     *less* surprising session, never a spoofed proactive one without a real wake.
     """
     candidate = (raw or "").strip().lower()
-    if candidate in _VALID_SESSION_INTENTS:
+    if candidate in VALID_SESSION_INTENTS:
         return candidate
     return default
 
@@ -92,7 +81,7 @@ def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
     path (plan Phase 6).
     """
     candidate = (raw or "").strip().lower()
-    if candidate in _VALID_INTERACTION_MODES:
+    if candidate in VALID_INTERACTION_MODES:
         return candidate
     return default
 
@@ -110,7 +99,7 @@ def _admin_interaction_mode_override(resolved: Any) -> str | None:
     if not raw:
         return None
     candidate = str(raw).strip().lower()
-    return candidate if candidate in _VALID_INTERACTION_MODES else None
+    return candidate if candidate in VALID_INTERACTION_MODES else None
 
 
 class AudioConfig(BaseModel):

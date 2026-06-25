@@ -4,7 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from eidolon_sdk.control import CONTROL_TOPIC
+from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 
 from hub.config import AppConfig, LiveKitConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime

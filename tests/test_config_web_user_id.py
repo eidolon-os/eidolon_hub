@@ -20,7 +20,7 @@ from unittest.mock import AsyncMock, patch
 
 import jwt
 import pytest
-from eidolon_sdk.admin import (
+from eidolon_sdk.biz.admin import (
     AdminNotFound,
     AdminUnreachable,
     AdminUpstreamError,
@@ -43,7 +43,7 @@ def cfg() -> AppConfig:
 
 @pytest.fixture
 def fake_admin_client():
-    from eidolon_sdk.admin import AdminClient
+    from eidolon_sdk.biz.admin import AdminClient
 
     return AsyncMock(spec=AdminClient)
 
@@ -218,7 +218,7 @@ def test_web_admin_lookup_is_unconditional(
     LK tokens channel rejects on next /api/resolve call."""
     # Hub always reaches out — even for a perfectly valid token request
     # we expect get_user to be invoked.
-    from eidolon_sdk.admin import AdminNotFound
+    from eidolon_sdk.biz.admin import AdminNotFound
     fake_admin_client.get_user.side_effect = AdminNotFound("unknown")
     r = client.get(
         "/api/config",

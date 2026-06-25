@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from eidolon_sdk.control import CONTROL_TOPIC
+from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from pydantic import BaseModel, Field
 
 

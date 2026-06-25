@@ -7,8 +7,8 @@ import logging
 from contextlib import suppress
 from typing import Any
 
-from eidolon_sdk.control import CONTROL_TOPIC
-from eidolon_sdk.livekit import build_livekit_token
+from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+from eidolon_sdk.integrations.livekit import build_livekit_token
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime

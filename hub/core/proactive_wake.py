@@ -18,18 +18,17 @@ import json
 import logging
 from typing import Any
 
+from eidolon_sdk.biz.contracts import CONTROL_OP_ROOM_JOIN, SESSION_INTENT_PROACTIVE
+
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
 
 logger = logging.getLogger(__name__)
 
-CONTROL_OP_ROOM_JOIN = "room.join"
-# Canonical session-intent value the channel recognizes (its _VALID_INTENTS).
-# Every wake the orchestrator sends is, by definition, a proactive session, so
-# the command carries this verbatim → device forwards it as the X-Device-Session-
-# Intent header → hub stamps it into the voice token → channel suppresses the
-# welcome + runs the proactive short-window. MUST match channel's INTENT_PROACTIVE.
-WAKE_SESSION_INTENT = "proactive_initiated"
+# Every wake the orchestrator sends is a proactive session: the command carries
+# SESSION_INTENT_PROACTIVE verbatim → device forwards it as the
+# X-Device-Session-Intent header → hub stamps it into the voice token → channel
+# suppresses the welcome + runs the proactive short-window.
 
 
 class ProactiveWakeOrchestrator:
@@ -108,7 +107,7 @@ class ProactiveWakeOrchestrator:
 
         text = str(payload.get("text") or "")
         command_payload = {
-            "session_intent": WAKE_SESSION_INTENT,
+            "session_intent": SESSION_INTENT_PROACTIVE,
             "text": text,
             "instance_id": payload.get("instance_id"),
             "style_hint": payload.get("style_hint"),
@@ -138,7 +137,7 @@ class ProactiveWakeOrchestrator:
         logger.info(
             "proactive wake: room.join sent device=%s session_intent=%s chars=%d",
             device_id,
-            WAKE_SESSION_INTENT,
+            SESSION_INTENT_PROACTIVE,
             len(text),
         )
         return True

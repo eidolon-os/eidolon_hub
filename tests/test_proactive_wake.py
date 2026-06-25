@@ -43,7 +43,7 @@ async def test_wake_sends_room_join_with_full_payload():
     assert args[0] == "1c:db:d4:7a:ef:0c"          # routed by device_id
     assert kwargs["op"] == "room.join"             # wake primitive
     payload = args[1]
-    # Canonical channel vocabulary — must match channel INTENT_PROACTIVE so the
+    # Canonical channel vocabulary — must match SESSION_INTENT_PROACTIVE so the
     # welcome is actually suppressed (a bare "proactive" would degrade to
     # user_initiated and the device would play the greeting).
     assert payload["session_intent"] == "proactive_initiated"

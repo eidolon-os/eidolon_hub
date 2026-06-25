@@ -10,9 +10,9 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from eidolon_sdk.admin import AdminPrecondition
 from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
-from eidolon_sdk.devices import body_sha256_hex, canonical_request, public_key_fingerprint
+from eidolon_sdk.biz.admin import AdminPrecondition
+from eidolon_sdk.biz.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
 
 import hub.config as hub_config
