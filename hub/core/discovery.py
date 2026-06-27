@@ -257,8 +257,8 @@ async def mdns_lifespan(
     async def _maintain_advertisement() -> None:
         # The advertised A record and config_url are pinned to the IP captured at
         # registration time. On a DHCP renewal / network change the host IP can
-        # move, leaving devices discovering a dead address (and the served
-        # config_url / livekit_url stale). Poll and keep the advertisement
+        # move, leaving devices discovering a dead address (and the advertised
+        # config_url stale). Poll and keep the advertisement
         # aligned with the current LAN address; also retry after startup failure.
         while True:
             await asyncio.sleep(_IP_REFRESH_INTERVAL_SEC)

@@ -1,3 +1,3 @@
-"""Eidolon Hub — 统一接入层和 Agent 适配层."""
+"""Eidolon Hub — LAN discovery and runtime connection broker."""
 
 __version__ = "0.1.0"

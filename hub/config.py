@@ -88,7 +88,11 @@ class LoggingConfig:
 
 @dataclass
 class LiveKitConfig:
-    """Server-side LiveKit API (management). URL in yaml; credentials in .env."""
+    """Hub's server-side LiveKit API role: room management + data injection.
+
+    Channel uses the same server/key/secret via its own worker config fields.
+    This project deliberately has no shared LiveKitProfile abstraction yet.
+    """
 
     api_url: str = ""
     api_key: str = ""
@@ -143,6 +147,9 @@ class RuntimeAdminConfig:
     bypass would only mint LK tokens that channel will immediately
     reject at admin /api/resolve. Removing it forces a single,
     consistent runtime path through admin.
+
+    Hub consumes Admin's resolved business context; it does not store device
+    bindings or own agent metadata.
     """
 
     admin_api_url: str = "http://127.0.0.1:9000"

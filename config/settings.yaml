@@ -33,6 +33,15 @@ admin_probe:
   offline_after_missed_probes: 3
   command_timeout_seconds: 30
 
+# Admin control commands need a lightweight LiveKit participant to receive
+# ESP32 ack/result envelopes. Without this bridge, commands can execute on the
+# device but Hub will still mark them timeout because server API SendData is
+# one-way.
+control_bridge:
+  enabled: true
+  livekit_url: ""
+  identity_prefix: eidolon-hub-control
+
 # ESP32 设备会话策略：
 # - pending_only: 默认/生产模式。已审批但未绑定或 Admin resolve 失败的设备
 #   只能进入 eidolon-pending，等待完成 agent 绑定。

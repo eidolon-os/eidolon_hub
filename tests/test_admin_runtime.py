@@ -177,7 +177,7 @@ async def test_apply_command_ack_updates_command_status():
             "ref": command["command_id"],
             "device_id": "esp32-1",
             "op": "config.refresh",
-            "status": "succeeded",
+            "status": "completed",
             "code": "OK",
             "result": {"status": "active"},
         }
@@ -185,6 +185,7 @@ async def test_apply_command_ack_updates_command_status():
 
     assert updated is not None
     assert updated["status"] == "succeeded"
+    assert updated["error"] == ""
     assert updated["ack"]["code"] == "OK"
     assert updated["result"] == {"status": "active"}
 

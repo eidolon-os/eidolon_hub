@@ -1,6 +1,8 @@
 # eidolon-hub
 
-Eidolon Hub - 统一设备接入层和 Agent 适配层。
+Eidolon Hub - LAN discovery + runtime connection broker.
+
+Hub 只负责设备接入、可达性和跨会话控制面：mDNS 广播、`/api/config`、设备签名/批准/在线事实、LiveKit token 下发、room 名称分配、control room presence probe，以及可审计的 Hub command ack/result 历史。业务身份、`device_id -> agent_id` 绑定、tenant/user/template/memory resolve 都属于 `eidolon_admin`；语音会话体验和 voice room 生命周期属于 `eidolon_channel`。
 
 ## Quick Start
 
@@ -9,7 +11,7 @@ Eidolon Hub - 统一设备接入层和 Agent 适配层。
 uv sync
 
 # Run
-uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
+uv run uvicorn hub.main:app --host 0.0.0.0 --port 8082
 ```
 
 ## 部署与运行方式
@@ -21,7 +23,7 @@ uv run uvicorn hub.main:app --host 0.0.0.0 --port 8081
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HUB_HOST` | `0.0.0.0` | HTTP bind host |
-| `HUB_PORT` | `8081` | HTTP bind port |
+| `HUB_PORT` | `8082` | HTTP bind port |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `LIVEKIT_API_KEY` | — | LiveKit API key |
 | `LIVEKIT_API_SECRET` | — | LiveKit API secret |
@@ -50,6 +52,19 @@ ESP32 响应体与原先 `/api/esp32/config` 相同；Web 响应体与原先 `/a
 
 下发给设备的 `config.server_url` 按顺序解析：`EIDOLON_LIVEKIT_URL`（完整）→ 否则 `EIDOLON_LIVEKIT_IP`（非 `auto`）+ 端口 → 否则用本次请求的 `Host` + 端口；若 `Host` 为 `localhost` / `127.0.0.1` 等回环地址（或 `livekit_ip=auto` 且等价场景），则改为本机**局域网出站 IPv4**（与 mDNS 注册同源探测），避免其它设备拿到不可达的 `127.0.0.1`。
 
+## Boundary with Admin / Channel / LiveKit
+
+- `eidolon_admin` owns business orchestration: `device_id -> agent_id` binding, tenant/user/agent/template/memory/voiceprint resolve, `/api/devices` combined views, and `/api/resolve/*`.
+- `eidolon_channel` owns the voice session after a participant enters a voice room: participant metadata parsing, STT/VAD/EOT/LLM/TTS, turn policy, interrupt/ducking, `session_end`, idle teardown, and deleting the current voice room.
+- LiveKit is shared infrastructure. `eidolon_admin` starts the local LiveKit server from `eidolon_admin/deploy/livekit/livekit.yaml`. Hub and Channel use the same server/key/secret, but with different roles:
+  - Hub: token issuer, room/controller HTTP API caller, LAN-reachable client signaling URL provider.
+  - Channel: LiveKit agent worker and voice room participant.
+  - Device/Web: ordinary participants that receive Hub-signed token + signaling URL and never see key/secret.
+- This project intentionally does not introduce a unified LiveKit Profile yet. Current config mapping is:
+  - Hub: `livekit.api_url`, `livekit.api_key`, `livekit.api_secret`, `esp32.livekit_*`.
+  - Channel: `core.livekit_url`, `core.api_key`, `core.api_secret`.
+  - Server: `eidolon_admin/deploy/livekit/livekit.yaml`.
+
 ## LAN Discovery (mDNS / Zeroconf)
 
 Hub automatically announces itself on the local network via mDNS, allowing ESP32 devices and web clients to discover it without manual IP configuration.
@@ -58,7 +73,7 @@ Hub automatically announces itself on the local network via mDNS, allowing ESP32
 
 - **Type**: `_eidolon-hub._tcp.local.`
 - **Hostname**: `eidolon-hub.local`
-- **Port**: `HUB_PORT` (default 8081)
+- **Port**: `HUB_PORT` (default 8082)
 
 ### TXT Record Fields (RFC 6763)
 
@@ -67,9 +82,7 @@ Hub automatically announces itself on the local network via mDNS, allowing ESP32
 | `txtvers` | TXT schema version (`1`) |
 | `version` | Hub software version |
 | `api` | API major version (`v1`) |
-| `livekit_url` | LiveKit server URL |
-| `esp32_config` | ESP32 config endpoint path |
-| `web_config` | Web config endpoint path |
+| `config_url` | Absolute URL for `GET /api/config` on this Hub |
 
 ### Usage
 
@@ -87,10 +100,10 @@ ping eidolon-hub.local
 
 # Access from another machine on LAN
 curl -H "X-Device-ID: test-001" \
-  "http://eidolon-hub.local:8081/api/config?room_name=demo"
+  "http://eidolon-hub.local:8082/api/config?room_name=demo"
 ```
 
-**ESP32 (ESP-IDF)**: Use the built-in mDNS API to query `_eidolon-hub._tcp.local.`, read the TXT record, then call the endpoint paths found in `esp32_config` and `livekit_url`.
+**ESP32 (ESP-IDF)**: Use the built-in mDNS API to query `_eidolon-hub._tcp.local.`, read the TXT record, then call `config_url`.
 
 ## License
 

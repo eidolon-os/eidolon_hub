@@ -1,5 +1,8 @@
 # Hub structured settings (copy to config/settings.yaml).
 # livekit.api_key / api_secret 占位符 = 环境变量名；值由 config/.env 注入。
+# Hub and Channel point at the same LiveKit server/credentials, but use
+# role-specific config fields. Hub uses livekit.api_url for server-side room
+# control plus esp32.livekit_* for client signaling URL handoff.
 
 api:
   host: 0.0.0.0
@@ -14,7 +17,9 @@ livekit:
   api_secret: LIVEKIT_API_SECRET
 
 esp32:
-  # Client signaling URL for ESP32 / browsers (see resolve_eidolon_livekit_client_url)
+  # Client signaling URL for ESP32 / browsers (see resolve_eidolon_livekit_client_url).
+  # This must reach the same LiveKit server as livekit.api_url, but from the LAN
+  # client side instead of Hub's server-side HTTP API side.
   livekit_url: ""
   livekit_ip: auto
   livekit_port: 7880
