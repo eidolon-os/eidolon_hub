@@ -35,7 +35,9 @@ def generate_token(
     Args:
         room_name: LiveKit room name.
         participant_name: Participant identity (used as both identity and display name).
-        agent_mode: Agent dispatch mode, either "streaming" or "ptt".
+        agent_mode: LiveKit agent dispatch mode, either "streaming" or "ptt".
+            This is not the duplex/barge-in capability; clients declare that
+            separately via participant metadata ``interaction_mode``.
         participant_metadata: Optional dict embedded as the participant's
             ``metadata`` field — server-side LiveKit makes it readable to
             other participants in the room (including the channel-worker

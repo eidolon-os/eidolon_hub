@@ -10,7 +10,8 @@ import pytest
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
-from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
+from eidolon_data import DataSettings, DataStore
+from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
 from eidolon_sdk.biz.admin import AdminPrecondition
 from eidolon_sdk.biz.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
@@ -19,8 +20,8 @@ import hub.config as hub_config
 from hub.config import (
     AppConfig,
     Esp32Config,
+    _device_session_from_yaml,
     _livekit_from_yaml_and_env,
-    _storage_from_yaml_and_env,
     resolve_eidolon_livekit_client_url,
 )
 from hub.core.device_manager import DeviceManager
@@ -31,7 +32,7 @@ from hub.main import create_app
 def client(tmp_path):
     cfg = AppConfig()
     cfg.esp32.livekit_url = "wss://example.test"
-    store = RegistrySqliteStore(tmp_path / "registry.sqlite3")
+    store = DataStore.open(DataSettings(sqlite_path=str(tmp_path / "eidolon.sqlite3")))
     with patch("hub.api.routers.system.config.load_config", return_value=cfg):
         app = create_app(cfg)
         # Bypass lifespan (which boots LiveKitAdminRuntime + mDNS) by
@@ -39,36 +40,16 @@ def client(tmp_path):
         # admin-lookup path override app.state.admin_client too — see
         # test_config_web_user_id.py.
         app.state.config = cfg
-        dm = DeviceManager(DeviceRepository(store))
+        dm = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
         asyncio.run(dm.load())
         app.state.device_manager = dm
         app.state.admin_client = AsyncMock()
         yield TestClient(app)
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())
 
 
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
-
-
-def test_storage_registry_db_path_precedence(monkeypatch, tmp_path):
-    yaml_path = tmp_path / "yaml.sqlite3"
-    shared_path = tmp_path / "shared.sqlite3"
-
-    monkeypatch.delenv("EIDOLON_REGISTRY_DB_PATH", raising=False)
-    assert _storage_from_yaml_and_env(
-        {"storage": {"registry_db_path": str(yaml_path)}}
-    ).registry_db_path == yaml_path
-
-    monkeypatch.setenv("EIDOLON_REGISTRY_DB_PATH", str(shared_path))
-    assert _storage_from_yaml_and_env(
-        {"storage": {"registry_db_path": str(yaml_path)}}
-    ).registry_db_path == shared_path
-
-    monkeypatch.delenv("EIDOLON_REGISTRY_DB_PATH", raising=False)
-    assert _storage_from_yaml_and_env(
-        {"storage": {"registry_db_path": str(yaml_path)}}
-    ).registry_db_path == yaml_path
 
 
 def _signed_device_headers(
@@ -436,6 +417,52 @@ def test_config_esp32_approved_waits_for_binding(client: TestClient):
     assert data["device"]["bound"] is False
 
 
+def test_config_esp32_dev_direct_voice_allows_approved_unbound(client: TestClient):
+    client.app.state.config.device_session.unbound_device_policy = "dev_direct_voice"
+    dm = client.app.state.device_manager
+    key = ec.generate_private_key(ec.SECP256R1())
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-4", "pending-jwt"),
+    ):
+        r0 = client.get(
+            "/api/config",
+            headers=_signed_device_headers(device_id="dev-4", key=key),
+        )
+    assert r0.status_code == 200
+    asyncio.run(dm.approve("dev-4"))
+    client.app.state.admin_client.resolve_device.side_effect = AdminPrecondition(
+        412, "device is not bound"
+    )
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-4", "jwt-4"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-4",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-2",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Interaction-Mode": "full_duplex",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["status"] == "active"
+    assert data["config"]["room_name"].startswith("device-dev-4-")
+    assert data["device"]["approved"] is True
+    assert data["device"]["bound"] is False
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["kind"] == "device"
+    assert voice_meta["interaction_mode"] == "full_duplex"
+
+
 def test_config_esp32_missing_header(client: TestClient):
     r = client.get("/api/config")
     assert r.status_code == 422
@@ -518,6 +545,23 @@ def test_livekit_accepts_env_name_placeholders(monkeypatch):
     )
     assert cfg.api_key == "k"
     assert cfg.api_secret == "s"
+
+
+def test_device_session_policy_defaults_to_pending_only():
+    cfg = _device_session_from_yaml({})
+    assert cfg.unbound_device_policy == "pending_only"
+
+
+def test_device_session_policy_accepts_dev_direct_voice():
+    cfg = _device_session_from_yaml(
+        {"device_session": {"unbound_device_policy": "dev_direct_voice"}}
+    )
+    assert cfg.unbound_device_policy == "dev_direct_voice"
+
+
+def test_device_session_policy_rejects_unknown_value():
+    with pytest.raises(ValueError, match="unbound_device_policy"):
+        _device_session_from_yaml({"device_session": {"unbound_device_policy": "open"}})
 
 
 def test_resolve_full_url_override():

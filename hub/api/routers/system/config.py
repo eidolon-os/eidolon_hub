@@ -26,7 +26,12 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
-from hub.config import AppConfig, load_config, resolve_eidolon_livekit_client_url
+from hub.config import (
+    DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE,
+    AppConfig,
+    load_config,
+    resolve_eidolon_livekit_client_url,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -237,6 +242,78 @@ def _pending_esp32_response(
     )
 
 
+def _active_esp32_response(
+    *,
+    request: Request,
+    resolved_room: str,
+    device_id: str,
+    agent_mode: AgentMode,
+    interaction_mode: str,
+    session_intent: str,
+    bound: bool,
+    fingerprint: str = "",
+) -> ESP32ConfigResponse:
+    # Phase 32.B: tag the ESP32 token with kind=device so channel knows
+    # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
+    # the web flow). Symmetric to _web_response's metadata.
+    # Phase 4: carry the device-declared interaction_mode so channel can
+    # pick a per-session turn policy (half_duplex -> no barge-in).
+    try:
+        _identity, token = generate_token(
+            room_name=resolved_room,
+            participant_name=device_id,
+            agent_mode=agent_mode,
+            participant_metadata={
+                "kind": "device",
+                "device_id": device_id,
+                "interaction_mode": interaction_mode,
+                # Phase 3: why this session exists. proactive_initiated (an
+                # orchestrator wake) makes channel suppress the welcome + run the
+                # short proactive window; user_initiated is a normal JOIN.
+                "session_intent": session_intent,
+            },
+        )
+        _control_identity, control_token = generate_token(
+            room_name=_default_control_room_name(device_id),
+            participant_name=device_id,
+            participant_metadata={
+                "kind": "device_control",
+                "device_id": device_id,
+                "voice_room": resolved_room,
+            },
+            dispatch_agent=False,
+            can_publish=False,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    server_url = _server_url(request)
+    return ESP32ConfigResponse(
+        success=True,
+        status=ESP32ConfigStatus.ACTIVE,
+        config=ESP32Config(
+            server_url=server_url,
+            token=token,
+            identity=device_id,
+            room_name=resolved_room,
+            audio=AudioConfig(),
+            control=ESP32ControlConfig(
+                server_url=server_url,
+                token=control_token,
+                identity=device_id,
+                room_name=_default_control_room_name(device_id),
+            ),
+        ),
+        device=_build_device_payload(
+            device_id=device_id,
+            approved=True,
+            bound=bound,
+            fingerprint=fingerprint,
+        ),
+    )
+
+
 async def _esp32_response(
     *,
     request: Request,
@@ -297,6 +374,11 @@ async def _esp32_response(
             fingerprint=fingerprint,
         )
 
+    cfg = _app_config(request)
+    allow_unbound_direct_voice = (
+        cfg.device_session.unbound_device_policy
+        == DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE
+    )
     admin_client: AdminClient | None = getattr(request.app.state, "admin_client", None)
     if admin_client is None:
         raise HTTPException(
@@ -308,6 +390,23 @@ async def _esp32_response(
         resolved = await admin_client.resolve_device(device_id)
     except AdminPrecondition as exc:
         _log.info("device waiting binding device=%s detail=%s", device_id, exc.message)
+        if allow_unbound_direct_voice:
+            _log.warning(
+                "device entering dev direct voice without admin binding "
+                "device=%s detail=%s",
+                device_id,
+                exc.message,
+            )
+            return _active_esp32_response(
+                request=request,
+                resolved_room=room_name or _session_voice_room_name(device_id),
+                device_id=device_id,
+                agent_mode=agent_mode,
+                interaction_mode=interaction_mode,
+                session_intent=session_intent,
+                bound=False,
+                fingerprint=fingerprint,
+            )
         return _pending_esp32_response(
             request=request,
             device_id=device_id,
@@ -317,6 +416,23 @@ async def _esp32_response(
         )
     except AdminNotFound as exc:
         _log.warning("device resolve not found device=%s detail=%s", device_id, exc)
+        if allow_unbound_direct_voice:
+            _log.warning(
+                "device entering dev direct voice without admin resolve "
+                "device=%s detail=%s",
+                device_id,
+                exc,
+            )
+            return _active_esp32_response(
+                request=request,
+                resolved_room=room_name or _session_voice_room_name(device_id),
+                device_id=device_id,
+                agent_mode=agent_mode,
+                interaction_mode=interaction_mode,
+                session_intent=session_intent,
+                bound=False,
+                fingerprint=fingerprint,
+            )
         return _pending_esp32_response(
             request=request,
             device_id=device_id,
@@ -341,64 +457,15 @@ async def _esp32_response(
     # An explicit ?room_name= override (web / tests) is honored verbatim; the
     # default device path gets a fresh per-session voice room each call.
     resolved_room = room_name or _session_voice_room_name(device_id)
-    # Phase 32.B: tag the ESP32 token with kind=device so channel knows
-    # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
-    # the web flow). Symmetric to _web_response's metadata.
-    # Phase 4: carry the device-declared interaction_mode so channel can
-    # pick a per-session turn policy (half_duplex → no barge-in).
-    try:
-        _identity, token = generate_token(
-            room_name=resolved_room,
-            participant_name=device_id,
-            agent_mode=agent_mode,
-            participant_metadata={
-                "kind": "device",
-                "device_id": device_id,
-                "interaction_mode": interaction_mode,
-                # Phase 3: why this session exists. proactive_initiated (an
-                # orchestrator wake) makes channel suppress the welcome + run the
-                # short proactive window; user_initiated is a normal JOIN.
-                "session_intent": session_intent,
-            },
-        )
-        _control_identity, control_token = generate_token(
-            room_name=_default_control_room_name(device_id),
-            participant_name=device_id,
-            participant_metadata={
-                "kind": "device_control",
-                "device_id": device_id,
-                "voice_room": resolved_room,
-            },
-            dispatch_agent=False,
-            can_publish=False,
-            can_subscribe=True,
-            can_publish_data=True,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    server_url = _server_url(request)
-    return ESP32ConfigResponse(
-        success=True,
-        status=ESP32ConfigStatus.ACTIVE,
-        config=ESP32Config(
-            server_url=server_url,
-            token=token,
-            identity=device_id,
-            room_name=resolved_room,
-            audio=AudioConfig(),
-            control=ESP32ControlConfig(
-                server_url=server_url,
-                token=control_token,
-                identity=device_id,
-                room_name=_default_control_room_name(device_id),
-            ),
-        ),
-        device=_build_device_payload(
-            device_id=device_id,
-            approved=True,
-            bound=True,
-            fingerprint=fingerprint,
-        ),
+    return _active_esp32_response(
+        request=request,
+        resolved_room=resolved_room,
+        device_id=device_id,
+        agent_mode=agent_mode,
+        interaction_mode=interaction_mode,
+        session_intent=session_intent,
+        bound=True,
+        fingerprint=fingerprint,
     )
 
 
@@ -546,7 +613,10 @@ async def get_config(
     ),
     agent_mode: AgentMode = Query(
         AgentMode.STREAMING,
-        description="Agent mode: streaming or ptt",
+        description=(
+            "LiveKit agent dispatch mode: streaming or ptt. Duplex/barge-in "
+            "capability is declared separately by X-Device-Interaction-Mode."
+        ),
     ),
     x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
     x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),

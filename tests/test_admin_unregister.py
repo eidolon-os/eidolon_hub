@@ -21,7 +21,8 @@ from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
-from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
+from eidolon_data import DataSettings, DataStore
+from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
 from fastapi.testclient import TestClient
 
 from hub.config import AppConfig
@@ -59,16 +60,16 @@ class _FakeAdminRuntime:
         return self._cache.pop(device_id, None) is not None
 
 
-def _new_device_manager(db_path: Path) -> tuple[DeviceManager, RegistrySqliteStore]:
-    store = RegistrySqliteStore(db_path)
-    manager = DeviceManager(DeviceRepository(store))
+def _new_device_manager(db_path: Path) -> tuple[DeviceManager, DataStore]:
+    store = DataStore.open(DataSettings(sqlite_path=str(db_path)))
+    manager = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
     asyncio.run(manager.load())
     return manager, store
 
 
 @pytest.fixture
-def env(tmp_path: Path) -> Iterator[tuple[TestClient, DeviceManager, _FakeAdminRuntime, Path, RegistrySqliteStore]]:
-    registry_db = tmp_path / "registry.sqlite3"
+def env(tmp_path: Path) -> Iterator[tuple[TestClient, DeviceManager, _FakeAdminRuntime, Path, DataStore]]:
+    registry_db = tmp_path / "eidolon.sqlite3"
     cfg = AppConfig()
     app = create_app(cfg)
 
@@ -86,7 +87,7 @@ def env(tmp_path: Path) -> Iterator[tuple[TestClient, DeviceManager, _FakeAdminR
     # test_admin_approve fixture. Entering the ``with`` block would
     # trigger app's lifespan and overwrite ``app.state.device_manager``.
     yield TestClient(app), dm, rt, registry_db, store
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())
 
 
 def test_unregister_known_device_returns_200(env) -> None:
@@ -108,13 +109,13 @@ def test_unregister_removes_from_device_manager(env) -> None:
     client, dm, _, registry_db, store = env
     client.delete("/api/admin/devices/alpha")
     assert "alpha" not in dm
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())
     # Registry DB must reflect the removal — load a fresh DeviceManager
     # against the same DB and confirm alpha isn't there.
     dm2, store2 = _new_device_manager(registry_db)
     assert "alpha" not in dm2
     assert "beta" in dm2  # untouched
-    asyncio.run(store2.dispose())
+    asyncio.run(store2.close())
 
 
 def test_unregister_clears_presence_cache(env) -> None:

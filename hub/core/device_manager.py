@@ -6,7 +6,6 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from eidolon_sdk.adapters.registry_sqlite import DeviceRepository
 from eidolon_sdk.biz.registry.models import DeviceRegistryRecord
 
 from hub.core.device import Device
@@ -22,7 +21,7 @@ class DeviceManager:
     persist through the SDK repository.
     """
 
-    def __init__(self, repository: DeviceRepository):
+    def __init__(self, repository):
         self._repository = repository
         self._devices: dict[str, Device] = {}
         self._lock = asyncio.Lock()

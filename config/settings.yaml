@@ -7,9 +7,6 @@ api:
 logging:
   level: DEBUG
 
-storage:
-  registry_db_path: ~/eidolon/db/registry.sqlite3
-
 livekit:
   api_url: http://127.0.0.1:7880
   api_key: LIVEKIT_API_KEY
@@ -35,6 +32,16 @@ admin_probe:
   degraded_after_missed_probes: 2
   offline_after_missed_probes: 3
   command_timeout_seconds: 30
+
+# ESP32 设备会话策略：
+# - pending_only: 默认/生产模式。已审批但未绑定或 Admin resolve 失败的设备
+#   只能进入 eidolon-pending，等待完成 agent 绑定。
+# - dev_direct_voice: dev/test 模式。设备仍必须通过签名校验且 approved=true；
+#   当 Admin 返回未绑定/未找到时，Hub 直接签发 voice room token，便于
+#   channel.providers.brain_provider=direct_llm 时绕过暂不可用的 agent/memory
+#   做 ESP32 barge-in 联调。联调结束可改回 pending_only。
+device_session:
+  unbound_device_policy: dev_direct_voice
 
 # Phase 32.A: hub validates user_id at /api/config time via this admin
 # URL (LiveKit-standard pattern: trust participant.identity, look up

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from eidolon_sdk.biz.registry import resolve_registry_db_path
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
@@ -162,11 +161,17 @@ class ProactiveWakeConfig:
     command_ttl_ms: int = 30_000
 
 
+DEVICE_SESSION_POLICY_PENDING_ONLY = "pending_only"
+DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE = "dev_direct_voice"
+VALID_DEVICE_SESSION_POLICIES = {
+    DEVICE_SESSION_POLICY_PENDING_ONLY,
+    DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE,
+}
+
+
 @dataclass
-class StorageConfig:
-    registry_db_path: Path | str = field(
-        default_factory=resolve_registry_db_path
-    )
+class DeviceSessionConfig:
+    unbound_device_policy: str = DEVICE_SESSION_POLICY_PENDING_ONLY
 
 
 def _outbound_ipv4() -> str:
@@ -325,15 +330,6 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
     return RuntimeAdminConfig(admin_api_url=admin_url)
 
 
-def _storage_from_yaml_and_env(y: dict[str, Any]) -> StorageConfig:
-    sec = _section(y, "storage")
-    return StorageConfig(
-        registry_db_path=resolve_registry_db_path(
-            str(sec.get("registry_db_path") or "").strip() or None
-        )
-    )
-
-
 def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     sec = _section(y, "admin_probe")
     if not sec:
@@ -378,6 +374,20 @@ def _proactive_wake_from_yaml(y: dict[str, Any]) -> ProactiveWakeConfig:
     )
 
 
+def _device_session_from_yaml(y: dict[str, Any]) -> DeviceSessionConfig:
+    sec = _section(y, "device_session")
+    raw = str(
+        sec.get("unbound_device_policy", DEVICE_SESSION_POLICY_PENDING_ONLY)
+    ).strip().lower()
+    if raw not in VALID_DEVICE_SESSION_POLICIES:
+        allowed = ", ".join(sorted(VALID_DEVICE_SESSION_POLICIES))
+        raise ValueError(
+            "device_session.unbound_device_policy must be one of: "
+            f"{allowed}; got {raw!r}"
+        )
+    return DeviceSessionConfig(unbound_device_policy=raw)
+
+
 @dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
@@ -388,8 +398,8 @@ class AppConfig:
     admin: AdminConfig = field(default_factory=AdminConfig)
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
-    storage: StorageConfig = field(default_factory=StorageConfig)
     proactive_wake: ProactiveWakeConfig = field(default_factory=ProactiveWakeConfig)
+    device_session: DeviceSessionConfig = field(default_factory=DeviceSessionConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -404,8 +414,8 @@ class AppConfig:
             admin=_admin_from_yaml(y),
             control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
-            storage=_storage_from_yaml_and_env(y),
             proactive_wake=_proactive_wake_from_yaml(y),
+            device_session=_device_session_from_yaml(y),
         )
 
 

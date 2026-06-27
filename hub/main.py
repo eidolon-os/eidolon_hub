@@ -7,7 +7,8 @@ import logging
 from contextlib import suppress
 
 import httpx
-from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
+from eidolon_data import DataStore, load_settings
+from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
 from eidolon_sdk.biz.admin import AdminClient
 from fastapi import FastAPI
 
@@ -38,8 +39,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         setup_logging(level=app_config.logging.level)
         logger.info("Starting Eidolon Hub v%s", hub.__version__)
 
-        registry_store = RegistrySqliteStore(app_config.storage.registry_db_path)
-        device_manager = DeviceManager(DeviceRepository(registry_store))
+        data_store = DataStore.open(load_settings())
+        device_manager = DeviceManager(EidolonDataDeviceRegistryRepository(data_store))
         await device_manager.load()
         admin_runtime = LiveKitAdminRuntime(app_config)
         control_bridge = LiveKitControlBridge(app_config, admin_runtime)
@@ -57,7 +58,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         admin_client = AdminClient(http_client, app_config.runtime_admin.admin_api_url)
 
         app.state.device_manager = device_manager
-        app.state.registry_store = registry_store
+        app.state.data_store = data_store
         app.state.admin_runtime = admin_runtime
         app.state.control_bridge = control_bridge
         app.state.discovery_state = discovery_state
@@ -116,7 +117,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         await proactive_wake.stop()
         await control_bridge.stop()
         await device_manager.save()
-        await registry_store.dispose()
+        await data_store.close()
         await http_client.aclose()
         logger.info("Hub stopped")
 

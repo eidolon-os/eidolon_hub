@@ -8,6 +8,7 @@ license = { text = "MIT" }
 
 dependencies = [
     "eidolon-sdk",
+    "eidolon-data",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "pyyaml",
@@ -40,6 +41,7 @@ dev = [
 
 [tool.uv.sources]
 eidolon-sdk = { path = "../eidolon_sdk", editable = true }
+eidolon-data = { path = "../eidolon_data", editable = true }
 
 [tool.ruff]
 line-length = 100

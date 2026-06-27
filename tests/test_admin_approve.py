@@ -21,7 +21,8 @@ from types import SimpleNamespace
 from typing import Iterator
 
 import pytest
-from eidolon_sdk.adapters.registry_sqlite import DeviceRepository, RegistrySqliteStore
+from eidolon_data import DataSettings, DataStore
+from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
 from fastapi.testclient import TestClient
 
 from hub.config import AppConfig
@@ -47,11 +48,11 @@ class _NoopAdminRuntime:
         )
 
 
-def _new_device_manager(db_path: Path) -> tuple[DeviceManager, RegistrySqliteStore]:
+def _new_device_manager(db_path: Path) -> tuple[DeviceManager, DataStore]:
     import asyncio
 
-    store = RegistrySqliteStore(db_path)
-    manager = DeviceManager(DeviceRepository(store))
+    store = DataStore.open(DataSettings(sqlite_path=str(db_path)))
+    manager = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
     asyncio.run(manager.load())
     return manager, store
 
@@ -62,7 +63,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     stubbed admin_runtime (LiveKit-free)."""
     import asyncio
 
-    registry_db = tmp_path / "registry.sqlite3"
+    registry_db = tmp_path / "eidolon.sqlite3"
     cfg = AppConfig()
     app = create_app(cfg)
 
@@ -76,7 +77,7 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
 
     yield TestClient(app)
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())
 
 
 # ---- happy path -----------------------------------------------------------
@@ -151,20 +152,20 @@ def test_set_enabled_returns_full_device_view(client: TestClient) -> None:
     assert devices["dev-001"]["enabled"] is False
 
 
-def test_set_enabled_persists_to_registry_db(tmp_path: Path) -> None:
+def test_set_enabled_persists_to_eidolon_data(tmp_path: Path) -> None:
     import asyncio
 
-    registry_db = tmp_path / "registry.sqlite3"
+    registry_db = tmp_path / "eidolon.sqlite3"
     dm, store = _new_device_manager(registry_db)
     asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
     asyncio.run(dm.set_enabled("dev-001", enabled=False))
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())
 
     reloaded, reloaded_store = _new_device_manager(registry_db)
     device = reloaded.get("dev-001")
     assert device is not None
     assert device.enabled is False
-    asyncio.run(reloaded_store.dispose())
+    asyncio.run(reloaded_store.close())
 
 
 def test_set_enabled_unknown_device_returns_404(client: TestClient) -> None:
@@ -176,9 +177,9 @@ def test_set_enabled_unknown_device_returns_404(client: TestClient) -> None:
 def test_device_manager_does_not_create_devices_json(tmp_path: Path) -> None:
     import asyncio
 
-    dm, store = _new_device_manager(tmp_path / "registry.sqlite3")
+    dm, store = _new_device_manager(tmp_path / "eidolon.sqlite3")
     asyncio.run(dm.register_seen(device_id="dev-001", name="Test Device"))
     asyncio.run(dm.set_enabled("dev-001", enabled=False))
 
     assert not (tmp_path / "devices.json").exists()
-    asyncio.run(store.dispose())
+    asyncio.run(store.close())

@@ -40,9 +40,10 @@ GET /api/config
 Query:
   client_type: esp32 (default) | web
   room_name: optional for esp32 (auto if omitted); required for web
-  participant_name: required when client_type=web
-  agent_mode: streaming|ptt
-Headers (esp32 only): X-Device-ID: <device-id>
+  user_id: required when client_type=web
+  agent_mode: streaming|ptt  # LiveKit agent dispatch mode, not duplex capability
+  Headers (esp32 only): X-Device-ID: <device-id>
+  Headers (esp32/web):  X-Device-Interaction-Mode: half_duplex|full_duplex
 ```
 
 ESP32 响应体与原先 `/api/esp32/config` 相同；Web 响应体与原先 `/api/web/config` 相同（`identity` + `accessToken`）。
