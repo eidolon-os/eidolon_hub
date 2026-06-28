@@ -103,6 +103,7 @@ class DeviceManager:
         fingerprint: str,
         nonce: str,
         name: str = "",
+        client_ip: str = "",
     ) -> Device:
         """Register/touch a signed device config request.
 
@@ -116,6 +117,8 @@ class DeviceManager:
             if not metadata.get("public_key"):
                 metadata["public_key"] = public_key
                 metadata["fingerprint"] = fingerprint
+            if client_ip:
+                metadata["last_ip"] = client_ip
             recent = metadata.setdefault("recent_nonces", [])
             if nonce in recent:
                 raise ValueError("replayed device nonce")

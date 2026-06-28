@@ -17,6 +17,7 @@ class AdminDevice(BaseModel):
     approved: bool = False
     approved_at: datetime | None = None
     last_seen: datetime | None = None
+    last_ip: str = ""
     status: str = "offline"
     room_name: str = ""
     participant_sid: str = ""

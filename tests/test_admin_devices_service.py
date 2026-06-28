@@ -67,7 +67,7 @@ async def test_admin_devices_only_lists_registered_devices(tmp_path: Path):
     await manager.register_seen(
         device_id="esp32-1",
         name="Touch AMOLED",
-        metadata={"kind": "esp32"},
+        metadata={"kind": "esp32", "last_ip": "192.168.1.42"},
     )
 
     rows = await build_admin_devices(
@@ -77,6 +77,7 @@ async def test_admin_devices_only_lists_registered_devices(tmp_path: Path):
 
     assert [row.device_id for row in rows] == ["esp32-1"]
     assert rows[0].kind == "esp32"
+    assert rows[0].last_ip == "192.168.1.42"
     assert rows[0].status == "online"
     assert rows[0].room_name == "device-esp32-1"
     await store.close()
@@ -90,7 +91,7 @@ async def test_refresh_admin_devices_runs_probe_then_returns_registered_devices(
     await manager.register_seen(
         device_id="esp32-1",
         name="Touch AMOLED",
-        metadata={"kind": "esp32"},
+        metadata={"kind": "esp32", "last_ip": "192.168.1.42"},
     )
     runtime = _RefreshRuntime()
     bridge = _ControlBridge()
@@ -105,5 +106,6 @@ async def test_refresh_admin_devices_runs_probe_then_returns_registered_devices(
     assert runtime.probed_device_ids == ["esp32-1"]
     assert bridge.synced_rooms == ["device-esp32-1"]
     assert [row.device_id for row in rows] == ["esp32-1"]
+    assert rows[0].last_ip == "192.168.1.42"
     assert rows[0].participant_sid == "PA_ESP32"
     await store.close()

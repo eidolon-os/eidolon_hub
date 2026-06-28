@@ -29,6 +29,7 @@ async def build_admin_devices(
                 approved=device.approved,
                 approved_at=device.approved_at,
                 last_seen=last_seen,
+                last_ip=str((device.metadata or {}).get("last_ip") or ""),
                 status=p.status if p else "offline",
                 room_name=p.room_name if p else "",
                 participant_sid=p.participant_sid if p else "",

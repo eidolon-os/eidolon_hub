@@ -105,6 +105,9 @@ def test_config_esp32_default_client_type(client: TestClient):
     assert data["config"]["room_name"] == "eidolon-pending"
     assert data["device"]["approved"] is False
     assert data["device"]["bound"] is False
+    stored = client.app.state.device_manager.get("dev-1")
+    assert stored is not None
+    assert stored.metadata["last_ip"] == "testclient"
     public_der = key.public_key().public_bytes(
         Encoding.DER,
         PublicFormat.SubjectPublicKeyInfo,

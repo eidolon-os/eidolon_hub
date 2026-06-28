@@ -360,6 +360,7 @@ async def _esp32_response(
             public_key=public_key,
             fingerprint=fingerprint,
             nonce=auth_headers.nonce,
+            client_ip=request.client.host if request.client else "",
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
