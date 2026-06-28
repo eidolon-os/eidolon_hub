@@ -102,6 +102,8 @@ class LiveKitAdminRuntime:
                         current.missed_probes += 1
                         if current.missed_probes >= self._config.admin.offline_after_missed_probes:
                             current.status = "offline"
+                            current.room_name = ""
+                            current.participant_sid = ""
                         elif current.missed_probes >= self._config.admin.degraded_after_missed_probes:
                             current.status = "degraded"
                     next_state[device_id] = current
@@ -124,6 +126,8 @@ class LiveKitAdminRuntime:
                 for device_id in set(known_device_ids) | set(self._state.keys()):
                     current = self._state.get(device_id) or DevicePresence(device_id=device_id)
                     current.status = "unknown"
+                    current.room_name = ""
+                    current.participant_sid = ""
                     current.missed_probes += 1
                     self._state[device_id] = current
             logger.warning("LiveKit probe cycle failed: %s", exc)
@@ -170,7 +174,7 @@ class LiveKitAdminRuntime:
     ) -> dict[str, Any]:
         async with self._lock:
             presence = self._state.get(device_id)
-            if not presence or not presence.room_name or presence.status == "offline":
+            if not presence or not presence.room_name or presence.status != "online":
                 raise ValueError(f"Device {device_id} is not currently connected")
             room_name = presence.room_name
 

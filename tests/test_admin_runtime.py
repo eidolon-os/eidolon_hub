@@ -135,6 +135,27 @@ async def test_probe_failure_marks_unknown():
 
 
 @pytest.mark.asyncio
+async def test_offline_probe_clears_stale_room_and_blocks_commands():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    cfg.admin.offline_after_missed_probes = 1
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    fake_api.room._participants = {"room-a": []}
+    await runtime.run_probe_cycle(["esp32-1"])
+
+    devices = await runtime.get_presence_snapshot()
+    assert devices[0].status == "offline"
+    assert devices[0].room_name == ""
+    assert devices[0].participant_sid == ""
+    with pytest.raises(ValueError, match="not currently connected"):
+        await runtime.send_command("esp32-1", {"reason": "test"}, op="device.identify")
+
+
+@pytest.mark.asyncio
 async def test_mark_command_timeout_and_metrics():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
