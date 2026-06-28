@@ -8,7 +8,7 @@ from hub.api.routers.admin.schemas import (
     ApproveDeviceResponse,
     UnregisterDeviceResponse,
 )
-from hub.api.routers.admin.service import build_admin_devices
+from hub.api.routers.admin.service import build_admin_devices, refresh_admin_devices
 
 router = APIRouter(prefix="/api/admin/devices", tags=["Admin Devices"])
 
@@ -23,6 +23,31 @@ async def list_devices(
     devices = await build_admin_devices(runtime=runtime, device_manager=device_manager)
     if status:
         devices = [device for device in devices if device.status == status]
+    return AdminDeviceListResponse(devices=devices)
+
+
+@router.post("/refresh", response_model=AdminDeviceListResponse)
+async def refresh_devices(request: Request):
+    """Force a LiveKit presence probe and return the current Hub device view.
+
+    The device rows still come from Hub's persistent registry. Refresh only
+    updates the runtime reachability overlay before composing the response.
+    """
+    runtime = request.app.state.admin_runtime
+    device_manager = request.app.state.device_manager
+    control_bridge = getattr(request.app.state, "control_bridge", None)
+    config = getattr(request.app.state, "config", None)
+    timeout = getattr(
+        getattr(config, "admin", None),
+        "command_timeout_seconds",
+        None,
+    )
+    devices = await refresh_admin_devices(
+        runtime=runtime,
+        device_manager=device_manager,
+        control_bridge=control_bridge,
+        command_timeout_seconds=timeout,
+    )
     return AdminDeviceListResponse(devices=devices)
 
 
