@@ -509,10 +509,8 @@ async def _web_response(
         request.app.state, "admin_client", None
     )
 
-    # Phase 33.A6: enabled rollback removed — admin validation is now
-    # unconditional. Channel 32.D already removed its symmetric
-    # static-token fallback, so any hub bypass would only mint a
-    # doomed LK token (channel /api/resolve would 404 the next step).
+    # Admin validation is unconditional. If hub bypasses it, channel will be
+    # unable to resolve the participant into a runtime identity envelope.
 
     if admin_client is None:
         raise HTTPException(

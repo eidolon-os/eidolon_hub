@@ -41,10 +41,9 @@ def generate_token(
         participant_metadata: Optional dict embedded as the participant's
             ``metadata`` field — server-side LiveKit makes it readable to
             other participants in the room (including the channel-worker
-            agent). Phase 32.A uses this to ship the device JWT to channel
-            without exposing it to the browser JS. ``None`` (default) emits
-            no participant metadata so behavior is unchanged for callers
-            that don't opt in (esp32 path, tests).
+            agent). Hub only puts entrance hints here; channel resolves those
+            hints into a runtime identity envelope before signing its runtime
+            JWT. ``None`` (default) emits no participant metadata.
         dispatch_agent: Whether LiveKit should dispatch the Eidolon channel
             worker for this room. Pending-device rooms set this to false.
         can_publish: Media publish grant. Pending-device rooms keep this false.
