@@ -69,7 +69,7 @@ async def test_control_bridge_applies_livekit_ack_packet():
 
     await bridge._handle_packet(packet)
 
-    stored = runtime.get_command(command["command_id"])
+    stored = await runtime.get_command(command["command_id"])
     assert stored["status"] == "accepted"
     assert stored["ack"]["code"] == "OK"
 
@@ -152,4 +152,5 @@ async def test_control_bridge_ignores_non_ack_control_packet():
 
     await bridge._handle_packet(packet)
 
-    assert runtime.get_command(command["command_id"])["status"] == "sent"
+    stored = await runtime.get_command(command["command_id"])
+    assert stored["status"] == "sent"

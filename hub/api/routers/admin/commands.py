@@ -20,6 +20,9 @@ async def send_device_command(
             payload=req.payload,
             topic=req.topic,
             op=req.op,
+            source_device_id=req.source_device_id,
+            runtime_caller_id=req.runtime_caller_id,
+            runtime_session_id=req.runtime_session_id,
             ttl_ms=req.ttl_ms,
             qos=req.qos,
             priority=req.priority,
@@ -33,7 +36,7 @@ async def send_device_command(
 @router.get("/commands/{command_id}", response_model=CommandResponse)
 async def get_command(command_id: str, request: Request):
     runtime = request.app.state.admin_runtime
-    command = runtime.get_command(command_id)
+    command = await runtime.get_command(command_id)
     if not command:
         raise HTTPException(status_code=404, detail=f"Command not found: {command_id}")
     return CommandResponse(**command)
@@ -45,5 +48,5 @@ async def list_commands(
     limit: int = Query(default=50, ge=1, le=200),
 ):
     runtime = request.app.state.admin_runtime
-    commands = runtime.list_commands(limit=limit)
+    commands = await runtime.list_commands(limit=limit)
     return CommandListResponse(commands=[CommandResponse(**item) for item in commands])

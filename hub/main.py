@@ -42,7 +42,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         data_store = DataStore.open(load_settings())
         device_manager = DeviceManager(EidolonDataDeviceRegistryRepository(data_store))
         await device_manager.load()
-        admin_runtime = LiveKitAdminRuntime(app_config)
+        admin_runtime = LiveKitAdminRuntime(app_config, data_store=data_store)
         control_bridge = LiveKitControlBridge(app_config, admin_runtime)
         admin_runtime.set_control_bridge(control_bridge)
         discovery_state = MdnsDiscoveryState()

@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -44,8 +44,9 @@ class DevicePresence:
 
 
 class LiveKitAdminRuntime:
-    def __init__(self, config: AppConfig):
+    def __init__(self, config: AppConfig, data_store: Any | None = None):
         self._config = config
+        self._data_store = data_store
         self._state: dict[str, DevicePresence] = {}
         self._probe_health = ProbeHealth()
         self._lock = asyncio.Lock()
@@ -167,6 +168,9 @@ class LiveKitAdminRuntime:
         payload: dict[str, Any],
         topic: str = CONTROL_TOPIC,
         *,
+        source_device_id: str | None = None,
+        runtime_caller_id: str | None = None,
+        runtime_session_id: str | None = None,
         op: str | None = None,
         ttl_ms: int = 30_000,
         qos: CommandQoS = "ack",
@@ -197,6 +201,9 @@ class LiveKitAdminRuntime:
         command = {
             "command_id": command_id,
             "device_id": device_id,
+            "runtime_caller_id": runtime_caller_id,
+            "runtime_session_id": runtime_session_id,
+            "source_device_id": source_device_id,
             "topic": topic,
             "op": resolved_op,
             "payload": payload,
@@ -211,8 +218,10 @@ class LiveKitAdminRuntime:
             "ack": None,
             "result": None,
         }
+        await self._hydrate_command_binding(command)
         self._commands[command_id] = command
         self._command_order.append(command_id)
+        await self._persist_command(command)
         message = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
 
         livekit_api = self._build_livekit_api()
@@ -234,6 +243,7 @@ class LiveKitAdminRuntime:
             command["updated_at"] = datetime.now(UTC).isoformat()
         finally:
             await livekit_api.aclose()
+        await self._persist_command(command)
         await self._emit_event({"type": "command_updated", **command})
         if command["status"] == "failed":
             raise ValueError(command["error"])
@@ -286,6 +296,7 @@ class LiveKitAdminRuntime:
             message = envelope.get("message") or envelope.get("code") or command["status"]
             command["error"] = str(message)
         command["updated_at"] = datetime.now(UTC).isoformat()
+        await self._persist_command(command)
         await self._emit_event({"type": "command_updated", **command})
         return command
 
@@ -298,16 +309,38 @@ class LiveKitAdminRuntime:
         command["status"] = status
         command["error"] = error
         command["updated_at"] = datetime.now(UTC).isoformat()
+        await self._persist_command(command)
         await self._emit_event({"type": "command_updated", **command})
         return command
 
-    def get_command(self, command_id: str) -> dict[str, Any] | None:
-        return self._commands.get(command_id)
+    async def get_command(self, command_id: str) -> dict[str, Any] | None:
+        command = self._commands.get(command_id)
+        if command is not None:
+            return command
+        if self._data_store is None:
+            return None
+        row = await self._data_store.body_commands.get_command(command_id)
+        if row is None:
+            return None
+        return _command_from_row(row)
 
-    def list_commands(self, limit: int = 50) -> list[dict[str, Any]]:
+    async def list_commands(self, limit: int = 50) -> list[dict[str, Any]]:
         ids = self._command_order[-limit:]
         ids.reverse()
-        return [self._commands[item] for item in ids if item in self._commands]
+        commands = [self._commands[item] for item in ids if item in self._commands]
+        if self._data_store is None or len(commands) >= limit:
+            return commands[:limit]
+
+        seen = {item["command_id"] for item in commands}
+        rows = await self._data_store.body_commands.list_recent(limit=limit)
+        for row in rows:
+            if row.command_id in seen:
+                continue
+            commands.append(_command_from_row(row))
+            seen.add(row.command_id)
+            if len(commands) >= limit:
+                break
+        return commands
 
     async def mark_command_timeout(self, timeout_seconds: int) -> int:
         now = datetime.now(UTC)
@@ -322,6 +355,7 @@ class LiveKitAdminRuntime:
             command["updated_at"] = now.isoformat()
             command["error"] = f"no ack/result within {timeout_seconds}s"
             touched += 1
+            await self._persist_command(command)
             await self._emit_event({"type": "command_updated", **command})
         return touched
 
@@ -375,3 +409,113 @@ class LiveKitAdminRuntime:
             if queue.full():
                 continue
             await queue.put(payload)
+
+    async def _hydrate_command_binding(self, command: dict[str, Any]) -> None:
+        if self._data_store is None:
+            return
+        if command.get("owner_id") is not None:
+            return
+        try:
+            row = await self._data_store.devices.get_device(command["device_id"])
+        except Exception:
+            logger.exception(
+                "Failed to load device binding for body command command_id=%s device_id=%s",
+                command.get("command_id"),
+                command.get("device_id"),
+            )
+            return
+        if row is None:
+            return
+        command["owner_id"] = row.owner_id
+        command["companion_id"] = row.bound_companion_id
+
+    async def _persist_command(self, command: dict[str, Any]) -> None:
+        if self._data_store is None:
+            return
+        try:
+            await self._data_store.body_commands.upsert_command(
+                command_id=command["command_id"],
+                owner_id=command.get("owner_id"),
+                companion_id=command.get("companion_id"),
+                runtime_caller_id=command.get("runtime_caller_id"),
+                runtime_session_id=command.get("runtime_session_id"),
+                device_id=command["device_id"],
+                source_device_id=command.get("source_device_id"),
+                topic=command.get("topic") or "",
+                op=command.get("op") or "",
+                status=command.get("status") or "queued",
+                payload_json=command.get("payload") or {},
+                envelope_json=command.get("envelope") or {},
+                ack_json=command.get("ack"),
+                result_json=_json_dict_or_none(command.get("result")),
+                ttl_ms=int(command.get("ttl_ms") or 30_000),
+                qos=str(command.get("qos") or "ack"),
+                priority=str(command.get("priority") or "normal"),
+                error=str(command.get("error") or ""),
+                created_at=_parse_datetime(command.get("created_at")),
+                updated_at=_parse_datetime(command.get("updated_at")),
+                expires_at=_command_expires_at(command),
+            )
+        except Exception:
+            logger.exception(
+                "Failed to persist body command command_id=%s device_id=%s",
+                command.get("command_id"),
+                command.get("device_id"),
+            )
+
+
+def _command_from_row(row: Any) -> dict[str, Any]:
+    return {
+        "command_id": row.command_id,
+        "owner_id": row.owner_id,
+        "companion_id": row.companion_id,
+        "device_id": row.device_id,
+        "runtime_caller_id": row.runtime_caller_id,
+        "runtime_session_id": row.runtime_session_id,
+        "source_device_id": row.source_device_id,
+        "topic": row.topic,
+        "op": row.op,
+        "payload": row.payload_json or {},
+        "envelope": row.envelope_json or {},
+        "ttl_ms": row.ttl_ms,
+        "qos": row.qos,
+        "priority": row.priority,
+        "status": row.status,
+        "created_at": row.created_at.isoformat(),
+        "updated_at": row.updated_at.isoformat(),
+        "error": row.error or "",
+        "ack": row.ack_json,
+        "result": row.result_json,
+    }
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _command_expires_at(command: dict[str, Any]) -> datetime | None:
+    created_at = _parse_datetime(command.get("created_at"))
+    if created_at is None:
+        return None
+    try:
+        ttl_ms = int(command.get("ttl_ms") or 0)
+    except (TypeError, ValueError):
+        return None
+    if ttl_ms <= 0:
+        return None
+    return created_at + timedelta(milliseconds=ttl_ms)
+
+
+def _json_dict_or_none(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        return value
+    return {"value": value}

@@ -4,6 +4,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from eidolon_data import DataSettings, DataStore
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 
 from hub.config import AppConfig, LiveKitConfig
@@ -185,11 +186,11 @@ async def test_mark_command_timeout_and_metrics():
     touched = await runtime.mark_command_timeout(timeout_seconds=0)
     assert touched == 1
 
-    stored = runtime.get_command(command["command_id"])
+    stored = await runtime.get_command(command["command_id"])
     assert stored is not None
     assert stored["status"] == "timeout"
 
-    commands = runtime.list_commands(limit=10)
+    commands = await runtime.list_commands(limit=10)
     assert commands
     assert commands[0]["command_id"] == command["command_id"]
 
@@ -253,4 +254,76 @@ async def test_apply_command_ack_rejects_wrong_sender():
     )
 
     assert updated is None
-    assert runtime.get_command(command["command_id"])["status"] == "sent"
+    stored = await runtime.get_command(command["command_id"])
+    assert stored["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_send_command_persists_body_command_status(tmp_path):
+    store = DataStore.open(DataSettings(sqlite_path=str(tmp_path / "eidolon.sqlite3")))
+    await store.init_schema()
+    try:
+        owner = await store.owners.create(owner_id="owner-1", display_name="Owner")
+        companion = await store.companions.create(
+            companion_id="companion-1",
+            owner_id=owner.owner_id,
+            display_name="Xiaoyi",
+        )
+        await store.devices.create_device(
+            device_id="esp32-1",
+            owner_id=owner.owner_id,
+            kind="esp32",
+            bound_companion_id=companion.companion_id,
+        )
+
+        cfg = AppConfig()
+        cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+        runtime = LiveKitAdminRuntime(cfg, data_store=store)
+        fake_api = _FakeLiveKitAPI()
+        runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+        await runtime.run_probe_cycle(["esp32-1"])
+        command = await runtime.send_command(
+            "esp32-1",
+            {},
+            op="device.identify",
+            runtime_caller_id="rc-1",
+            runtime_session_id="rs-1",
+            source_device_id="source-1",
+        )
+        row = await store.body_commands.get_command(command["command_id"])
+
+        assert row is not None
+        assert row.status == "sent"
+        assert row.owner_id == owner.owner_id
+        assert row.companion_id == companion.companion_id
+        assert row.device_id == "esp32-1"
+        assert row.runtime_caller_id == "rc-1"
+        assert row.runtime_session_id == "rs-1"
+        assert row.source_device_id == "source-1"
+
+        await runtime.apply_command_ack(
+            {
+                "v": 1,
+                "kind": "ack",
+                "ref": command["command_id"],
+                "device_id": "esp32-1",
+                "op": "device.identify",
+                "status": "accepted",
+                "code": "OK",
+            }
+        )
+        persisted = await store.body_commands.get_command(command["command_id"])
+        assert persisted is not None
+        assert persisted.status == "accepted"
+        assert persisted.ack_json["code"] == "OK"
+
+        cold_runtime = LiveKitAdminRuntime(cfg, data_store=store)
+        cold_command = await cold_runtime.get_command(command["command_id"])
+        assert cold_command is not None
+        assert cold_command["status"] == "accepted"
+        assert cold_command["runtime_caller_id"] == "rc-1"
+        assert cold_command["runtime_session_id"] == "rs-1"
+        assert cold_command["source_device_id"] == "source-1"
+    finally:
+        await store.close()

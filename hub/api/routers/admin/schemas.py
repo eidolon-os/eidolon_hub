@@ -66,6 +66,9 @@ class UnregisterDeviceResponse(BaseModel):
 class CommandRequest(BaseModel):
     topic: str = Field(default=CONTROL_TOPIC)
     op: str | None = Field(default=None)
+    source_device_id: str | None = Field(default=None)
+    runtime_caller_id: str | None = Field(default=None)
+    runtime_session_id: str | None = Field(default=None)
     payload: dict[str, Any] = Field(default_factory=dict)
     ttl_ms: int = Field(default=30_000, ge=1_000, le=600_000)
     qos: str = Field(default="ack", pattern="^(fire_and_forget|ack|result)$")
@@ -75,6 +78,9 @@ class CommandRequest(BaseModel):
 class CommandResponse(BaseModel):
     command_id: str
     device_id: str
+    runtime_caller_id: str | None = None
+    runtime_session_id: str | None = None
+    source_device_id: str | None = None
     topic: str
     op: str = ""
     status: str
