@@ -122,6 +122,23 @@ async def test_send_command_to_online_device():
 
 
 @pytest.mark.asyncio
+async def test_send_command_normalizes_legacy_ui_aliases():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command("esp32-1", {}, op="identify")
+
+    assert command["op"] == "device.identify"
+    sent = fake_api.room.sent_payloads[0]
+    envelope = json.loads(sent.data.decode("utf-8"))
+    assert envelope["op"] == "device.identify"
+
+
+@pytest.mark.asyncio
 async def test_probe_failure_marks_unknown():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
