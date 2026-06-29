@@ -58,9 +58,9 @@ control_bridge:
   livekit_url: ""
   identity_prefix: eidolon-hub-control
 
-# Phase 32.A: hub validates user_id at /api/config time via this admin
+# Hub validates owner_id at /api/config time via this admin
 # URL. Hub does NOT sign device JWTs — channel does that under plan D
 # (LiveKit-standard: trust participant.identity, look up server-side).
-# Phase 33.A6 removed the ``enabled`` flag — admin lookup unconditional.
+# Admin lookup is unconditional.
 runtime_admin:
   admin_api_url: http://127.0.0.1:9000

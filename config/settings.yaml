@@ -52,12 +52,10 @@ control_bridge:
 device_session:
   unbound_device_policy: dev_direct_voice
 
-# Phase 32.A: hub validates user_id at /api/config time via this admin
+# Hub validates owner_id at /api/config time via this admin
 # URL (LiveKit-standard pattern: trust participant.identity, look up
 # the rest server-side). Hub does NOT sign device JWTs — channel does
-# that under plan D. Phase 33.A6 removed the ``enabled`` flag — admin
-# lookup is unconditional now (the legacy bypass was inconsistent
-# with channel's already-removed static-token fallback).
+# that under plan D. Admin lookup is unconditional.
 runtime_admin:
   admin_api_url: http://127.0.0.1:9000
 

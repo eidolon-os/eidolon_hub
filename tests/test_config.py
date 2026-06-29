@@ -12,7 +12,7 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from eidolon_data import DataSettings, DataStore
 from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
-from eidolon_sdk.biz.admin import AdminPrecondition
+from eidolon_sdk.biz.admin import AdminResolvePrecondition, ResolvedContext
 from eidolon_sdk.biz.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
 
@@ -44,6 +44,7 @@ def client(tmp_path):
         asyncio.run(dm.load())
         app.state.device_manager = dm
         app.state.admin_client = AsyncMock()
+        app.state.admin_resolve_client = AsyncMock()
         yield TestClient(app)
     asyncio.run(store.close())
 
@@ -83,6 +84,21 @@ def _signed_device_headers(
     if include_public_key:
         headers["X-Device-Public-Key"] = _b64url(public_der)
     return headers
+
+
+def _resolved_context(
+    device_id: str,
+    *,
+    interaction_mode: str | None = None,
+) -> ResolvedContext:
+    return ResolvedContext(
+        owner_id="owner-test",
+        companion_id="companion-test",
+        device_id=device_id,
+        memory_realm_id="realm-test",
+        genome_id="genome-test",
+        interaction_mode=interaction_mode,
+    )
 
 
 def test_config_esp32_default_client_type(client: TestClient):
@@ -133,9 +149,9 @@ def test_config_esp32_explicit_client_type(client: TestClient):
         )
     assert r0.status_code == 200
     asyncio.run(dm.approve("dev-2"))
-    client.app.state.admin_client.resolve_device.return_value = {
-        "context": {"device_id": "dev-2", "user_id": "u", "agent_id": "a"}
-    }
+    client.app.state.admin_resolve_client.resolve_device.return_value = _resolved_context(
+        "dev-2"
+    )
     with patch(
         "hub.api.routers.system.config.generate_token",
         return_value=("dev-2", "jwt-2"),
@@ -172,9 +188,9 @@ def _approve_and_resolve(client: TestClient, device_id: str, key) -> None:
         )
     assert r0.status_code == 200
     asyncio.run(dm.approve(device_id))
-    client.app.state.admin_client.resolve_device.return_value = {
-        "context": {"device_id": device_id, "user_id": "u", "agent_id": "a"}
-    }
+    client.app.state.admin_resolve_client.resolve_device.return_value = _resolved_context(
+        device_id
+    )
 
 
 def test_config_esp32_stamps_interaction_mode_from_header(client: TestClient):
@@ -321,14 +337,9 @@ def test_config_esp32_admin_override_beats_device_header(client: TestClient):
     the device's self-declared header."""
     key = ec.generate_private_key(ec.SECP256R1())
     _approve_and_resolve(client, "dev-override", key)
-    client.app.state.admin_client.resolve_device.return_value = {
-        "context": {
-            "device_id": "dev-override",
-            "user_id": "u",
-            "agent_id": "a",
-            "interaction_mode": "full_duplex",
-        }
-    }
+    client.app.state.admin_resolve_client.resolve_device.return_value = _resolved_context(
+        "dev-override", interaction_mode="full_duplex"
+    )
     with patch(
         "hub.api.routers.system.config.generate_token",
         return_value=("dev-override", "jwt"),
@@ -394,7 +405,7 @@ def test_config_esp32_approved_waits_for_binding(client: TestClient):
         )
     assert r0.status_code == 200
     asyncio.run(dm.approve("dev-3"))
-    client.app.state.admin_client.resolve_device.side_effect = AdminPrecondition(
+    client.app.state.admin_resolve_client.resolve_device.side_effect = AdminResolvePrecondition(
         412, "device is not bound"
     )
     with patch(
@@ -434,7 +445,7 @@ def test_config_esp32_dev_direct_voice_allows_approved_unbound(client: TestClien
         )
     assert r0.status_code == 200
     asyncio.run(dm.approve("dev-4"))
-    client.app.state.admin_client.resolve_device.side_effect = AdminPrecondition(
+    client.app.state.admin_resolve_client.resolve_device.side_effect = AdminResolvePrecondition(
         412, "device is not bound"
     )
     with patch(
@@ -510,16 +521,16 @@ def test_config_esp32_rejects_public_key_change(client: TestClient):
 
 
 def test_config_web_missing_room(client: TestClient):
-    """Web path requires both ``room_name`` and ``user_id``."""
+    """Web path requires both ``room_name`` and ``owner_id``."""
     r = client.get(
         "/api/config",
-        params={"client_type": "web", "user_id": "manson"},
+        params={"client_type": "web", "owner_id": "manson"},
     )
     assert r.status_code == 422
 
 
-def test_config_web_missing_user_id(client: TestClient):
-    """Phase 33.A6: ``user_id`` is unconditionally required (rollback
+def test_config_web_missing_owner_id(client: TestClient):
+    """Phase 33.A6: ``owner_id`` is unconditionally required (rollback
     bypass removed). Happy path lives in test_config_web_user_id.py
     where admin_client is mocked."""
     r = client.get(
@@ -527,7 +538,7 @@ def test_config_web_missing_user_id(client: TestClient):
         params={"client_type": "web", "room_name": "r"},
     )
     assert r.status_code == 422
-    assert "user_id" in r.json()["detail"]
+    assert "owner_id" in r.json()["detail"]
 
 
 def test_livekit_rejects_inline_secrets_in_yaml():

@@ -4,8 +4,7 @@ channel.
 
 Three layers under test:
 
-  - **Validation**: owner_id required for web; deprecated user_id works
-    only as a compatibility alias.
+  - **Validation**: owner_id required for web.
   - **Resolution**: admin lookup happens; 404 if owner not in admin, 503
     if admin unreachable, 502 if admin 5xx.
   - **Token shape**: LiveKit identity = owner_id (channel reads this).
@@ -38,7 +37,6 @@ def cfg() -> AppConfig:
     c.esp32.livekit_url = "wss://example.test"
     c.livekit.api_key = "test-key"
     c.livekit.api_secret = "test-secret"
-    c.runtime_admin.enabled = True
     return c
 
 
@@ -149,16 +147,16 @@ def test_web_happy_path_lk_identity_is_owner_id(client: TestClient, fake_admin_c
     assert meta["owner_id"] == "manson"
 
 
-def test_web_user_id_alias_still_maps_to_owner_id(
+def test_web_user_id_alias_is_not_accepted(
     client: TestClient, fake_admin_client
 ):
-    fake_admin_client.get_owner.return_value = _owner_view("manson")
     r = client.get(
         "/api/config",
         params={"client_type": "web", "room_name": "R", "user_id": "manson"},
     )
-    assert r.status_code == 200, r.text
-    fake_admin_client.get_owner.assert_called_once_with("manson")
+    assert r.status_code == 422
+    assert "owner_id" in r.json()["detail"]
+    fake_admin_client.get_owner.assert_not_called()
 
 
 def test_web_defaults_full_duplex(client: TestClient, fake_admin_client):
@@ -213,14 +211,8 @@ def test_web_metadata_carries_no_device_token(
         assert meta.get("owner_id") == "manson"
 
 
-def test_web_admin_lookup_is_unconditional(
-    client: TestClient, fake_admin_client
-):
-    """Phase 33.A6: removed the ``runtime_admin.enabled=false``
-    rollback path — admin lookup is now mandatory for the web flow.
-    Any owner_id MUST round-trip through admin first; channel 32.D
-    already has no static-token fallback, so a bypass would only mint
-    LK tokens channel rejects on next /api/resolve call."""
+def test_web_admin_lookup_is_unconditional(client: TestClient, fake_admin_client):
+    """Any web owner_id must round-trip through admin before token minting."""
     # Hub always reaches out — even for a perfectly valid token request
     # we expect get_owner to be invoked.
     from eidolon_sdk.biz.admin import AdminNotFound

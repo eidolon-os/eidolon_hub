@@ -135,18 +135,15 @@ class ControlBridgeConfig:
 
 @dataclass
 class RuntimeAdminConfig:
-    """Phase 32.A: hub queries admin to validate ``user_id`` at
+    """Hub queries admin to validate ``owner_id`` at
     ``/api/config`` time. We follow LiveKit's "trust participant.identity,
     look up the rest server-side" pattern — hub mints the LK token but
     does NOT sign any device JWT here. channel does the runtime token
     signing under plan D, using the PAIRING_JWT_SECRET it shares with
     eidolon-agent.
 
-    Phase 33.A6: removed the ``enabled=false`` rollback flag. Channel
-    already deleted its static-token fallback in 32.D, so any hub-side
-    bypass would only mint LK tokens that channel will immediately
-    reject at admin /api/resolve. Removing it forces a single,
-    consistent runtime path through admin.
+    Admin lookup is unconditional; hub-side bypasses would mint LiveKit tokens
+    that channel rejects at admin /api/resolve.
 
     Hub consumes Admin's resolved business context; it does not store device
     bindings or own agent metadata.
@@ -319,10 +316,6 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
     it as an env var to look up.
     """
     sec = _section(y, "runtime_admin")
-    # backward compat: older yaml used the ``runtime_tokens`` block name
-    # before plan D moved token signing out of hub.
-    if not sec:
-        sec = _section(y, "runtime_tokens")
 
     yaml_url = str(sec.get("admin_api_url") or "").strip()
     if yaml_url and not yaml_url.startswith(("http://", "https://")):
@@ -331,9 +324,6 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
         "EIDOLON_ADMIN_API_URL", "http://127.0.0.1:9000"
     )
 
-    # Phase 33.A6: ``enabled`` was removed from RuntimeAdminConfig.
-    # If a legacy yaml still has ``enabled: false``, the loader silently
-    # ignores it — the runtime is unconditional now.
     return RuntimeAdminConfig(admin_api_url=admin_url)
 
 

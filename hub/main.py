@@ -9,7 +9,7 @@ from contextlib import suppress
 import httpx
 from eidolon_data import DataStore, load_settings
 from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
-from eidolon_sdk.biz.admin import AdminClient
+from eidolon_sdk.biz.admin import AdminClient, AdminResolveClient
 from fastapi import FastAPI
 
 import hub
@@ -55,6 +55,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             trust_env=False,
         )
         admin_client = AdminClient(http_client, app_config.runtime_admin.admin_api_url)
+        admin_resolve_client = AdminResolveClient(
+            http_client, app_config.runtime_admin.admin_api_url
+        )
 
         app.state.device_manager = device_manager
         app.state.data_store = data_store
@@ -64,6 +67,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.config = app_config
         app.state.http_client = http_client
         app.state.admin_client = admin_client
+        app.state.admin_resolve_client = admin_resolve_client
 
         probe_task = None
         await control_bridge.start()

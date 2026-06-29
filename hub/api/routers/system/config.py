@@ -10,7 +10,11 @@ from typing import Any
 from eidolon_sdk.biz.admin import (
     AdminClient,
     AdminNotFound,
-    AdminPrecondition,
+    AdminResolveClient,
+    AdminResolveNotFound,
+    AdminResolvePrecondition,
+    AdminResolveUnreachable,
+    AdminResolveUpstream,
     AdminUnreachable,
     AdminUpstreamError,
 )
@@ -92,15 +96,8 @@ def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
 
 
 def _admin_interaction_mode_override(resolved: Any) -> str | None:
-    """Extract a per-device interaction_mode override from admin's resolve
-    response (Phase 6). Returns a valid mode, or ``None`` when admin set no
-    override (or returned an unrecognized value — we don't let a bad admin
-    value override the device's own declaration)."""
-    if not isinstance(resolved, dict):
-        return None
-    context = resolved.get("context")
-    context = context if isinstance(context, dict) else resolved
-    raw = context.get("interaction_mode")
+    """Extract a per-device interaction_mode override from admin's resolve."""
+    raw = getattr(resolved, "interaction_mode", None)
     if not raw:
         return None
     candidate = str(raw).strip().lower()
@@ -380,16 +377,18 @@ async def _esp32_response(
         cfg.device_session.unbound_device_policy
         == DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE
     )
-    admin_client: AdminClient | None = getattr(request.app.state, "admin_client", None)
-    if admin_client is None:
+    admin_resolve_client: AdminResolveClient | None = getattr(
+        request.app.state, "admin_resolve_client", None
+    )
+    if admin_resolve_client is None:
         raise HTTPException(
             status_code=503,
-            detail="hub admin_client not initialized — restart hub",
+            detail="hub admin_resolve_client not initialized — restart hub",
         )
 
     try:
-        resolved = await admin_client.resolve_device(device_id)
-    except AdminPrecondition as exc:
+        resolved = await admin_resolve_client.resolve_device(device_id)
+    except AdminResolvePrecondition as exc:
         _log.info("device waiting binding device=%s detail=%s", device_id, exc.message)
         if allow_unbound_direct_voice:
             _log.warning(
@@ -415,7 +414,7 @@ async def _esp32_response(
             approved=True,
             fingerprint=fingerprint,
         )
-    except AdminNotFound as exc:
+    except AdminResolveNotFound as exc:
         _log.warning("device resolve not found device=%s detail=%s", device_id, exc)
         if allow_unbound_direct_voice:
             _log.warning(
@@ -441,9 +440,9 @@ async def _esp32_response(
             approved=True,
             fingerprint=fingerprint,
         )
-    except AdminUnreachable as exc:
+    except AdminResolveUnreachable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except AdminUpstreamError as exc:
+    except AdminResolveUpstream as exc:
         raise HTTPException(
             status_code=502, detail=f"admin upstream: {exc.message}"
         ) from exc
@@ -612,13 +611,6 @@ async def get_config(
             "the runtime envelope from this identity."
         ),
     ),
-    user_id: str | None = Query(
-        default=None,
-        description=(
-            "Deprecated alias for owner_id. Accepted temporarily for older web "
-            "clients while the product vocabulary migrates to owners."
-        ),
-    ),
     agent_mode: AgentMode = Query(
         AgentMode.STREAMING,
         description=(
@@ -683,24 +675,19 @@ async def get_config(
             detail="room_name is required when client_type=web",
         )
 
-    # Phase 33.A6: owner_id is unconditionally required for web — the
-    # rollback path that allowed bypass was removed because channel
-    # 32.D no longer has a matching static-token fallback anyway.
-    resolved_owner_id = owner_id or user_id
-    if not resolved_owner_id:
+    if not owner_id:
         raise HTTPException(
             status_code=422,
             detail=(
                 "owner_id is required when client_type=web; create the owner "
-                "in admin UI first if you don't have one. user_id is accepted "
-                "only as a deprecated alias."
+                "in admin UI first if you don't have one."
             ),
         )
 
     return await _web_response(
         request=request,
         room_name=room_name,
-        owner_id=resolved_owner_id,
+        owner_id=owner_id,
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(
             x_device_interaction_mode,
