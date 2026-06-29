@@ -253,9 +253,9 @@ def _active_esp32_response(
     bound: bool,
     fingerprint: str = "",
 ) -> ESP32ConfigResponse:
-    # Phase 32.B: tag the ESP32 token with kind=device so channel knows
-    # to dispatch /api/resolve/device/{id} (vs /api/resolve/user for
-    # the web flow). Symmetric to _web_response's metadata.
+    # Tag the ESP32 token with kind=device so channel knows to dispatch
+    # /api/resolve/device/{id} (vs /api/resolve/owner for the web flow).
+    # Symmetric to _web_response's metadata.
     # Phase 4: carry the device-declared interaction_mode so channel can
     # pick a per-session turn policy (half_duplex -> no barge-in).
     try:
@@ -470,40 +470,41 @@ async def _esp32_response(
     )
 
 
-async def _validate_user_against_admin(
+async def _validate_owner_against_admin(
     *,
     admin_client: AdminClient,
-    user_id: str,
+    owner_id: str,
 ) -> str:
-    """Phase 32.A: confirm ``user_id`` exists in admin's registry.
+    """Confirm ``owner_id`` exists in admin's owner registry.
 
     Returns the admin-supplied ``display_name`` (used as LK participant
-    ``name`` so the room UI shows something friendly). The user_id
+    ``name`` so the room UI shows something friendly). The owner_id
     itself is used as LK ``identity`` — channel reads identity at
-    participant-join time and runs its own admin lookup to find
-    tenant/active_agent (plan D).
+    participant-join time and resolves the runtime envelope through
+    admin/data before talking to eidolon_agent.
 
     Raises plain ``AdminClientError`` subclasses; caller wraps to
     HTTPException with appropriate status codes.
     """
-    user_view = await admin_client.get_user(user_id)
-    spec = user_view.get("spec", {}) if isinstance(user_view, dict) else {}
-    return str(spec.get("display_name") or user_id)
+    owner_view = await admin_client.get_owner(owner_id)
+    if not isinstance(owner_view, dict):
+        return owner_id
+    return str(owner_view.get("display_name") or owner_id)
 
 
 async def _web_response(
     *,
     request: Request,
     room_name: str,
-    user_id: str,
+    owner_id: str,
     agent_mode: AgentMode,
     interaction_mode: str,
 ) -> TokenResponse:
-    """Mint a LiveKit token whose ``identity`` is the admin user_id.
+    """Mint a LiveKit token whose ``identity`` is the admin owner_id.
 
-    Plan D: hub does NOT embed any runtime token in participant.metadata.
-    channel reads participant.identity at join time and signs the
-    device JWT itself (it shares ``PAIRING_JWT_SECRET`` with agent).
+    Hub does NOT embed any runtime token in participant.metadata. Channel
+    reads participant.identity at join time, resolves the runtime identity
+    envelope, and signs the short-lived runtime JWT itself.
     """
     admin_client: AdminClient | None = getattr(
         request.app.state, "admin_client", None
@@ -520,10 +521,10 @@ async def _web_response(
             detail="hub admin_client not initialized — restart hub",
         )
 
-    # 1. Fail-fast: refuse to mint LK tokens for users admin doesn't know.
+    # 1. Fail-fast: refuse to mint LK tokens for owners admin doesn't know.
     try:
-        display_name = await _validate_user_against_admin(
-            admin_client=admin_client, user_id=user_id
+        display_name = await _validate_owner_against_admin(
+            admin_client=admin_client, owner_id=owner_id
         )
     except AdminNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -534,22 +535,22 @@ async def _web_response(
             status_code=502, detail=f"admin upstream: {exc.message}"
         ) from exc
 
-    # 2. LK token: identity is the canonical user_id; name is the
+    # 2. LK token: identity is the canonical owner_id; name is the
     #    admin-managed display name (channel doesn't use name, but the
     #    LK web UI / dashboards do).
     try:
         _identity, lk_token = generate_token(
             room_name=room_name,
-            participant_name=user_id,  # → LK identity
+            participant_name=owner_id,  # -> LK identity
             agent_mode=agent_mode,
             participant_metadata={
                 # Identity-derived hints visible inside the room. NOT a
                 # security artifact — channel re-fetches authoritatively
-                # via admin using participant.identity. ``kind`` lets
-                # channel dispatch /api/resolve/user vs /api/resolve/device
-                # without try-then-fallback round-trips.
-                "kind": "user",
-                "user_id": user_id,
+                # via admin using participant.identity. ``kind`` lets channel
+                # dispatch owner/device resolve paths without try-then-fallback
+                # round-trips.
+                "kind": "owner",
+                "owner_id": owner_id,
                 "display_name": display_name,
                 "interaction_mode": interaction_mode,
             },
@@ -557,8 +558,8 @@ async def _web_response(
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-    _log.info("issued LK token user=%s display=%s", user_id, display_name)
-    return TokenResponse(identity=user_id, accessToken=lk_token)
+    _log.info("issued LK token owner=%s display=%s", owner_id, display_name)
+    return TokenResponse(identity=owner_id, accessToken=lk_token)
 
 
 @router.get(
@@ -603,13 +604,19 @@ async def get_config(
         default=None,
         description="ESP32: optional room (auto if omitted). Web: required.",
     ),
+    owner_id: str | None = Query(
+        default=None,
+        description=(
+            "Web client owner identity. Hub validates owner_id against admin, "
+            "uses it as the LiveKit participant identity, and channel resolves "
+            "the runtime envelope from this identity."
+        ),
+    ),
     user_id: str | None = Query(
         default=None,
         description=(
-            "Phase 32.A: web client must pass the admin-managed user_id "
-            "the conversation should be attributed to. Becomes LiveKit "
-            "participant identity; channel resolves tenant/agent from "
-            "this identity by querying admin (plan D)."
+            "Deprecated alias for owner_id. Accepted temporarily for older web "
+            "clients while the product vocabulary migrates to owners."
         ),
     ),
     agent_mode: AgentMode = Query(
@@ -676,22 +683,24 @@ async def get_config(
             detail="room_name is required when client_type=web",
         )
 
-    # Phase 33.A6: user_id is unconditionally required for web — the
+    # Phase 33.A6: owner_id is unconditionally required for web — the
     # rollback path that allowed bypass was removed because channel
     # 32.D no longer has a matching static-token fallback anyway.
-    if not user_id:
+    resolved_owner_id = owner_id or user_id
+    if not resolved_owner_id:
         raise HTTPException(
             status_code=422,
             detail=(
-                "user_id is required when client_type=web (Phase 32.A); "
-                "create the user in admin UI first if you don't have one."
+                "owner_id is required when client_type=web; create the owner "
+                "in admin UI first if you don't have one. user_id is accepted "
+                "only as a deprecated alias."
             ),
         )
 
     return await _web_response(
         request=request,
         room_name=room_name,
-        user_id=user_id,
+        owner_id=resolved_owner_id,
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(
             x_device_interaction_mode,

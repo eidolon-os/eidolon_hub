@@ -47,10 +47,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         admin_runtime.set_control_bridge(control_bridge)
         discovery_state = MdnsDiscoveryState()
 
-        # Phase 32.A: process-wide httpx client + admin REST wrapper
-        # used by /api/config (web) to validate user_id + resolve the
-        # template before signing the device JWT. trust_env=False so a
-        # macOS Clash on :7890 can't intercept the loopback request.
+        # Process-wide httpx client + admin REST wrapper used by /api/config
+        # (web) to validate owner_id before minting the LiveKit token.
+        # trust_env=False so a macOS Clash on :7890 can't intercept loopback.
         http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(10.0, connect=3.0),
             trust_env=False,
