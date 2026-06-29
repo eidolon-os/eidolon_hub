@@ -33,10 +33,13 @@ from hub.main import create_app
 class _NoopAdminRuntime:
     """Stand-in for ``LiveKitAdminRuntime``.
 
-    The approve endpoint never touches the runtime, but the list / detail
-    endpoints do — providing a minimal stub keeps the app importable
-    without a real LiveKit URL.
+    The list / detail endpoints read presence from the runtime, and approve
+    sends a best-effort post-approval config.refresh when the device is online.
+    This stub records the refresh without requiring a real LiveKit URL.
     """
+
+    def __init__(self):
+        self.commands = []
 
     async def get_presence_snapshot(self):
         return []
@@ -46,6 +49,11 @@ class _NoopAdminRuntime:
             running=False, last_success_at=None, last_error="",
             consecutive_failures=0, total_cycles=0,
         )
+
+    async def send_command(self, device_id: str, payload: dict, **kwargs):
+        command = {"device_id": device_id, "payload": payload, **kwargs}
+        self.commands.append(command)
+        return {"command_id": "cmd-refresh", **command}
 
 
 def _new_device_manager(db_path: Path) -> tuple[DeviceManager, DataStore]:
@@ -90,6 +98,36 @@ def test_approve_returns_200_with_new_state(client: TestClient) -> None:
     assert body["device_id"] == "dev-001"
     assert body["approved"] is True
     assert body["approved_at"] is not None
+
+
+def test_approve_sends_best_effort_config_refresh(client: TestClient) -> None:
+    resp = client.post("/api/admin/devices/dev-001/approve")
+    assert resp.status_code == 200
+
+    commands = client.app.state.admin_runtime.commands
+    assert commands == [
+        {
+            "device_id": "dev-001",
+            "payload": {"reason": "device_approved"},
+            "op": "config.refresh",
+            "ttl_ms": 30_000,
+            "qos": "ack",
+            "priority": "high",
+        }
+    ]
+
+
+def test_approve_still_succeeds_when_post_approval_refresh_cannot_send(
+    client: TestClient,
+) -> None:
+    async def _offline(*_args, **_kwargs):
+        raise ValueError("Device dev-001 is not currently connected")
+
+    client.app.state.admin_runtime.send_command = _offline
+    resp = client.post("/api/admin/devices/dev-001/approve")
+
+    assert resp.status_code == 200
+    assert resp.json()["approved"] is True
 
 
 def test_approve_persists_state_in_device_manager(client: TestClient) -> None:

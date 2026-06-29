@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+
+from eidolon_sdk.biz.contracts import CONTROL_OP_CONFIG_REFRESH
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from hub.api.routers.admin.schemas import (
@@ -11,6 +14,7 @@ from hub.api.routers.admin.schemas import (
 from hub.api.routers.admin.service import build_admin_devices, refresh_admin_devices
 
 router = APIRouter(prefix="/api/admin/devices", tags=["Admin Devices"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=AdminDeviceListResponse)
@@ -80,6 +84,25 @@ async def approve_device(device_id: str, request: Request):
             ),
         )
     device = await device_manager.approve(device_id)
+    runtime = request.app.state.admin_runtime
+    try:
+        command = await runtime.send_command(
+            device_id=device_id,
+            payload={"reason": "device_approved"},
+            op=CONTROL_OP_CONFIG_REFRESH,
+            ttl_ms=30_000,
+            qos="ack",
+            priority="high",
+        )
+        logger.info(
+            "Sent post-approval config refresh device=%s command_id=%s",
+            device_id,
+            command.get("command_id"),
+        )
+    except ValueError as exc:
+        logger.info("Post-approval config refresh skipped device=%s reason=%s", device_id, exc)
+    except Exception:
+        logger.exception("Post-approval config refresh failed device=%s", device_id)
     return ApproveDeviceResponse(
         device_id=device.device_id,
         approved=device.approved,
