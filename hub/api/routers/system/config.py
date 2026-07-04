@@ -559,6 +559,94 @@ async def _web_response(
     return TokenResponse(identity=owner_id, accessToken=lk_token)
 
 
+async def _web_body_response(
+    *,
+    request: Request,
+    room_name: str | None,
+    owner_id: str,
+    companion_id: str | None,
+    device_id: str,
+    agent_mode: AgentMode,
+    interaction_mode: str,
+) -> TokenResponse:
+    """Mint a LiveKit token for a companion's host-local *web body*.
+
+    Unlike the legacy owner-only web path (identity=owner_id), a web body has a
+    real DeviceRow: identity is the ``device_id`` and channel resolves it via
+    ``/api/resolve/device/{id}`` — the same path an esp32 body takes, so the
+    body runs its companion's persona. There is no browser ECDSA; the binding
+    is trusted because admin validated owner+companion+device when the body was
+    provisioned. Hub re-checks the binding here so a spoofed ``device_id`` can't
+    mint a token for a body it doesn't own.
+    """
+    admin_resolve_client: AdminResolveClient | None = getattr(
+        request.app.state, "admin_resolve_client", None
+    )
+    if admin_resolve_client is None:
+        raise HTTPException(
+            status_code=503,
+            detail="hub admin_resolve_client not initialized — restart hub",
+        )
+
+    try:
+        resolved = await admin_resolve_client.resolve_device(device_id)
+    except AdminResolveNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except AdminResolvePrecondition as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+    except AdminResolveUnreachable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except AdminResolveUpstream as exc:
+        raise HTTPException(
+            status_code=502, detail=f"admin upstream: {exc.message}"
+        ) from exc
+
+    # Binding checks: the web body must belong to this owner (and to the pinned
+    # companion, when the caller supplied one).
+    if resolved.owner_id != owner_id:
+        raise HTTPException(
+            status_code=403, detail="web body is not owned by this owner"
+        )
+    if companion_id and resolved.companion_id != companion_id:
+        raise HTTPException(
+            status_code=403, detail="web body is not bound to this companion"
+        )
+
+    # A per-device admin override takes priority over the (web-defaulted) header.
+    admin_override = _admin_interaction_mode_override(resolved)
+    if admin_override is not None:
+        interaction_mode = admin_override
+
+    # An explicit ?room_name= override is honored; otherwise a fresh per-session
+    # voice room is derived from the device (matches the esp32 body path).
+    resolved_room = room_name or _session_voice_room_name(device_id)
+    try:
+        _identity, lk_token = generate_token(
+            room_name=resolved_room,
+            participant_name=device_id,  # -> LK identity (kind=device path)
+            agent_mode=agent_mode,
+            participant_metadata={
+                "kind": "device",
+                "device_id": device_id,
+                "owner_id": owner_id,
+                "companion_id": resolved.companion_id,
+                "interaction_mode": interaction_mode,
+                "session_intent": SESSION_INTENT_USER_INITIATED,
+            },
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+    _log.info(
+        "issued LK token web-body device=%s owner=%s companion=%s room=%s",
+        device_id,
+        owner_id,
+        resolved.companion_id,
+        resolved_room,
+    )
+    return TokenResponse(identity=device_id, accessToken=lk_token)
+
+
 @router.get(
     "/config",
     response_model=ESP32ConfigResponse | TokenResponse,
@@ -607,6 +695,22 @@ async def get_config(
             "Web client owner identity. Hub validates owner_id against admin, "
             "uses it as the LiveKit participant identity, and channel resolves "
             "the runtime envelope from this identity."
+        ),
+    ),
+    companion_id: str | None = Query(
+        default=None,
+        description=(
+            "Web body: the companion this web body is bound to. When set with "
+            "device_id, hub validates the device is bound to this companion."
+        ),
+    ),
+    device_id: str | None = Query(
+        default=None,
+        description=(
+            "Web body: the DeviceRow id of a companion's host-local web body. "
+            "When present with client_type=web, hub mints a device-identity "
+            "token (channel resolves via /api/resolve/device/{id}) instead of "
+            "the legacy owner-identity token; room_name becomes optional."
         ),
     ),
     agent_mode: AgentMode = Query(
@@ -667,12 +771,6 @@ async def get_config(
             ),
         )
 
-    if not room_name:
-        raise HTTPException(
-            status_code=422,
-            detail="room_name is required when client_type=web",
-        )
-
     if not owner_id:
         raise HTTPException(
             status_code=422,
@@ -680,6 +778,30 @@ async def get_config(
                 "owner_id is required when client_type=web; create the owner "
                 "in admin UI first if you don't have one."
             ),
+        )
+
+    # A managed web *body* (has a DeviceRow): identity is the device, resolved
+    # + binding-checked against admin like an esp32 body (no browser ECDSA —
+    # admin trust). room_name is optional here; it is derived from the device.
+    if device_id:
+        return await _web_body_response(
+            request=request,
+            room_name=room_name,
+            owner_id=owner_id,
+            companion_id=companion_id,
+            device_id=device_id,
+            agent_mode=agent_mode,
+            interaction_mode=_normalize_interaction_mode(
+                x_device_interaction_mode,
+                default=INTERACTION_MODE_FULL_DUPLEX,
+            ),
+        )
+
+    # Legacy owner-only web path (identity = owner_id); room_name required.
+    if not room_name:
+        raise HTTPException(
+            status_code=422,
+            detail="room_name is required when client_type=web",
         )
 
     return await _web_response(
