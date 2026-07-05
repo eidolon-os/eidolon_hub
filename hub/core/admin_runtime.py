@@ -43,6 +43,16 @@ class DevicePresence:
     missed_probes: int = 0
 
 
+_COMMAND_RESULT_EVENT = {
+    "succeeded": "device.command.acked",
+    "rejected": "device.command.denied",
+    "failed": "device.command.failed",
+    "expired": "device.command.failed",
+    "timeout": "device.command.failed",
+    "unsupported": "device.command.failed",
+}
+
+
 class LiveKitAdminRuntime:
     def __init__(self, config: AppConfig, data_store: Any | None = None):
         self._config = config
@@ -244,6 +254,7 @@ class LiveKitAdminRuntime:
         finally:
             await livekit_api.aclose()
         await self._persist_command(command)
+        await self._audit_command_result(command, actor_type="system")
         await self._emit_event({"type": "command_updated", **command})
         if command["status"] == "failed":
             raise ValueError(command["error"])
@@ -297,6 +308,7 @@ class LiveKitAdminRuntime:
             command["error"] = str(message)
         command["updated_at"] = datetime.now(UTC).isoformat()
         await self._persist_command(command)
+        await self._audit_command_result(command, actor_type="device")
         await self._emit_event({"type": "command_updated", **command})
         return command
 
@@ -310,6 +322,7 @@ class LiveKitAdminRuntime:
         command["error"] = error
         command["updated_at"] = datetime.now(UTC).isoformat()
         await self._persist_command(command)
+        await self._audit_command_result(command, actor_type="system")
         await self._emit_event({"type": "command_updated", **command})
         return command
 
@@ -356,8 +369,42 @@ class LiveKitAdminRuntime:
             command["error"] = f"no ack/result within {timeout_seconds}s"
             touched += 1
             await self._persist_command(command)
+            await self._audit_command_result(command, actor_type="system")
             await self._emit_event({"type": "command_updated", **command})
         return touched
+
+    async def _audit_command_result(
+        self, command: dict[str, Any], *, actor_type: str = "device"
+    ) -> None:
+        """Best-effort device.command.* audit event for a terminal command result.
+
+        Records to the shared events table (source=hub). Never raises into the
+        command path — a failed audit write is logged and swallowed.
+        """
+        if self._data_store is None:
+            return
+        owner_id = command.get("owner_id")
+        event_type = _COMMAND_RESULT_EVENT.get(command.get("status") or "")
+        if not owner_id or event_type is None:
+            return
+        try:
+            await self._data_store.events.record_event(
+                event_type=event_type,
+                owner_id=owner_id,
+                companion_id=command.get("companion_id"),
+                subject_type="device",
+                subject_id=command.get("device_id") or "",
+                actor_type=actor_type,
+                actor_id=command.get("device_id"),
+                payload_json={
+                    "command_id": command.get("command_id"),
+                    "op": command.get("op"),
+                    "status": command.get("status"),
+                    "error": command.get("error") or None,
+                },
+            )
+        except Exception:  # noqa: BLE001 - audit must never break the command path
+            logger.warning("command audit failed for %s", command.get("command_id"))
 
     async def get_metrics(self) -> dict[str, Any]:
         presence = await self.get_presence_snapshot()

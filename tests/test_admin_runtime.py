@@ -327,3 +327,53 @@ async def test_send_command_persists_body_command_status(tmp_path):
         assert cold_command["source_device_id"] == "source-1"
     finally:
         await store.close()
+
+
+@pytest.mark.asyncio
+async def test_command_terminal_results_emit_audit_events(tmp_path):
+    """P3 (hub) — terminal command results write device.command.* audit events."""
+    from eidolon_data.testing import assert_event
+
+    store = DataStore.open(DataSettings(sqlite_path=str(tmp_path / "eidolon.sqlite3")))
+    await store.init_schema()
+    try:
+        owner = await store.owners.create(owner_id="owner-cmd", display_name="Owner")
+        companion = await store.companions.create(
+            companion_id="companion-cmd", owner_id=owner.owner_id, display_name="Yi"
+        )
+        await store.devices.create_device(
+            device_id="esp32-1",
+            owner_id=owner.owner_id,
+            kind="esp32",
+            bound_companion_id=companion.companion_id,
+        )
+
+        cfg = AppConfig()
+        cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+        runtime = LiveKitAdminRuntime(cfg, data_store=store)
+        runtime._build_livekit_api = lambda: _FakeLiveKitAPI()  # type: ignore[method-assign]
+        await runtime.run_probe_cycle(["esp32-1"])
+
+        # success ack → device.command.acked
+        c1 = await runtime.send_command("esp32-1", {"reason": "t"}, op="config.refresh")
+        await runtime.apply_command_ack(
+            {"v": 1, "kind": "result", "ref": c1["command_id"], "device_id": "esp32-1",
+             "op": "config.refresh", "status": "completed", "code": "OK"}
+        )
+        # timeout → device.command.failed (hub-detected)
+        c2 = await runtime.send_command("esp32-1", {"reason": "t2"}, op="config.refresh")
+        await runtime.mark_command_timeout(timeout_seconds=0)
+
+        events = await store.events.list_for_subject(subject_type="device", subject_id="esp32-1")
+        acked = assert_event(events, event_type="device.command.acked")
+        assert acked.source == "hub"
+        assert acked.owner_id == "owner-cmd"
+        assert acked.companion_id == "companion-cmd"
+        assert acked.payload_json["command_id"] == c1["command_id"]
+
+        failed = assert_event(events, event_type="device.command.failed")
+        assert failed.severity == "warn"  # catalog default for device.command.failed
+        assert failed.outcome == "failure"
+        assert failed.payload_json["command_id"] == c2["command_id"]
+    finally:
+        await store.close()
