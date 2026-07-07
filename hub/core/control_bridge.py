@@ -7,13 +7,24 @@ import logging
 from contextlib import suppress
 from typing import Any
 
-from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+from eidolon_sdk.biz.contracts import (
+    CONTROL_OP_PLAYBACK_STOP,
+    CONTROL_OP_PTT_TURN_STATUS,
+    CONTROL_TOPIC,
+    LIVEKIT_AGENT_SESSION_TOPIC,
+    LIVEKIT_TRANSCRIPTION_TOPIC,
+)
 from eidolon_sdk.integrations.livekit import build_livekit_token
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
 
 logger = logging.getLogger(__name__)
+
+_SESSION_LOCAL_ACK_REF_PREFIXES = (
+    f"{CONTROL_OP_PLAYBACK_STOP}:",
+    f"{CONTROL_OP_PTT_TURN_STATUS}:",
+)
 
 
 def _bridge_url(config: AppConfig) -> str:
@@ -146,6 +157,39 @@ class LiveKitControlBridge:
         def _on_data_received(packet: Any) -> None:
             asyncio.create_task(self._handle_packet(packet))
 
+        register_text = getattr(room, "register_text_stream_handler", None)
+        if callable(register_text):
+            with suppress(ValueError):
+                register_text(LIVEKIT_TRANSCRIPTION_TOPIC, self._handle_text_stream)
+
+        register_byte = getattr(room, "register_byte_stream_handler", None)
+        if callable(register_byte):
+            with suppress(ValueError):
+                register_byte(LIVEKIT_AGENT_SESSION_TOPIC, self._handle_byte_stream)
+
+    def _handle_text_stream(self, reader: Any, participant_identity: str) -> None:
+        asyncio.create_task(
+            self._drain_stream(reader, participant_identity=participant_identity)
+        )
+
+    def _handle_byte_stream(self, reader: Any, participant_identity: str) -> None:
+        asyncio.create_task(
+            self._drain_stream(reader, participant_identity=participant_identity)
+        )
+
+    async def _drain_stream(self, reader: Any, *, participant_identity: str) -> None:
+        topic = getattr(getattr(reader, "info", None), "topic", "")
+        try:
+            async for _ in reader:
+                pass
+        except Exception:
+            logger.debug(
+                "LiveKit control bridge stream drain failed topic=%s participant=%s",
+                topic,
+                participant_identity,
+                exc_info=True,
+            )
+
     async def _handle_packet(self, packet: Any) -> None:
         if getattr(packet, "topic", None) != CONTROL_TOPIC:
             return
@@ -169,8 +213,20 @@ class LiveKitControlBridge:
             sender_identity=sender_identity,
         )
         if updated is None:
+            ref = envelope.get("ref") or envelope.get("command_id")
+            if _is_session_local_ack_ref(ref):
+                logger.debug(
+                    "LiveKit control bridge observed session-local ack sender=%s ref=%s",
+                    sender_identity,
+                    ref,
+                )
+                return
             logger.debug(
-                "LiveKit control bridge ignored ack sender=%s ref=%s",
+                "LiveKit control bridge ignored unknown ack sender=%s ref=%s",
                 sender_identity,
-                envelope.get("ref") or envelope.get("command_id"),
+                ref,
             )
+
+
+def _is_session_local_ack_ref(ref: Any) -> bool:
+    return isinstance(ref, str) and ref.startswith(_SESSION_LOCAL_ACK_REF_PREFIXES)

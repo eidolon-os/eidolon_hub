@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
 import pytest
-from eidolon_sdk.biz.contracts import CONTROL_TOPIC
+from eidolon_sdk.biz.contracts import (
+    CONTROL_TOPIC,
+    LIVEKIT_AGENT_SESSION_TOPIC,
+    LIVEKIT_TRANSCRIPTION_TOPIC,
+)
 
 from hub.config import AppConfig, LiveKitConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
@@ -78,6 +83,8 @@ class _FakeRoom:
     def __init__(self):
         self.connected = False
         self.disconnected = False
+        self.text_stream_handlers = {}
+        self.byte_stream_handlers = {}
 
     def on(self, _event):
         def _deco(fn):
@@ -90,6 +97,28 @@ class _FakeRoom:
 
     async def disconnect(self):
         self.disconnected = True
+
+    def register_text_stream_handler(self, topic, handler):
+        self.text_stream_handlers[topic] = handler
+
+    def register_byte_stream_handler(self, topic, handler):
+        self.byte_stream_handlers[topic] = handler
+
+
+class _FakeStreamReader:
+    def __init__(self, topic: str, chunks: list[object]):
+        self.info = SimpleNamespace(topic=topic)
+        self._chunks = list(chunks)
+        self.consumed = 0
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        if not self._chunks:
+            raise StopAsyncIteration
+        self.consumed += 1
+        return self._chunks.pop(0)
 
 
 class _FakeRtc:
@@ -124,6 +153,30 @@ async def test_sync_rooms_reconciles_joins_and_leaves():
     assert set(bridge._rooms.keys()) == {"room-a"}
     assert room_b.disconnected is True
     assert bridge._rooms["room-a"].disconnected is False
+
+
+@pytest.mark.asyncio
+async def test_control_bridge_registers_and_drains_livekit_framework_streams():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    bridge = LiveKitControlBridge(cfg, runtime)
+    room = _FakeRoom()
+
+    bridge._install_handler(room)
+
+    assert LIVEKIT_TRANSCRIPTION_TOPIC in room.text_stream_handlers
+    assert LIVEKIT_AGENT_SESSION_TOPIC in room.byte_stream_handlers
+
+    text_reader = _FakeStreamReader(LIVEKIT_TRANSCRIPTION_TOPIC, ["hello", "world"])
+    byte_reader = _FakeStreamReader(LIVEKIT_AGENT_SESSION_TOPIC, [b"a", b"b"])
+
+    room.text_stream_handlers[LIVEKIT_TRANSCRIPTION_TOPIC](text_reader, "agent")
+    room.byte_stream_handlers[LIVEKIT_AGENT_SESSION_TOPIC](byte_reader, "agent")
+    await asyncio.sleep(0)
+
+    assert text_reader.consumed == 2
+    assert byte_reader.consumed == 2
 
 
 @pytest.mark.asyncio
