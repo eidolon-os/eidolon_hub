@@ -55,3 +55,28 @@ reports/e2e_*/
 uv.lock
 
 **/.env.local
+
+# Local OS/editor/runtime hygiene
+**/.DS_Store
+._*
+**/._*
+.AppleDouble/
+.LSOverride
+.Spotlight-V100/
+.Trashes/
+.fseventsd/
+Thumbs.db
+desktop.ini
+.vscode/
+*.swp
+*.swo
+*~
+*.tmp
+*.bak
+.import_linter_cache/
+*.pid
+*.sock
+*.sqlite3-wal
+*.sqlite3-shm
+*.db-wal
+*.db-shm
