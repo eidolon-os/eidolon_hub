@@ -57,6 +57,9 @@ def _resolved(
         device_id=device_id,
         memory_realm_id="realm-1",
         genome_id="genome-1",
+        schema_version="eidolon.persona_genome.v1",
+        genome_hash="sha256:test",
+        compiler_version="eidolon.persona_compiler.v1",
         interaction_mode=interaction_mode,
     )
 
