@@ -39,7 +39,8 @@ data/
 **/.trash/
 
 # Benchmark artifacts
-benchmarks/runs/
+benchmarks/runs/*
+!benchmarks/runs/README.md
 benchmark/runs/
 reports/benchmark*/
 reports/*benchmark*/
