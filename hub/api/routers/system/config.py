@@ -31,7 +31,6 @@ from pydantic import BaseModel
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
 from hub.config import (
-    DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE,
     AppConfig,
     load_config,
     resolve_eidolon_livekit_client_url,
@@ -372,11 +371,6 @@ async def _esp32_response(
             fingerprint=fingerprint,
         )
 
-    cfg = _app_config(request)
-    allow_unbound_direct_voice = (
-        cfg.device_session.unbound_device_policy
-        == DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE
-    )
     admin_resolve_client: AdminResolveClient | None = getattr(
         request.app.state, "admin_resolve_client", None
     )
@@ -390,23 +384,6 @@ async def _esp32_response(
         resolved = await admin_resolve_client.resolve_device(device_id)
     except AdminResolvePrecondition as exc:
         _log.info("device waiting binding device=%s detail=%s", device_id, exc.message)
-        if allow_unbound_direct_voice:
-            _log.warning(
-                "device entering dev direct voice without admin binding "
-                "device=%s detail=%s",
-                device_id,
-                exc.message,
-            )
-            return _active_esp32_response(
-                request=request,
-                resolved_room=room_name or _session_voice_room_name(device_id),
-                device_id=device_id,
-                agent_mode=agent_mode,
-                interaction_mode=interaction_mode,
-                session_intent=session_intent,
-                bound=False,
-                fingerprint=fingerprint,
-            )
         return _pending_esp32_response(
             request=request,
             device_id=device_id,
@@ -415,24 +392,7 @@ async def _esp32_response(
             fingerprint=fingerprint,
         )
     except AdminResolveNotFound as exc:
-        _log.warning("device resolve not found device=%s detail=%s", device_id, exc)
-        if allow_unbound_direct_voice:
-            _log.warning(
-                "device entering dev direct voice without admin resolve "
-                "device=%s detail=%s",
-                device_id,
-                exc,
-            )
-            return _active_esp32_response(
-                request=request,
-                resolved_room=room_name or _session_voice_room_name(device_id),
-                device_id=device_id,
-                agent_mode=agent_mode,
-                interaction_mode=interaction_mode,
-                session_intent=session_intent,
-                bound=False,
-                fingerprint=fingerprint,
-            )
+        _log.info("device waiting binding device=%s detail=%s", device_id, exc)
         return _pending_esp32_response(
             request=request,
             device_id=device_id,

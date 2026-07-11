@@ -40,17 +40,6 @@ admin_probe:
   offline_after_missed_probes: 3
   command_timeout_seconds: 30
 
-# ESP32 device session policy:
-# - pending_only: default/production behavior. Approved devices that are not
-#   bound, or whose Admin resolve returns not-ready/not-found, stay in
-#   eidolon-pending.
-# - dev_direct_voice: dev/test only. The device must still pass signature
-#   verification and approved=true; when Admin says unbound/not-found, Hub issues
-#   a voice-room token anyway so channel.providers.brain_provider=direct_llm can
-#   be tested without a usable eidolon_agent/memory path.
-device_session:
-  unbound_device_policy: pending_only
-
 control_bridge:
   # Optional: join LiveKit rooms as a data-only participant to receive
   # ESP32 ack/result envelopes on eidolon.control. Requires livekit.rtc.

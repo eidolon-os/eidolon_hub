@@ -165,19 +165,6 @@ class ProactiveWakeConfig:
     command_ttl_ms: int = 30_000
 
 
-DEVICE_SESSION_POLICY_PENDING_ONLY = "pending_only"
-DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE = "dev_direct_voice"
-VALID_DEVICE_SESSION_POLICIES = {
-    DEVICE_SESSION_POLICY_PENDING_ONLY,
-    DEVICE_SESSION_POLICY_DEV_DIRECT_VOICE,
-}
-
-
-@dataclass
-class DeviceSessionConfig:
-    unbound_device_policy: str = DEVICE_SESSION_POLICY_PENDING_ONLY
-
-
 def _outbound_ipv4() -> str:
     s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
@@ -371,20 +358,6 @@ def _proactive_wake_from_yaml(y: dict[str, Any]) -> ProactiveWakeConfig:
     )
 
 
-def _device_session_from_yaml(y: dict[str, Any]) -> DeviceSessionConfig:
-    sec = _section(y, "device_session")
-    raw = str(
-        sec.get("unbound_device_policy", DEVICE_SESSION_POLICY_PENDING_ONLY)
-    ).strip().lower()
-    if raw not in VALID_DEVICE_SESSION_POLICIES:
-        allowed = ", ".join(sorted(VALID_DEVICE_SESSION_POLICIES))
-        raise ValueError(
-            "device_session.unbound_device_policy must be one of: "
-            f"{allowed}; got {raw!r}"
-        )
-    return DeviceSessionConfig(unbound_device_policy=raw)
-
-
 @dataclass
 class AppConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
@@ -396,7 +369,6 @@ class AppConfig:
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
     proactive_wake: ProactiveWakeConfig = field(default_factory=ProactiveWakeConfig)
-    device_session: DeviceSessionConfig = field(default_factory=DeviceSessionConfig)
 
     @classmethod
     def load(cls) -> "AppConfig":
@@ -412,7 +384,6 @@ class AppConfig:
             control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
             proactive_wake=_proactive_wake_from_yaml(y),
-            device_session=_device_session_from_yaml(y),
         )
 
 

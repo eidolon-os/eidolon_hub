@@ -12,7 +12,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from eidolon_data import DataSettings, DataStore
 from eidolon_data.adapters import EidolonDataDeviceRegistryRepository
-from eidolon_sdk.biz.admin import AdminResolvePrecondition, ResolvedContext
+from eidolon_sdk.biz.admin import (
+    AdminResolveNotFound,
+    AdminResolvePrecondition,
+    ResolvedContext,
+)
 from eidolon_sdk.biz.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
 
@@ -20,7 +24,6 @@ import hub.config as hub_config
 from hub.config import (
     AppConfig,
     Esp32Config,
-    _device_session_from_yaml,
     _livekit_from_yaml_and_env,
     resolve_eidolon_livekit_client_url,
 )
@@ -434,8 +437,7 @@ def test_config_esp32_approved_waits_for_binding(client: TestClient):
     assert data["device"]["bound"] is False
 
 
-def test_config_esp32_dev_direct_voice_allows_approved_unbound(client: TestClient):
-    client.app.state.config.device_session.unbound_device_policy = "dev_direct_voice"
+def test_config_esp32_approved_waits_for_admin_resolve_not_found(client: TestClient):
     dm = client.app.state.device_manager
     key = ec.generate_private_key(ec.SECP256R1())
     with patch(
@@ -448,13 +450,13 @@ def test_config_esp32_dev_direct_voice_allows_approved_unbound(client: TestClien
         )
     assert r0.status_code == 200
     asyncio.run(dm.approve("dev-4"))
-    client.app.state.admin_resolve_client.resolve_device.side_effect = AdminResolvePrecondition(
-        412, "device is not bound"
+    client.app.state.admin_resolve_client.resolve_device.side_effect = AdminResolveNotFound(
+        "device is not registered in eidolon_data"
     )
     with patch(
         "hub.api.routers.system.config.generate_token",
         return_value=("dev-4", "jwt-4"),
-    ) as gen:
+    ):
         r = client.get(
             "/api/config",
             params=[("client_type", "esp32")],
@@ -471,13 +473,10 @@ def test_config_esp32_dev_direct_voice_allows_approved_unbound(client: TestClien
         )
     assert r.status_code == 200
     data = r.json()
-    assert data["status"] == "active"
-    assert data["config"]["room_name"].startswith("device-dev-4-")
+    assert data["status"] == "waiting_binding"
+    assert data["config"]["room_name"] == "eidolon-pending"
     assert data["device"]["approved"] is True
     assert data["device"]["bound"] is False
-    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
-    assert voice_meta["kind"] == "device"
-    assert voice_meta["interaction_mode"] == "full_duplex"
 
 
 def test_config_esp32_missing_header(client: TestClient):
@@ -564,21 +563,6 @@ def test_livekit_accepts_env_name_placeholders(monkeypatch):
     assert cfg.api_secret == "s"
 
 
-def test_device_session_policy_defaults_to_pending_only():
-    cfg = _device_session_from_yaml({})
-    assert cfg.unbound_device_policy == "pending_only"
-
-
-def test_device_session_policy_accepts_dev_direct_voice():
-    cfg = _device_session_from_yaml(
-        {"device_session": {"unbound_device_policy": "dev_direct_voice"}}
-    )
-    assert cfg.unbound_device_policy == "dev_direct_voice"
-
-
-def test_device_session_policy_rejects_unknown_value():
-    with pytest.raises(ValueError, match="unbound_device_policy"):
-        _device_session_from_yaml({"device_session": {"unbound_device_policy": "open"}})
 
 
 def test_resolve_full_url_override():

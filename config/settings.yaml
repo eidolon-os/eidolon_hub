@@ -42,16 +42,6 @@ control_bridge:
   livekit_url: ""
   identity_prefix: eidolon-hub-control
 
-# ESP32 设备会话策略：
-# - pending_only: 默认/生产模式。已审批但未绑定或 Admin resolve 失败的设备
-#   只能进入 eidolon-pending，等待完成 agent 绑定。
-# - dev_direct_voice: dev/test 模式。设备仍必须通过签名校验且 approved=true；
-#   当 Admin 返回未绑定/未找到时，Hub 直接签发 voice room token，便于
-#   channel.providers.brain_provider=direct_llm 时绕过暂不可用的 agent/memory
-#   做 ESP32 barge-in 联调。联调结束可改回 pending_only。
-device_session:
-  unbound_device_policy: dev_direct_voice
-
 # Hub validates owner_id at /api/config time via this admin
 # URL (LiveKit-standard pattern: trust participant.identity, look up
 # the rest server-side). Hub does NOT sign device JWTs — channel does
