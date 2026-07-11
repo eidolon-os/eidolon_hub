@@ -6,8 +6,8 @@ import asyncio
 import contextlib
 import logging
 import socket
-from dataclasses import asdict, dataclass
 from contextlib import asynccontextmanager
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from typing import AsyncIterator
 
@@ -154,6 +154,13 @@ async def mdns_lifespan(
     def _config_url(ip: str) -> str:
         return f"http://{ip}:{port}{config_path}"
 
+    def _register_url(ip: str) -> str:
+        # Sibling of the config path (same /api prefix): the device-registration
+        # endpoint where a device POSTs its capability manifest and gets its
+        # runtime config back. Devices prefer this and fall back to config_url.
+        prefix = config_path.rsplit("/", 1)[0] if "/" in config_path else ""
+        return f"http://{ip}:{port}{prefix}/device/register"
+
     def _service_info(ip: str) -> ServiceInfo:
         return ServiceInfo(
             type_=service_type,
@@ -165,6 +172,7 @@ async def mdns_lifespan(
                 "version": version,
                 "api": api_version,
                 "config_url": _config_url(ip),
+                "register_url": _register_url(ip),
             },
             server=f"{hostname}.local.",
         )

@@ -104,12 +104,18 @@ class DeviceManager:
         nonce: str,
         name: str = "",
         client_ip: str = "",
+        capabilities: list[dict] | None = None,
     ) -> Device:
         """Register/touch a signed device config request.
 
         Public key storage is TOFU: the first signed request locks the key for
         ``device_id``. Later requests may omit the key, but if they provide it
         the auth layer must already have confirmed it matches.
+
+        ``capabilities`` (from ``POST /api/device/register``) is the device's
+        self-declared capability manifest; when present it is persisted so the
+        agent can expose each capability as a tool. Absent (the plain config
+        fetch) leaves any operator-authored capabilities untouched.
         """
         async with self._lock:
             device = self.register(device_id=device_id, name=name, kind="esp32")
@@ -124,7 +130,10 @@ class DeviceManager:
                 raise ValueError("replayed device nonce")
             recent.append(nonce)
             del recent[:-32]
-            await self._repository.put(_record_from_device(device))
+            record = _record_from_device(device)
+            if capabilities:
+                record = record.model_copy(update={"capabilities": list(capabilities)})
+            await self._repository.put(record)
             return device
 
     def get(self, device_id: str) -> Device | None:

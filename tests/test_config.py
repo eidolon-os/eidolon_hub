@@ -100,9 +100,9 @@ def _resolved_context(
         device_id=device_id,
         memory_realm_id="realm-test",
         genome_id="genome-test",
-        schema_version="eidolon.persona_genome.v1",
-        genome_hash="sha256:test",
-        compiler_version="eidolon.persona_compiler.v1",
+        schema_version="eidolon.persona_genome",
+        genome_hash="pg_test",
+        realizer_version="eidolon.persona_realizer",
         interaction_mode=interaction_mode,
     )
 
@@ -563,8 +563,6 @@ def test_livekit_accepts_env_name_placeholders(monkeypatch):
     assert cfg.api_secret == "s"
 
 
-
-
 def test_resolve_full_url_override():
     esp32 = Esp32Config(livekit_url="wss://lk.example.com/livekit")
     assert (
@@ -654,3 +652,77 @@ def test_resolve_auto_lan_probe_fails_raises(monkeypatch):
     monkeypatch.setattr(hub_config, "_outbound_ipv4", lambda: "127.0.0.1")
     with pytest.raises(ValueError):
         resolve_eidolon_livekit_client_url(esp32, request_host="localhost", request_scheme="http")
+
+
+def _signed_post_headers(
+    *,
+    device_id: str,
+    body: bytes,
+    path_query: str = "/api/device/register",
+    nonce: str = "nonce-reg",
+    key=None,
+) -> dict[str, str]:
+    key = key or ec.generate_private_key(ec.SECP256R1())
+    public_der = key.public_key().public_bytes(Encoding.DER, PublicFormat.SubjectPublicKeyInfo)
+    timestamp = "0"
+    signed = canonical_request(
+        method="POST",
+        path_query=path_query,
+        device_id=device_id,
+        nonce=nonce,
+        timestamp=timestamp,
+        body_hash=body_sha256_hex(body),
+    )
+    return {
+        "X-Device-ID": device_id,
+        "X-Device-Nonce": nonce,
+        "X-Device-Timestamp": timestamp,
+        "X-Device-Signature": _b64url(key.sign(signed, ec.ECDSA(hashes.SHA256()))),
+        "X-Device-Public-Key": _b64url(public_der),
+        "Content-Type": "application/json",
+    }
+
+
+def test_device_register_forwards_capabilities_and_returns_config(client: TestClient):
+    import json
+
+    manifest = {
+        "capabilities": [
+            {
+                "name": "display.update",
+                "description": "Update screen",
+                "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}},
+            },
+            {"name": "sound.play"},
+        ]
+    }
+    body_bytes = json.dumps(manifest).encode("utf-8")
+    dm = client.app.state.device_manager
+    with (
+        patch(
+            "hub.api.routers.system.config.generate_token",
+            return_value=("dev-reg", "jwt"),
+        ),
+        patch.object(dm, "register_signed_seen", wraps=dm.register_signed_seen) as spy,
+    ):
+        r = client.post(
+            "/api/device/register",
+            headers=_signed_post_headers(device_id="dev-reg", body=body_bytes),
+            content=body_bytes,
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["success"] is True
+    assert data["config"]["identity"] == "dev-reg"
+    caps = spy.call_args.kwargs["capabilities"]
+    assert [c["name"] for c in caps] == ["display.update", "sound.play"]
+    assert dm.get("dev-reg") is not None
+
+
+def test_device_register_requires_signature(client: TestClient):
+    r = client.post(
+        "/api/device/register",
+        json={"capabilities": []},
+        headers={"X-Device-ID": "dev-x"},
+    )
+    assert r.status_code == 422

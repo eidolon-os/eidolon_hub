@@ -18,6 +18,7 @@ from eidolon_sdk.biz.admin import (
     AdminUnreachable,
     AdminUpstreamError,
 )
+from eidolon_sdk.biz.body import capability_from_json, capability_to_dict
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
@@ -27,14 +28,10 @@ from eidolon_sdk.biz.contracts import (
 )
 from eidolon_sdk.biz.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
-from hub.config import (
-    AppConfig,
-    load_config,
-    resolve_eidolon_livekit_client_url,
-)
+from hub.config import AppConfig, load_config, resolve_eidolon_livekit_client_url
 
 _log = logging.getLogger(__name__)
 
@@ -310,6 +307,41 @@ def _active_esp32_response(
     )
 
 
+_MAX_DECLARED_CAPABILITIES = 64
+
+
+class DeviceRegisterBody(BaseModel):
+    """Body for ``POST /api/device/register`` — the device's self-declared manifest."""
+
+    capabilities: list[dict] = Field(default_factory=list)
+
+
+def _normalize_capabilities(
+    raw: object, *, max_count: int = _MAX_DECLARED_CAPABILITIES
+) -> list[dict]:
+    """Parse a device capability manifest into the canonical stored shape.
+
+    Drops malformed/nameless entries, dedupes by op name, and caps the count so a
+    device can't blow up the tools array. Risky ops stay gated at *actuation* time
+    (BodyControlService enforces ``requires_confirmation``), so the hub accepts
+    well-formed device-declared ops rather than a fixed allowlist — that is what
+    makes the toolset dynamic and open to new device features.
+    """
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    seen: set[str] = set()
+    for item in raw:
+        cap = capability_from_json(item)
+        if cap is None or cap.name in seen:
+            continue
+        seen.add(cap.name)
+        out.append(capability_to_dict(cap))
+        if len(out) >= max_count:
+            break
+    return out
+
+
 async def _esp32_response(
     *,
     request: Request,
@@ -319,6 +351,9 @@ async def _esp32_response(
     interaction_mode: str,
     session_intent: str = SESSION_INTENT_USER_INITIATED,
     auth_headers: DeviceAuthHeaders,
+    capabilities: list[dict] | None = None,
+    method: str = "GET",
+    body: bytes = b"",
 ) -> ESP32ConfigResponse:
     device_manager = getattr(request.app.state, "device_manager", None)
     if device_manager is None:
@@ -343,6 +378,8 @@ async def _esp32_response(
             headers=auth_headers,
             stored_public_key=stored_public_key,
             path_query=path_query,
+            method=method,
+            body=body,
         )
     except DeviceAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -357,6 +394,7 @@ async def _esp32_response(
             fingerprint=fingerprint,
             nonce=auth_headers.nonce,
             client_ip=request.client.host if request.client else "",
+            capabilities=capabilities,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -605,6 +643,77 @@ async def _web_body_response(
         resolved_room,
     )
     return TokenResponse(identity=device_id, accessToken=lk_token)
+
+
+@router.post(
+    "/device/register",
+    response_model=ESP32ConfigResponse,
+    summary="Device self-registration: declare capabilities + fetch runtime config",
+)
+async def register_device(
+    request: Request,
+    body: DeviceRegisterBody,
+    room_name: str | None = Query(default=None),
+    agent_mode: AgentMode = Query(AgentMode.STREAMING),
+    x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
+    x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
+    x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
+    x_device_public_key: str | None = Header(default=None, alias="X-Device-Public-Key"),
+    x_device_signature: str | None = Header(default=None, alias="X-Device-Signature"),
+    x_device_interaction_mode: str | None = Header(
+        default=None, alias="X-Device-Interaction-Mode"
+    ),
+    x_device_session_intent: str | None = Header(
+        default=None, alias="X-Device-Session-Intent"
+    ),
+) -> ESP32ConfigResponse:
+    """The mDNS-advertised registration endpoint (``register_url`` TXT).
+
+    A device declares its capability manifest in the signed request body and
+    receives its runtime config in the same response — registration and
+    activation in one round-trip. Backward compatible: devices that still use
+    ``GET /api/config`` keep working unchanged; the declared capabilities are
+    persisted to ``devices.capabilities_json`` so the agent exposes each as a tool.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=422, detail="X-Device-ID header is required")
+    missing_auth = [
+        name
+        for name, value in [
+            ("X-Device-Nonce", x_device_nonce),
+            ("X-Device-Timestamp", x_device_timestamp),
+            ("X-Device-Signature", x_device_signature),
+        ]
+        if not value
+    ]
+    if missing_auth:
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing device auth headers: {', '.join(missing_auth)}",
+        )
+    # The signature covers method + path + the exact request body, so the declared
+    # capability manifest is integrity-protected (not a spoofable hint).
+    raw_body = await request.body()
+    return await _esp32_response(
+        request=request,
+        room_name=room_name,
+        device_id=x_device_id,
+        agent_mode=agent_mode,
+        interaction_mode=_normalize_interaction_mode(
+            x_device_interaction_mode, default=INTERACTION_MODE_HALF_DUPLEX
+        ),
+        session_intent=_normalize_session_intent(x_device_session_intent),
+        auth_headers=DeviceAuthHeaders(
+            device_id=x_device_id,
+            nonce=x_device_nonce or "",
+            timestamp=x_device_timestamp or "",
+            public_key=x_device_public_key,
+            signature=x_device_signature or "",
+        ),
+        capabilities=_normalize_capabilities(body.capabilities),
+        method="POST",
+        body=raw_body,
+    )
 
 
 @router.get(
