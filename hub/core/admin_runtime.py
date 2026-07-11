@@ -85,9 +85,11 @@ class LiveKitAdminRuntime:
         self._probe_health.total_cycles += 1
         detected: dict[str, tuple[str, str]] = {}
         known = set(known_device_ids)
-        livekit_api = self._build_livekit_api()
+        livekit_api: api.LiveKitAPI | None = None
+        now = datetime.now(UTC)
 
         try:
+            livekit_api = self._build_livekit_api()
             rooms = await livekit_api.room.list_rooms(api.ListRoomsRequest())
             for room in rooms.rooms:
                 participants = await livekit_api.room.list_participants(
@@ -96,7 +98,6 @@ class LiveKitAdminRuntime:
                 for participant in participants.participants:
                     detected[participant.identity] = (room.name, participant.sid)
 
-            now = datetime.now(UTC)
             async with self._lock:
                 next_state: dict[str, DevicePresence] = {}
                 for device_id in known:
@@ -119,12 +120,20 @@ class LiveKitAdminRuntime:
                             current.status = "degraded"
                     next_state[device_id] = current
                 self._state = next_state
+            status_counts = {
+                "online": sum(1 for item in next_state.values() if item.status == "online"),
+                "degraded": sum(1 for item in next_state.values() if item.status == "degraded"),
+                "offline": sum(1 for item in next_state.values() if item.status == "offline"),
+                "unknown": sum(1 for item in next_state.values() if item.status == "unknown"),
+            }
             await self._emit_event(
                 {
                     "type": "probe_cycle",
                     "at": now.isoformat(),
+                    "known": len(known),
                     "detected": len(set(detected.keys()) & known),
                     "ignored": len(set(detected.keys()) - known),
+                    "status_counts": status_counts,
                 }
             )
             self._probe_health.last_success_at = now
@@ -133,8 +142,11 @@ class LiveKitAdminRuntime:
         except Exception as exc:
             self._probe_health.consecutive_failures += 1
             self._probe_health.last_error = str(exc)
+            affected_count = 0
             async with self._lock:
-                for device_id in set(known_device_ids) | set(self._state.keys()):
+                affected = set(known_device_ids) | set(self._state.keys())
+                affected_count = len(affected)
+                for device_id in affected:
                     current = self._state.get(device_id) or DevicePresence(device_id=device_id)
                     current.status = "unknown"
                     current.room_name = ""
@@ -142,8 +154,18 @@ class LiveKitAdminRuntime:
                     current.missed_probes += 1
                     self._state[device_id] = current
             logger.warning("LiveKit probe cycle failed: %s", exc)
+            await self._emit_event(
+                {
+                    "type": "probe_error",
+                    "at": datetime.now(UTC).isoformat(),
+                    "known": affected_count,
+                    "error": str(exc),
+                    "consecutive_failures": self._probe_health.consecutive_failures,
+                }
+            )
         finally:
-            await livekit_api.aclose()
+            if livekit_api is not None:
+                await livekit_api.aclose()
 
     async def get_presence_snapshot(self) -> list[DevicePresence]:
         async with self._lock:
@@ -454,8 +476,14 @@ class LiveKitAdminRuntime:
         payload = json.dumps(event)
         for queue in list(self._subscribers):
             if queue.full():
-                continue
-            await queue.put(payload)
+                try:
+                    queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+            try:
+                queue.put_nowait(payload)
+            except asyncio.QueueFull:
+                logger.warning("Dropping Hub admin event for saturated subscriber")
 
     async def _hydrate_command_binding(self, command: dict[str, Any]) -> None:
         if self._data_store is None:

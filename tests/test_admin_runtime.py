@@ -78,6 +78,23 @@ async def test_probe_cycle_updates_presence():
 
 
 @pytest.mark.asyncio
+async def test_event_subscriber_keeps_latest_events_when_queue_is_full():
+    cfg = AppConfig()
+    runtime = LiveKitAdminRuntime(cfg)
+    queue = await runtime.subscribe()
+
+    try:
+        for i in range(105):
+            await runtime._emit_event({"type": "synthetic", "seq": i})
+
+        assert queue.qsize() == 100
+        first = json.loads(queue.get_nowait())
+        assert first["seq"] == 5
+    finally:
+        runtime.unsubscribe(queue)
+
+
+@pytest.mark.asyncio
 async def test_probe_cycle_ignores_unregistered_livekit_participants():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
@@ -150,6 +167,25 @@ async def test_probe_failure_marks_unknown():
     devices = await runtime.get_presence_snapshot()
     assert devices[0].status == "unknown"
     assert runtime.get_probe_health().consecutive_failures == 1
+
+
+@pytest.mark.asyncio
+async def test_probe_client_initialization_failure_emits_probe_error_event():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="not-a-management-url", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    queue = await runtime.subscribe()
+
+    try:
+        await runtime.run_probe_cycle(["esp32-1"])
+        event = json.loads(queue.get_nowait())
+        assert event["type"] == "probe_error"
+        assert "http(s):// URL" in event["error"]
+        assert event["known"] == 1
+        assert event["consecutive_failures"] == 1
+        assert runtime.get_probe_health().consecutive_failures == 1
+    finally:
+        runtime.unsubscribe(queue)
 
 
 @pytest.mark.asyncio
