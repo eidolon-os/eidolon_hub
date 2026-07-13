@@ -102,6 +102,77 @@ class _FakeLiveKitAPI:
         return None
 
 
+async def _install_stackchan_body(store: DataStore) -> None:
+    await store.companions.create(
+        owner_id="owner-1",
+        companion_id="companion-body",
+        display_name="StackChan",
+    )
+    await store.devices.create_device(
+        device_id="stackchan-1",
+        owner_id="owner-1",
+        name="StackChan",
+        kind="m5stack-core-s3",
+        bound_companion_id="companion-body",
+        capabilities_json={"ops": [BODY_OP_PRESENCE_SET]},
+    )
+
+
+async def _publish_body_action(
+    control: GuardControlPlane,
+    *,
+    correlation_id: str,
+    guard_epoch: int,
+) -> dict:
+    payload = {
+        **_candidate(),
+        "correlation_id": correlation_id,
+        "guard_epoch": guard_epoch,
+    }
+    accepted = await GuardIngress(control).handle_packet(
+        topic=CONTROL_TOPIC,
+        data=json.dumps(payload).encode("utf-8"),
+        sender_identity="atk-1",
+        source="fake_atk",
+        require_guard=True,
+    )
+    assert accepted is not None and accepted.actions is not None
+    return next(action for action in accepted.actions if action["action"] == BODY_OP_PRESENCE_SET)
+
+
+async def _body_runtime(
+    store: DataStore,
+    *,
+    online: bool = True,
+) -> tuple[LiveKitAdminRuntime, _FakeLiveKitAPI]:
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg, data_store=store)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+    if online:
+        await runtime.run_probe_cycle(["stackchan-1"])
+    return runtime, fake_api
+
+
+def _guard_app(
+    *,
+    control: GuardControlPlane,
+    store: DataStore,
+    runtime: LiveKitAdminRuntime,
+    worker: GuardBodyActionDeliveryWorker,
+) -> FastAPI:
+    app = FastAPI()
+    app.state.guard_control_plane = control
+    app.state.guard_ingress = GuardIngress(control)
+    app.state.guard_fixture_subscriber = MissionControlFixtureSubscriber(control)
+    app.state.admin_runtime = runtime
+    app.state.guard_body_delivery = worker
+    app.state.data_store = store
+    app.include_router(guard_router)
+    return app
+
+
 async def test_guard_fixture_loop_candidate_action_ack_and_absence(plane) -> None:
     control, store = plane
     candidate = await control.handle(_candidate(), sender_identity="atk-1")
@@ -293,41 +364,16 @@ async def test_fake_atk_admin_endpoint_is_not_the_fixture_events_path(plane) -> 
 
 async def test_body_presence_delivery_uses_standard_command_result_and_ack(plane) -> None:
     control, store = plane
-    await store.companions.create(
-        owner_id="owner-1",
-        companion_id="companion-body",
-        display_name="StackChan",
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body",
+        guard_epoch=9,
     )
-    await store.devices.create_device(
-        device_id="stackchan-1",
-        owner_id="owner-1",
-        name="StackChan",
-        kind="m5stack-core-s3",
-        bound_companion_id="companion-body",
-        capabilities_json={"ops": [BODY_OP_PRESENCE_SET]},
-    )
-
-    payload = {**_candidate(), "correlation_id": "corr-body", "guard_epoch": 9}
-    ingress = GuardIngress(control)
-    accepted = await ingress.handle_packet(
-        topic=CONTROL_TOPIC,
-        data=json.dumps(payload).encode("utf-8"),
-        sender_identity="atk-1",
-        source="fake_atk",
-        require_guard=True,
-    )
-    assert accepted is not None and accepted.actions is not None
-    body_action = next(action for action in accepted.actions if action["action"] == BODY_OP_PRESENCE_SET)
     assert body_action["subscriber"] == "stackchan-1"
     assert body_action["payload"] == {"state": "awake", "presence": "candidate"}
 
-    cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
-    runtime = LiveKitAdminRuntime(cfg, data_store=store)
-    fake_api = _FakeLiveKitAPI()
-    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
-    await runtime.run_probe_cycle(["stackchan-1"])
-
+    runtime, fake_api = await _body_runtime(store)
     worker = GuardBodyActionDeliveryWorker(store, runtime, control)
     assert await worker.reconcile_once() == 1
     row = await store.guard_actions.get(body_action["action_id"])
@@ -350,29 +396,155 @@ async def test_body_presence_delivery_uses_standard_command_result_and_ack(plane
     assert "owner_face" not in forbidden
     assert "raw_image" not in forbidden
 
-    updated = await runtime.apply_command_ack(
-        {
-            "v": 1,
-            "kind": "result",
-            "ref": row.command_id,
-            "device_id": "stackchan-1",
-            "op": BODY_OP_PRESENCE_SET,
-            "status": "completed",
-            "code": "OK",
-            "result": {
-                "action_id": body_action["action_id"],
-                "state": "awake",
-                "applied": True,
-            },
-        },
-        sender_identity="stackchan-1",
-    )
-    assert updated is not None and updated["status"] == "succeeded"
-    await worker.apply_command_result(updated)
+    app = _guard_app(control=control, store=store, runtime=runtime, worker=worker)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/admin/guard/fake-body/result",
+            json={"envelope": envelope, "sender_identity": "stackchan-1"},
+        )
+        repeated = await client.post(
+            "/api/admin/guard/fake-body/result",
+            json={"envelope": envelope, "sender_identity": "stackchan-1"},
+        )
 
+    assert response.status_code == 200
+    assert response.json()["command_id"] == row.command_id
+    assert response.json()["action_id"] == body_action["action_id"]
+    assert response.json()["guard_action_status"] == "acknowledged"
+    assert response.json()["result"]["kind"] == "result"
+    assert response.json()["result"]["result"] == {
+        "action_id": body_action["action_id"],
+        "state": "awake",
+        "applied": True,
+    }
+    assert repeated.status_code == 200
+    assert repeated.json()["guard_action_status"] == "acknowledged"
     acknowledged = await store.guard_actions.get(body_action["action_id"])
     assert acknowledged is not None and acknowledged.status == "acknowledged"
     assert acknowledged.ack_json["subscriber"] == "stackchan-1"
+
+
+@pytest.mark.parametrize(
+    "envelope",
+    [
+        {
+            "v": 1,
+            "kind": "cmd",
+            "id": "cmd-guard-action",
+            "op": "guard.policy.action",
+            "payload": {"type": "guard.policy.action"},
+        },
+        {
+            "v": 1,
+            "kind": "cmd",
+            "id": "cmd-candidate",
+            "op": BODY_OP_PRESENCE_SET,
+            "payload": {
+                "state": "awake",
+                "guard_epoch": 1,
+                "correlation_id": "corr-body",
+                "action_id": "action-body",
+                "face_score": 0.91,
+            },
+        },
+        {
+            "v": 1,
+            "kind": "cmd",
+            "id": "cmd-presence",
+            "op": BODY_OP_PRESENCE_SET,
+            "payload": {
+                "state": "awake",
+                "guard_epoch": 1,
+                "correlation_id": "corr-body",
+                "action_id": "action-body",
+                "presence": "candidate",
+            },
+        },
+        {
+            "v": 1,
+            "kind": "cmd",
+            "id": "cmd-owner-face-score",
+            "op": BODY_OP_PRESENCE_SET,
+            "payload": {
+                "state": "awake",
+                "guard_epoch": 1,
+                "correlation_id": "corr-body",
+                "action_id": "action-body",
+            },
+            "ownerFaceScore": 0.92,
+        },
+    ],
+)
+async def test_fake_body_endpoint_rejects_guard_face_and_presence_payloads(envelope) -> None:
+    app = FastAPI()
+    app.include_router(guard_router)
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/admin/guard/fake-body/result",
+            json={"envelope": envelope, "sender_identity": "stackchan-1"},
+        )
+
+    assert response.status_code == 422
+    assert "fake body endpoint" in response.json()["detail"]
+
+
+async def test_body_presence_delivery_records_retry_error_when_body_offline(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body-offline",
+        guard_epoch=11,
+    )
+    runtime, fake_api = await _body_runtime(store, online=False)
+    worker = GuardBodyActionDeliveryWorker(store, runtime, control)
+
+    assert await worker.reconcile_once() == 0
+
+    row = await store.guard_actions.get(body_action["action_id"])
+    assert row is not None
+    assert row.status == "published"
+    assert row.command_id is None
+    assert row.delivery_attempt_count == 1
+    assert "not currently connected" in row.last_error
+    assert fake_api.room.sent_payloads == []
+
+
+async def test_fake_body_result_action_mismatch_fails_guard_action(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body-mismatch",
+        guard_epoch=12,
+    )
+    runtime, fake_api = await _body_runtime(store)
+    worker = GuardBodyActionDeliveryWorker(store, runtime, control)
+    assert await worker.reconcile_once() == 1
+
+    sent = fake_api.room.sent_payloads[-1]
+    envelope = json.loads(bytes(sent.data).decode("utf-8"))
+    app = _guard_app(control=control, store=store, runtime=runtime, worker=worker)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response = await client.post(
+            "/api/admin/guard/fake-body/result",
+            json={
+                "envelope": envelope,
+                "sender_identity": "stackchan-1",
+                "action_id_override": "wrong-action",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["action_id"] == body_action["action_id"]
+    assert response.json()["guard_action_status"] == "failed"
+    assert response.json()["result"]["result"]["action_id"] == "wrong-action"
+    failed = await store.guard_actions.get(body_action["action_id"])
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.ack_json["status"] == "failed"
+    assert "does not match" in failed.ack_json["message"]
 
 
 async def test_guard_policy_respects_active_binding_configuration(plane) -> None:
