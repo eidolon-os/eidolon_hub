@@ -18,6 +18,8 @@ from eidolon_sdk.integrations.livekit import build_livekit_token
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.guard_ingress import GuardIngress
+from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
 
 logger = logging.getLogger(__name__)
 
@@ -53,9 +55,22 @@ class LiveKitControlBridge:
     forwards them into ``LiveKitAdminRuntime``.
     """
 
-    def __init__(self, config: AppConfig, runtime: LiveKitAdminRuntime):
+    def __init__(
+        self,
+        config: AppConfig,
+        runtime: LiveKitAdminRuntime,
+        guard_control_plane: GuardControlPlane | None = None,
+        guard_ingress: GuardIngress | None = None,
+        guard_runtime_reconciler: Any | None = None,
+        guard_body_delivery: Any | None = None,
+    ):
         self._config = config
         self._runtime = runtime
+        self._guard_ingress = guard_ingress
+        if self._guard_ingress is None and guard_control_plane is not None:
+            self._guard_ingress = GuardIngress(guard_control_plane)
+        self._guard_runtime_reconciler = guard_runtime_reconciler
+        self._guard_body_delivery = guard_body_delivery
         self._rooms: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._started = False
@@ -198,6 +213,21 @@ class LiveKitControlBridge:
             raw = data.encode("utf-8")
         else:
             raw = bytes(data)
+        participant = getattr(packet, "participant", None)
+        sender_identity = getattr(participant, "identity", "") or ""
+        if self._guard_ingress is not None:
+            try:
+                accepted = await self._guard_ingress.handle_packet(
+                    topic=CONTROL_TOPIC,
+                    data=raw,
+                    sender_identity=sender_identity,
+                    source="livekit",
+                )
+            except (GuardPolicyError, ValueError):
+                logger.warning("LiveKit control bridge rejected guard event sender=%s", sender_identity)
+                return
+            if accepted is not None:
+                return
         try:
             envelope = json.loads(raw.decode("utf-8"))
         except Exception:
@@ -206,12 +236,14 @@ class LiveKitControlBridge:
         if envelope.get("kind") not in {"ack", "result"}:
             return
 
-        participant = getattr(packet, "participant", None)
-        sender_identity = getattr(participant, "identity", "") or ""
         updated = await self._runtime.apply_command_ack(
             envelope,
             sender_identity=sender_identity,
         )
+        if updated is not None and self._guard_runtime_reconciler is not None:
+            await self._guard_runtime_reconciler.apply_command_result(updated)
+        if updated is not None and self._guard_body_delivery is not None:
+            await self._guard_body_delivery.apply_command_result(updated)
         if updated is None:
             ref = envelope.get("ref") or envelope.get("command_id")
             if _is_session_local_ack_ref(ref):

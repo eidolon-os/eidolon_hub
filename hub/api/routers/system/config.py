@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import uuid
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
 from eidolon_sdk.biz.admin import (
     AdminClient,
@@ -27,8 +27,9 @@ from eidolon_sdk.biz.contracts import (
     VALID_SESSION_INTENTS,
 )
 from eidolon_sdk.biz.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
+from eidolon_sdk.biz.guard import GuardRuntimeConfig
 from fastapi import APIRouter, Header, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from hub.api.routers.system.token import AgentMode, TokenResponse, generate_token
 from hub.config import AppConfig, load_config, resolve_eidolon_livekit_client_url
@@ -126,6 +127,19 @@ class ESP32ConfigResponse(BaseModel):
     status: ESP32ConfigStatus = ESP32ConfigStatus.ACTIVE
     config: ESP32Config
     device: dict[str, Any] | None = None
+
+
+class GuardRuntimeConfigResponse(BaseModel):
+    """Device-local Guard runtime configuration, separate from persona config."""
+
+    success: Literal[True] = True
+    schema_v: Literal[1] = 1
+    binding_id: str
+    guard_companion_id: str
+    desired_runtime_state: Literal["running", "stopped"]
+    runtime_revision: int = Field(ge=1)
+    runtime_config: GuardRuntimeConfig
+    control: ESP32ControlConfig
 
 
 def _token_pair(
@@ -314,6 +328,16 @@ class DeviceRegisterBody(BaseModel):
     """Body for ``POST /api/device/register`` — the device's self-declared manifest."""
 
     capabilities: list[dict] = Field(default_factory=list)
+    guard: bool = False
+    guard_protocol_versions: list[int] = Field(default_factory=list, max_length=8)
+
+    @model_validator(mode="after")
+    def _validate_guard_manifest(self) -> "DeviceRegisterBody":
+        if not self.guard and self.guard_protocol_versions:
+            raise ValueError("guard_protocol_versions requires guard=true")
+        if self.guard and 1 not in self.guard_protocol_versions:
+            raise ValueError("guard-capable devices must declare guard protocol version 1")
+        return self
 
 
 def _normalize_capabilities(
@@ -342,19 +366,26 @@ def _normalize_capabilities(
     return out
 
 
-async def _esp32_response(
+def _guard_manifest(body: DeviceRegisterBody) -> dict | None:
+    if not body.guard:
+        return None
+    return {
+        "enabled": True,
+        "protocol_versions": sorted(set(body.guard_protocol_versions)),
+    }
+
+
+async def _authenticate_signed_device(
     *,
     request: Request,
-    room_name: str | None,
     device_id: str,
-    agent_mode: AgentMode,
-    interaction_mode: str,
-    session_intent: str = SESSION_INTENT_USER_INITIATED,
     auth_headers: DeviceAuthHeaders,
     capabilities: list[dict] | None = None,
+    guard_manifest: dict | None = None,
     method: str = "GET",
     body: bytes = b"",
-) -> ESP32ConfigResponse:
+):
+    """Verify one device request and persist only its Hub registry facts."""
     device_manager = getattr(request.app.state, "device_manager", None)
     if device_manager is None:
         raise HTTPException(
@@ -395,10 +426,36 @@ async def _esp32_response(
             nonce=auth_headers.nonce,
             client_ip=request.client.host if request.client else "",
             capabilities=capabilities,
+            guard_manifest=guard_manifest,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    fingerprint = str((device.metadata or {}).get("fingerprint") or "")
+    return device, str((device.metadata or {}).get("fingerprint") or "")
+
+
+async def _esp32_response(
+    *,
+    request: Request,
+    room_name: str | None,
+    device_id: str,
+    agent_mode: AgentMode,
+    interaction_mode: str,
+    session_intent: str = SESSION_INTENT_USER_INITIATED,
+    auth_headers: DeviceAuthHeaders,
+    capabilities: list[dict] | None = None,
+    guard_manifest: dict | None = None,
+    method: str = "GET",
+    body: bytes = b"",
+) -> ESP32ConfigResponse:
+    device, fingerprint = await _authenticate_signed_device(
+        request=request,
+        device_id=device_id,
+        auth_headers=auth_headers,
+        capabilities=capabilities,
+        guard_manifest=guard_manifest,
+        method=method,
+        body=body,
+    )
 
     if not device.approved:
         return _pending_esp32_response(
@@ -711,8 +768,98 @@ async def register_device(
             signature=x_device_signature or "",
         ),
         capabilities=_normalize_capabilities(body.capabilities),
+        guard_manifest=_guard_manifest(body),
         method="POST",
         body=raw_body,
+    )
+
+
+@router.get(
+    "/guard/runtime-config",
+    response_model=GuardRuntimeConfigResponse,
+    summary="Authenticated Guard device runtime configuration",
+)
+async def get_guard_runtime_config(
+    request: Request,
+    x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
+    x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
+    x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
+    x_device_public_key: str | None = Header(default=None, alias="X-Device-Public-Key"),
+    x_device_signature: str | None = Header(default=None, alias="X-Device-Signature"),
+) -> GuardRuntimeConfigResponse:
+    """Return only active binding-local runtime data to its signed device.
+
+    This route intentionally bypasses persona resolution: guard companions do
+    not own a genome or memory realm.  P1 Hub policy configuration is never
+    included in this response.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=422, detail="X-Device-ID header is required")
+    missing_auth = [
+        name
+        for name, value in [
+            ("X-Device-Nonce", x_device_nonce),
+            ("X-Device-Timestamp", x_device_timestamp),
+            ("X-Device-Signature", x_device_signature),
+        ]
+        if not value
+    ]
+    if missing_auth:
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing device auth headers: {', '.join(missing_auth)}",
+        )
+    device, _fingerprint = await _authenticate_signed_device(
+        request=request,
+        device_id=x_device_id,
+        auth_headers=DeviceAuthHeaders(
+            device_id=x_device_id,
+            nonce=x_device_nonce or "",
+            timestamp=x_device_timestamp or "",
+            public_key=x_device_public_key,
+            signature=x_device_signature or "",
+        ),
+    )
+    if not device.approved:
+        raise HTTPException(status_code=412, detail="guard device is not approved")
+    store = getattr(request.app.state, "data_store", None)
+    if store is None:
+        raise HTTPException(status_code=503, detail="eidolon_data store unavailable")
+    binding = await store.guard_bindings.get_active_for_device(x_device_id)
+    if binding is None:
+        raise HTTPException(status_code=409, detail="device has no active guard binding")
+    try:
+        runtime_config = GuardRuntimeConfig.model_validate(binding.runtime_config_json or {})
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail="active guard runtime config is invalid") from exc
+    try:
+        _identity, control_token = generate_token(
+            room_name=_default_control_room_name(x_device_id),
+            participant_name=x_device_id,
+            participant_metadata={
+                "kind": "guard_control",
+                "device_id": x_device_id,
+                "guard_companion_id": binding.guard_companion_id,
+            },
+            dispatch_agent=False,
+            can_publish=False,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return GuardRuntimeConfigResponse(
+        binding_id=binding.binding_id,
+        guard_companion_id=binding.guard_companion_id,
+        desired_runtime_state=binding.desired_runtime_state,
+        runtime_revision=binding.runtime_revision,
+        runtime_config=runtime_config,
+        control=ESP32ControlConfig(
+            server_url=_server_url(request),
+            token=control_token,
+            identity=x_device_id,
+            room_name=_default_control_room_name(x_device_id),
+        ),
     )
 
 

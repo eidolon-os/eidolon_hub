@@ -79,6 +79,57 @@ async def test_control_bridge_applies_livekit_ack_packet():
     assert stored["ack"]["code"] == "OK"
 
 
+@pytest.mark.asyncio
+async def test_control_bridge_forwards_terminal_guard_runtime_result_to_reconciler():
+    class RuntimeReconciler:
+        def __init__(self) -> None:
+            self.commands = []
+
+        async def apply_command_result(self, command):
+            self.commands.append(command)
+
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command(
+        "esp32-1",
+        {"binding_id": "gb-1", "runtime_revision": 1, "desired_runtime_state": "running"},
+        op="guard.runtime.sync",
+        qos="result",
+    )
+    reconciler = RuntimeReconciler()
+    bridge = LiveKitControlBridge(cfg, runtime, guard_runtime_reconciler=reconciler)
+    packet = SimpleNamespace(
+        topic=CONTROL_TOPIC,
+        data=json.dumps(
+            {
+                "v": 1,
+                "kind": "result",
+                "ref": command["command_id"],
+                "device_id": "esp32-1",
+                "op": "guard.runtime.sync",
+                "status": "completed",
+                "code": "OK",
+                "result": {
+                    "binding_id": "gb-1",
+                    "runtime_revision": 1,
+                    "desired_runtime_state": "running",
+                    "running": True,
+                },
+            }
+        ).encode("utf-8"),
+        participant=SimpleNamespace(identity="esp32-1"),
+    )
+
+    await bridge._handle_packet(packet)
+
+    assert len(reconciler.commands) == 1
+    assert reconciler.commands[0]["status"] == "succeeded"
+
+
 class _FakeRoom:
     def __init__(self):
         self.connected = False
@@ -207,3 +258,39 @@ async def test_control_bridge_ignores_non_ack_control_packet():
 
     stored = await runtime.get_command(command["command_id"])
     assert stored["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_control_bridge_routes_guard_facts_from_eidolon_control():
+    class GuardFixture:
+        def __init__(self):
+            self.calls = []
+
+        async def handle(self, payload, *, sender_identity="", source="fixture"):
+            self.calls.append((payload, sender_identity, source))
+
+    cfg = AppConfig()
+    runtime = LiveKitAdminRuntime(cfg)
+    fixture = GuardFixture()
+    bridge = LiveKitControlBridge(cfg, runtime, guard_control_plane=fixture)  # type: ignore[arg-type]
+    payload = {
+        "type": "guard.presence.candidate",
+        "schema_v": 1,
+        "guard_companion_id": "guard-1",
+        "device_id": "atk-1",
+        "correlation_id": "corr-1",
+        "guard_epoch": 1,
+        "ts_ms": 1,
+        "signals": {"motion_cells": 1},
+        "raw_retention": "none",
+        "debounce_ms": 500,
+    }
+    packet = SimpleNamespace(
+        topic=CONTROL_TOPIC,
+        data=json.dumps(payload).encode("utf-8"),
+        participant=SimpleNamespace(identity="atk-1"),
+    )
+
+    await bridge._handle_packet(packet)
+
+    assert fixture.calls == [(payload, "atk-1", "livekit")]

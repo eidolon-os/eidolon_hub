@@ -46,6 +46,7 @@ def client(tmp_path):
         dm = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
         asyncio.run(dm.load())
         app.state.device_manager = dm
+        app.state.data_store = store
         app.state.admin_client = AsyncMock()
         app.state.admin_resolve_client = AsyncMock()
         yield TestClient(app)
@@ -135,6 +136,66 @@ def test_config_esp32_default_client_type(client: TestClient):
         PublicFormat.SubjectPublicKeyInfo,
     )
     assert data["device"]["fingerprint"] == public_key_fingerprint(_b64url(public_der))
+
+
+def test_guard_runtime_config_uses_active_guard_binding_without_persona_resolution(
+    client: TestClient,
+):
+    store = client.app.state.data_store
+    device_id = "atk-runtime"
+    asyncio.run(store.owners.create(owner_id="owner-guard", display_name="Guard Owner"))
+    asyncio.run(
+        store.devices.create_device(
+            device_id=device_id,
+            owner_id=None,
+            kind="esp32",
+            capabilities_json={"guard": {"enabled": True, "protocol_versions": [1]}},
+            metadata_json={"hub_registry": {"approved": True}},
+        )
+    )
+    asyncio.run(
+        store.guard_bindings.claim(
+            owner_id="owner-guard",
+            device_id=device_id,
+            guard_companion_id="guard-runtime",
+            runtime_config_json={
+                "sample_interval_ms": 600,
+                "preview_interval_ms": 600,
+                "motion_threshold": 20,
+                "motion_clear_threshold": 10,
+                "candidate_debounce_ms": 600,
+                "absence_timeout_ms": 1200,
+                "consecutive_capture_failures": 3,
+            },
+        )
+    )
+    asyncio.run(client.app.state.device_manager.load())
+    key = ec.generate_private_key(ec.SECP256R1())
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=(device_id, "guard-control-token"),
+    ) as generate_token:
+        response = client.get(
+            "/api/guard/runtime-config",
+            headers=_signed_device_headers(
+                device_id=device_id,
+                path_query="/api/guard/runtime-config",
+                key=key,
+            ),
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["guard_companion_id"] == "guard-runtime"
+    assert body["desired_runtime_state"] == "running"
+    assert body["runtime_revision"] == 1
+    assert body["runtime_config"]["sample_interval_ms"] == 600
+    assert body["control"]["room_name"] == "device-atk-runtime-control"
+    assert "config_json" not in body
+    assert generate_token.call_args.kwargs["dispatch_agent"] is False
+    assert generate_token.call_args.kwargs["can_publish"] is False
+    assert generate_token.call_args.kwargs["can_subscribe"] is True
+    assert generate_token.call_args.kwargs["can_publish_data"] is True
 
 
 def test_config_esp32_explicit_client_type(client: TestClient):
@@ -717,6 +778,31 @@ def test_device_register_forwards_capabilities_and_returns_config(client: TestCl
     caps = spy.call_args.kwargs["capabilities"]
     assert [c["name"] for c in caps] == ["display.update", "sound.play"]
     assert dm.get("dev-reg") is not None
+
+
+def test_device_register_persists_guard_capability_declaration(client: TestClient):
+    import json
+
+    manifest = {
+        "capabilities": [{"name": "guard.presence.candidate"}],
+        "guard": True,
+        "guard_protocol_versions": [1],
+    }
+    body_bytes = json.dumps(manifest).encode("utf-8")
+    dm = client.app.state.device_manager
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("atk-guard", "jwt"),
+    ):
+        response = client.post(
+            "/api/device/register",
+            headers=_signed_post_headers(device_id="atk-guard", body=body_bytes),
+            content=body_bytes,
+        )
+    assert response.status_code == 200
+    record = asyncio.run(dm._repository.get("atk-guard"))
+    assert record is not None
+    assert record.metadata["guard_manifest"] == {"enabled": True, "protocol_versions": [1]}
 
 
 def test_device_register_requires_signature(client: TestClient):

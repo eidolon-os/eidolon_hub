@@ -105,6 +105,7 @@ class DeviceManager:
         name: str = "",
         client_ip: str = "",
         capabilities: list[dict] | None = None,
+        guard_manifest: dict | None = None,
     ) -> Device:
         """Register/touch a signed device config request.
 
@@ -131,8 +132,16 @@ class DeviceManager:
             recent.append(nonce)
             del recent[:-32]
             record = _record_from_device(device)
+            updates = {}
             if capabilities:
-                record = record.model_copy(update={"capabilities": list(capabilities)})
+                updates["capabilities"] = list(capabilities)
+            if guard_manifest is not None:
+                updates["metadata"] = {
+                    **record.metadata,
+                    "guard_manifest": dict(guard_manifest),
+                }
+            if updates:
+                record = record.model_copy(update=updates)
             await self._repository.put(record)
             return device
 

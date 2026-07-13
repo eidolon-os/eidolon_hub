@@ -18,6 +18,7 @@ from hub.api.routers.admin import (
     admin_devices_router,
     admin_discovery_router,
     admin_events_router,
+    admin_guard_router,
 )
 from hub.api.routers.system import config_router
 from hub.config import AppConfig, load_config
@@ -25,6 +26,11 @@ from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
 from hub.core.discovery import MdnsDiscoveryState, mdns_lifespan
+from hub.core.guard_body_delivery import GuardBodyActionDeliveryWorker
+from hub.core.guard_fixture_subscriber import MissionControlFixtureSubscriber
+from hub.core.guard_ingress import GuardIngress
+from hub.core.guard_policy import GuardControlPlane
+from hub.core.guard_runtime_reconciler import GuardRuntimeReconciler
 from hub.core.proactive_wake import ProactiveWakeOrchestrator
 from hub.logging import setup_logging
 
@@ -43,7 +49,23 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         device_manager = DeviceManager(EidolonDataDeviceRegistryRepository(data_store))
         await device_manager.load()
         admin_runtime = LiveKitAdminRuntime(app_config, data_store=data_store)
-        control_bridge = LiveKitControlBridge(app_config, admin_runtime)
+        guard_control_plane = GuardControlPlane(data_store)
+        guard_ingress = GuardIngress(guard_control_plane)
+        guard_runtime_reconciler = GuardRuntimeReconciler(data_store, admin_runtime)
+        guard_body_delivery = GuardBodyActionDeliveryWorker(
+            data_store,
+            admin_runtime,
+            guard_control_plane,
+        )
+        guard_fixture_subscriber = MissionControlFixtureSubscriber(guard_control_plane)
+        control_bridge = LiveKitControlBridge(
+            app_config,
+            admin_runtime,
+            guard_control_plane=guard_control_plane,
+            guard_ingress=guard_ingress,
+            guard_runtime_reconciler=guard_runtime_reconciler,
+            guard_body_delivery=guard_body_delivery,
+        )
         admin_runtime.set_control_bridge(control_bridge)
         discovery_state = MdnsDiscoveryState()
 
@@ -62,6 +84,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.device_manager = device_manager
         app.state.data_store = data_store
         app.state.admin_runtime = admin_runtime
+        app.state.guard_control_plane = guard_control_plane
+        app.state.guard_ingress = guard_ingress
+        app.state.guard_runtime_reconciler = guard_runtime_reconciler
+        app.state.guard_body_delivery = guard_body_delivery
+        app.state.guard_fixture_subscriber = guard_fixture_subscriber
         app.state.control_bridge = control_bridge
         app.state.discovery_state = discovery_state
         app.state.config = app_config
@@ -96,6 +123,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                         ]
                     )
                     await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
+                    await guard_runtime_reconciler.reconcile_once()
+                    await guard_body_delivery.reconcile_once()
                     await asyncio.sleep(app_config.admin.probe_interval_seconds)
 
             probe_task = asyncio.create_task(probe_loop())
@@ -144,6 +173,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(admin_discovery_router)
     app.include_router(admin_commands_router)
     app.include_router(admin_events_router)
+    app.include_router(admin_guard_router)
 
     return app
 

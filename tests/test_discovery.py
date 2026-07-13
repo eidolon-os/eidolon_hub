@@ -73,6 +73,10 @@ class TestMdnsLifespan:
     @pytest.fixture
     def mock_zeroconf(self, monkeypatch):
         """Patches zeroconf imports so we can inspect ServiceInfo passed in."""
+        # Registration assertions are unit tests, not probes of the runner's
+        # network.  The production path intentionally declines loopback-only
+        # hosts; individual availability tests override this fixture as needed.
+        monkeypatch.setattr("hub.core.discovery._local_ipv4", lambda: "192.0.2.10")
         infos_registered: list[MagicMock] = []
         infos_unregistered: list[MagicMock] = []
 
