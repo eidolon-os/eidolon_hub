@@ -65,6 +65,27 @@ ESP32 响应体与原先 `/api/esp32/config` 相同；Web 响应体与原先 `/a
   - Channel: `core.livekit_url`, `core.api_key`, `core.api_secret`.
   - Server: `eidolon_admin/deploy/livekit/livekit.yaml`.
 
+## ATK Guard Fake E2E
+
+ATK Guard 下行的生产路径保持为 Hub command plane：
+
+```text
+guard_policy_actions outbox -> admin_runtime.send_command -> LiveKit data packet -> participant identity
+```
+
+fake StackChan HTTP endpoint 只用于开发/测试时模拟设备收到标准 `body.presence.set` command 后回传标准 result；它不是生产分发路径。
+
+```bash
+uv run python scripts/guard_fake_e2e.py --scenario all
+```
+
+场景覆盖：
+
+- `success`: fake ATK candidate -> Hub policy action -> fake LiveKit command -> fake StackChan result -> Guard action acknowledged
+- `offline`: body device 声明 capability 但未在线，worker 不制造 command，只记录可重试错误
+- `mismatch`: fake StackChan 返回不匹配的 `action_id`，Guard action 终态为 failed
+- `reject-guard-body`: fake body endpoint 拒绝 `guard.policy.action` / Guard 语义 payload
+
 ## LAN Discovery (mDNS / Zeroconf)
 
 Hub automatically announces itself on the local network via mDNS, allowing ESP32 devices and web clients to discover it without manual IP configuration.
