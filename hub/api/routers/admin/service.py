@@ -11,6 +11,8 @@ async def build_admin_devices(
     runtime: LiveKitAdminRuntime,
     device_manager: DeviceManager,
 ) -> list[AdminDevice]:
+    # The registry adapter already excludes virtual web bodies, so every device
+    # reaching here is Hub-managed hardware (see EidolonDataDeviceRegistryRepository).
     presence = {item.device_id: item for item in await runtime.get_presence_snapshot()}
     rows: list[AdminDevice] = []
 

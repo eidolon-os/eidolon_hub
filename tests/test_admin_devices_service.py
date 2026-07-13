@@ -84,6 +84,46 @@ async def test_admin_devices_only_lists_registered_devices(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_admin_devices_excludes_web_bodies(tmp_path: Path):
+    """Virtual web bodies live in the shared table but are not Hub hardware.
+
+    They are filtered at the registry adapter, so DeviceManager never caches
+    them and they never reach the admin hardware table (end-to-end check).
+    """
+    store = DataStore.open(DataSettings(sqlite_path=str(tmp_path / "eidolon.sqlite3")))
+    manager = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
+    await manager.load()
+    await manager.register_seen(
+        device_id="esp32-1",
+        name="Touch AMOLED",
+        metadata={"kind": "esp32", "last_ip": "192.168.1.42"},
+    )
+    # Onboarding-style web body written straight to the sovereign device table,
+    # bypassing Hub's register/approve path.
+    await store.devices.put_device(
+        device_id="web-c_owner_fa4722bc",
+        owner_id="owner-test",
+        name="小葵 · 本机",
+        kind="web",
+        status="active",
+        approved_at=datetime(2026, 6, 13, tzinfo=UTC),
+        approved_by="system:onboarding",
+        metadata_json={"role": "local_web"},
+    )
+    # Reload so the manager's in-memory cache picks up the directly-written row.
+    await manager.load()
+
+    rows = await build_admin_devices(
+        runtime=_RuntimeWithPresence(),  # type: ignore[arg-type]
+        device_manager=manager,
+    )
+
+    assert [row.device_id for row in rows] == ["esp32-1"]
+    assert all(row.kind != "web" for row in rows)
+    await store.close()
+
+
+@pytest.mark.asyncio
 async def test_refresh_admin_devices_runs_probe_then_returns_registered_devices(tmp_path: Path):
     store = DataStore.open(DataSettings(sqlite_path=str(tmp_path / "eidolon.sqlite3")))
     manager = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
