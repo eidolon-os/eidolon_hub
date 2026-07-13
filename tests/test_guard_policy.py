@@ -16,8 +16,7 @@ from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.guard_body_delivery import GuardBodyActionDeliveryWorker
 from hub.core.guard_fixture_subscriber import MissionControlFixtureSubscriber
 from hub.core.guard_ingress import GuardIngress
-from hub.core.guard_policy import GuardControlPlane
-from hub.core.guard_policy import GuardPolicyError
+from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
 
 
 @pytest.fixture
@@ -509,6 +508,30 @@ async def test_body_presence_delivery_records_retry_error_when_body_offline(plan
     assert row.delivery_attempt_count == 1
     assert "not currently connected" in row.last_error
     assert fake_api.room.sent_payloads == []
+
+
+async def test_body_presence_timeout_closes_dispatched_action_after_runtime_restart(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body-timeout",
+        guard_epoch=13,
+    )
+    runtime, _fake_api = await _body_runtime(store)
+    worker = GuardBodyActionDeliveryWorker(store, runtime, control)
+    assert await worker.reconcile_once() == 1
+
+    restarted_runtime, _restarted_api = await _body_runtime(store, online=False)
+    restarted_worker = GuardBodyActionDeliveryWorker(store, restarted_runtime, control)
+    assert await restarted_runtime.mark_command_timeout(timeout_seconds=0) == 1
+    assert await restarted_worker.reconcile_command_results() == 1
+
+    failed = await store.guard_actions.get(body_action["action_id"])
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.ack_json["status"] == "failed"
+    assert "no ack/result within 0s" in failed.ack_json["message"]
 
 
 async def test_fake_body_result_action_mismatch_fails_guard_action(plane) -> None:

@@ -379,11 +379,26 @@ class LiveKitAdminRuntime:
 
     async def mark_command_timeout(self, timeout_seconds: int) -> int:
         now = datetime.now(UTC)
+        cutoff = now - timedelta(seconds=timeout_seconds)
+        commands = list(self._commands.values())
+        if self._data_store is not None:
+            rows = await self._data_store.body_commands.list_unfinished_before(
+                created_before=cutoff,
+            )
+            for row in rows:
+                if row.command_id in self._commands:
+                    continue
+                command = _command_from_row(row)
+                self._commands[row.command_id] = command
+                self._command_order.append(row.command_id)
+                commands.append(command)
         touched = 0
-        for command in self._commands.values():
+        for command in commands:
             if command["status"] not in {"sent", "accepted", "running"}:
                 continue
             created_at = datetime.fromisoformat(command["created_at"])
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
             if (now - created_at).total_seconds() < timeout_seconds:
                 continue
             command["status"] = "timeout"

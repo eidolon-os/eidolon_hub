@@ -18,7 +18,6 @@ if str(ROOT) not in sys.path:
 
 from eidolon_data import DataSettings, DataStore  # noqa: E402
 from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET  # noqa: E402
-from eidolon_sdk.biz.contracts import CONTROL_TOPIC  # noqa: E402
 from fastapi import FastAPI  # noqa: E402
 from httpx import ASGITransport, AsyncClient  # noqa: E402
 
@@ -30,7 +29,7 @@ from hub.core.guard_fixture_subscriber import MissionControlFixtureSubscriber  #
 from hub.core.guard_ingress import GuardIngress  # noqa: E402
 from hub.core.guard_policy import GuardControlPlane  # noqa: E402
 
-Scenario = Literal["success", "offline", "mismatch", "reject-guard-body"]
+Scenario = Literal["success", "offline", "mismatch", "timeout", "reject-guard-body"]
 
 
 class FakeRoomService:
@@ -97,26 +96,36 @@ async def _run_scenario_with_store(scenario: Scenario, store: DataStore) -> dict
         }
 
     accepted = await _post_fake_atk_candidate(app, correlation_id=f"corr-{scenario}")
-    body_action = _find_body_action(accepted.json())
+    accepted_payload = accepted.json()
+    mission_action_ids = _mission_control_action_ids(accepted_payload)
+    fixture_drain = await _drain_mission_control_fixture(app)
+    body_action = _find_body_action(accepted_payload)
     dispatch_count = await worker.reconcile_once()
     row = await store.guard_actions.get(body_action["action_id"])
 
     result_response: dict[str, Any] | None = None
     command_envelope: dict[str, Any] | None = None
+    timeout_count = 0
     if fake_api.room.sent_payloads:
         sent = fake_api.room.sent_payloads[-1]
         command_envelope = json.loads(bytes(sent.data).decode("utf-8"))
-        result = await _post_fake_body_result(
-            app,
-            command_envelope,
-            action_id_override="wrong-action" if scenario == "mismatch" else None,
-        )
-        result_response = result.json()
+        if scenario == "timeout":
+            timeout_count = await runtime.mark_command_timeout(timeout_seconds=0)
+            await worker.reconcile_command_results()
+        else:
+            result = await _post_fake_body_result(
+                app,
+                command_envelope,
+                action_id_override="wrong-action" if scenario == "mismatch" else None,
+            )
+            result_response = result.json()
 
     final = await store.guard_actions.get(body_action["action_id"])
     return {
         "scenario": scenario,
         "fake_atk_status": accepted.status_code,
+        "mission_control_action_ids": mission_action_ids,
+        "mission_control_acknowledged_action_ids": fixture_drain["acknowledged_action_ids"],
         "body_action_id": body_action["action_id"],
         "body_subscriber": body_action["subscriber"],
         "dispatch_count": dispatch_count,
@@ -126,7 +135,17 @@ async def _run_scenario_with_store(scenario: Scenario, store: DataStore) -> dict
         "guard_action_status": final.status if final is not None else None,
         "delivery_attempt_count": final.delivery_attempt_count if final is not None else None,
         "last_error": final.last_error if final is not None else None,
-        "passed": _scenario_passed(scenario, dispatch_count, row, final, result_response),
+        "timeout_count": timeout_count,
+        "passed": _scenario_passed(
+            scenario,
+            dispatch_count,
+            row,
+            final,
+            result_response,
+            mission_action_ids=mission_action_ids,
+            fixture_acknowledged_action_ids=fixture_drain["acknowledged_action_ids"],
+            timeout_count=timeout_count,
+        ),
     }
 
 
@@ -202,7 +221,8 @@ async def _post_fake_atk_candidate(app: FastAPI, *, correlation_id: str) -> Any:
         "correlation_id": correlation_id,
         "guard_epoch": 42,
         "ts_ms": 1_700_000_000_000,
-        "signals": {"motion_cells": 5},
+        "signals": {"observation_sequence": 1, "runtime_revision": 1},
+        "camera": {"motion_score": 0.2},
         "raw_retention": "none",
         "debounce_ms": 800,
     }
@@ -232,11 +252,26 @@ async def _post_fake_body_result(
         return await client.post("/api/admin/guard/fake-body/result", json=payload)
 
 
+async def _drain_mission_control_fixture(app: FastAPI) -> dict[str, Any]:
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://fake") as client:
+        response = await client.post("/api/admin/guard/fixture/drain", json={"limit": 50})
+    response.raise_for_status()
+    return response.json()
+
+
 def _find_body_action(response_json: dict[str, Any]) -> dict[str, Any]:
     for action in response_json.get("actions") or []:
         if action.get("action") == BODY_OP_PRESENCE_SET:
             return action
     raise RuntimeError("fake ATK candidate did not produce a body.presence.set action")
+
+
+def _mission_control_action_ids(response_json: dict[str, Any]) -> list[str]:
+    return [
+        str(action["action_id"])
+        for action in response_json.get("actions") or []
+        if action.get("subscriber") == "mission_control_fixture"
+    ]
 
 
 def _summarize_command(envelope: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -258,8 +293,14 @@ def _scenario_passed(
     row: Any,
     final: Any,
     result_response: dict[str, Any] | None,
+    *,
+    mission_action_ids: list[str],
+    fixture_acknowledged_action_ids: list[str],
+    timeout_count: int,
 ) -> bool:
     if final is None:
+        return False
+    if not mission_action_ids or set(mission_action_ids) != set(fixture_acknowledged_action_ids):
         return False
     if scenario == "success":
         return dispatch_count == 1 and bool(row and row.command_id) and final.status == "acknowledged"
@@ -279,13 +320,21 @@ def _scenario_passed(
             and result_response.get("guard_action_status") == "failed"
             and final.status == "failed"
         )
+    if scenario == "timeout":
+        return (
+            dispatch_count == 1
+            and timeout_count == 1
+            and row is not None
+            and final.status == "failed"
+            and "no ack/result" in (final.ack_json or {}).get("message", "")
+        )
     return False
 
 
 async def _main_async(args: argparse.Namespace) -> int:
     scenarios: list[Scenario]
     if args.scenario == "all":
-        scenarios = ["success", "offline", "mismatch", "reject-guard-body"]
+        scenarios = ["success", "offline", "mismatch", "timeout", "reject-guard-body"]
     else:
         scenarios = [args.scenario]
     results = [await run_scenario(scenario) for scenario in scenarios]
@@ -297,7 +346,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
-        choices=["all", "success", "offline", "mismatch", "reject-guard-body"],
+        choices=["all", "success", "offline", "mismatch", "timeout", "reject-guard-body"],
         default="all",
         help="Fake E2E scenario to run.",
     )

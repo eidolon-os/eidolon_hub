@@ -22,6 +22,7 @@ def _load_runner():
         ("success", "acknowledged"),
         ("offline", "published"),
         ("mismatch", "failed"),
+        ("timeout", "failed"),
     ],
 )
 async def test_guard_fake_e2e_runner_scenarios(scenario: str, expected_status: str) -> None:
@@ -31,6 +32,7 @@ async def test_guard_fake_e2e_runner_scenarios(scenario: str, expected_status: s
 
     assert result["passed"] is True
     assert result["guard_action_status"] == expected_status
+    assert result["mission_control_action_ids"] == result["mission_control_acknowledged_action_ids"]
 
 
 @pytest.mark.asyncio

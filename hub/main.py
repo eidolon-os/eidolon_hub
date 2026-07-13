@@ -123,6 +123,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                         ]
                     )
                     await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
+                    await guard_body_delivery.reconcile_command_results()
                     await guard_runtime_reconciler.reconcile_once()
                     await guard_body_delivery.reconcile_once()
                     await asyncio.sleep(app_config.admin.probe_interval_seconds)

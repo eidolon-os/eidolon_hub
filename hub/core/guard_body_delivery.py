@@ -71,6 +71,25 @@ class GuardBodyActionDeliveryWorker:
                 dispatched += 1
         return dispatched
 
+    async def reconcile_command_results(self, *, limit: int = 50) -> int:
+        """Close durable action rows whose standard body command is terminal."""
+        reconciled = 0
+        rows = await self._store.guard_actions.list_dispatched_body_deliveries(
+            action=BODY_OP_PRESENCE_SET,
+            limit=limit,
+        )
+        for row in rows:
+            if not row.command_id:
+                continue
+            command = await self._runtime.get_command(row.command_id)
+            if command is None:
+                continue
+            if command.get("status") not in {"succeeded", "failed", "rejected", "expired", "timeout"}:
+                continue
+            await self.apply_command_result(command)
+            reconciled += 1
+        return reconciled
+
     async def apply_command_result(self, command: dict[str, Any]) -> None:
         if command.get("op") != BODY_OP_PRESENCE_SET:
             return
