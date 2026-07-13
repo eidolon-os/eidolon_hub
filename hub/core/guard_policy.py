@@ -114,7 +114,7 @@ class GuardControlPlane:
         if not decisions:
             return GuardPolicyResult(accepted=message.model_dump(mode="json"))
 
-        actions: list[dict] = []
+        action_messages: list[GuardPolicyAction] = []
         for item in decisions:
             action = GuardPolicyAction(
                 guard_companion_id=message.guard_companion_id,
@@ -128,20 +128,45 @@ class GuardControlPlane:
                 subscriber=item.subscriber,
                 payload=item.payload,
             )
-            await self._store.guard_actions.publish(
-                action_id=action.action_id,
+            action_messages.append(action)
+
+        published = await self._store.guard_actions.publish_many(
+            actions=[
+                {
+                    "action_id": action.action_id,
+                    "binding_id": binding.binding_id,
+                    "owner_id": binding.owner_id,
+                    "guard_companion_id": action.guard_companion_id,
+                    "device_id": action.device_id,
+                    "correlation_id": action.correlation_id,
+                    "guard_epoch": action.guard_epoch,
+                    "fact_type": message.type,
+                    "policy_id": action.policy_id,
+                    "action": action.action,
+                    "subscriber": action.subscriber,
+                    "payload_json": action.payload,
+                }
+                for action in action_messages
+            ]
+        )
+        if published is None:
+            replayed = await self._store.guard_actions.list_for_fact(
                 binding_id=binding.binding_id,
-                owner_id=binding.owner_id,
-                guard_companion_id=action.guard_companion_id,
-                device_id=action.device_id,
-                correlation_id=action.correlation_id,
-                guard_epoch=action.guard_epoch,
+                correlation_id=message.correlation_id,
+                guard_epoch=message.guard_epoch,
                 fact_type=message.type,
-                policy_id=action.policy_id,
-                action=action.action,
-                subscriber=action.subscriber,
-                payload_json=action.payload,
             )
+            if not replayed:
+                raise GuardPolicyError("guard fact replay is still being committed")
+            actions = [self._action_from_row(row) for row in replayed]
+            return GuardPolicyResult(
+                accepted=message.model_dump(mode="json"),
+                action=actions[0],
+                actions=actions,
+            )
+
+        actions: list[dict] = []
+        for action in action_messages:
             await self._record_action(binding.owner_id, action)
             actions.append(action.model_dump(mode="json"))
         return GuardPolicyResult(
@@ -164,10 +189,13 @@ class GuardControlPlane:
 
     def _assert_source_boundary(self, message, source: str) -> None:
         if source in {"livekit", "fake_atk"}:
+            if isinstance(message, (GuardPresenceCandidate, GuardPresenceAbsent)):
+                return
             if isinstance(message, GuardPresenceVerified):
                 raise GuardPolicyError("verified guard facts are fixture-only")
             if isinstance(message, GuardPolicyActionAck):
                 raise GuardPolicyError("device ingress does not accept guard action acknowledgements")
+            raise GuardPolicyError("device ingress only accepts candidate or absent guard facts")
         if source == "body_delivery" and not isinstance(message, GuardPolicyActionAck):
             raise GuardPolicyError("body delivery source may only acknowledge actions")
 

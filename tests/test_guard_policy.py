@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -333,6 +334,41 @@ async def test_fake_atk_ingress_uses_raw_packet_sender_identity_and_replay_dedup
             source="fake_atk",
             require_guard=True,
         )
+    with pytest.raises(GuardPolicyError, match="only accepts candidate or absent"):
+        await ingress.handle_packet(
+            topic=CONTROL_TOPIC,
+            data=json.dumps(accepted.action).encode("utf-8"),
+            sender_identity="atk-1",
+            source="fake_atk",
+            require_guard=True,
+        )
+
+
+async def test_concurrent_fact_replay_publishes_one_atomic_action_set(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    payload = _candidate()
+
+    first, second = await asyncio.gather(
+        control.handle(payload, sender_identity="atk-1"),
+        control.handle(payload, sender_identity="atk-1"),
+    )
+
+    assert first.actions is not None and second.actions is not None
+    assert {action["action"] for action in first.actions} == {
+        "mission_control.annotate",
+        BODY_OP_PRESENCE_SET,
+    }
+    assert {action["action_id"] for action in first.actions} == {
+        action["action_id"] for action in second.actions
+    }
+    rows = await store.guard_actions.list_for_fact(
+        binding_id=(await store.guard_bindings.get_active_for_device("atk-1")).binding_id,
+        correlation_id="corr-1",
+        guard_epoch=1,
+        fact_type="guard.presence.candidate",
+    )
+    assert len(rows) == 2
 
 
 async def test_fake_atk_admin_endpoint_is_not_the_fixture_events_path(plane) -> None:
@@ -508,6 +544,56 @@ async def test_body_presence_delivery_records_retry_error_when_body_offline(plan
     assert row.delivery_attempt_count == 1
     assert "not currently connected" in row.last_error
     assert fake_api.room.sent_payloads == []
+    assert await worker.reconcile_once() == 0
+    retried = await store.guard_actions.get(body_action["action_id"])
+    assert retried is not None and retried.delivery_attempt_count == 1
+
+
+async def test_body_presence_delivery_claim_prevents_duplicate_send(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body-claim",
+        guard_epoch=14,
+    )
+    runtime, fake_api = await _body_runtime(store)
+    first = GuardBodyActionDeliveryWorker(store, runtime, control)
+    second = GuardBodyActionDeliveryWorker(store, runtime, control)
+
+    dispatched = await asyncio.gather(first.reconcile_once(), second.reconcile_once())
+
+    assert sum(dispatched) == 1
+    assert len(fake_api.room.sent_payloads) == 1
+    row = await store.guard_actions.get(body_action["action_id"])
+    assert row is not None and row.delivery_attempt_count == 1
+
+
+async def test_body_presence_delivery_dead_letters_after_bounded_retries(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+    body_action = await _publish_body_action(
+        control,
+        correlation_id="corr-body-dead-letter",
+        guard_epoch=15,
+    )
+    runtime, _fake_api = await _body_runtime(store, online=False)
+    worker = GuardBodyActionDeliveryWorker(
+        store,
+        runtime,
+        control,
+        max_delivery_attempts=2,
+        retry_base_seconds=0,
+    )
+
+    assert await worker.reconcile_once() == 0
+    assert await worker.reconcile_once() == 0
+
+    failed = await store.guard_actions.get(body_action["action_id"])
+    assert failed is not None
+    assert failed.status == "failed"
+    assert failed.delivery_attempt_count == 2
+    assert "exhausted after 2 attempts" in failed.ack_json["message"]
 
 
 async def test_body_presence_timeout_closes_dispatched_action_after_runtime_restart(plane) -> None:

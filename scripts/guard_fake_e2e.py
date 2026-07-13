@@ -29,7 +29,14 @@ from hub.core.guard_fixture_subscriber import MissionControlFixtureSubscriber  #
 from hub.core.guard_ingress import GuardIngress  # noqa: E402
 from hub.core.guard_policy import GuardControlPlane  # noqa: E402
 
-Scenario = Literal["success", "offline", "mismatch", "timeout", "reject-guard-body"]
+Scenario = Literal[
+    "success",
+    "offline",
+    "mismatch",
+    "timeout",
+    "dead-letter",
+    "reject-guard-body",
+]
 
 
 class FakeRoomService:
@@ -72,8 +79,17 @@ async def run_scenario(scenario: Scenario) -> dict[str, Any]:
 async def _run_scenario_with_store(scenario: Scenario, store: DataStore) -> dict[str, Any]:
     await _seed_guard_and_body(store)
     control = GuardControlPlane(store)
-    runtime, fake_api = await _runtime(store, body_online=scenario != "offline")
-    worker = GuardBodyActionDeliveryWorker(store, runtime, control)
+    runtime, fake_api = await _runtime(
+        store,
+        body_online=scenario not in {"offline", "dead-letter"},
+    )
+    worker = GuardBodyActionDeliveryWorker(
+        store,
+        runtime,
+        control,
+        max_delivery_attempts=2 if scenario == "dead-letter" else 5,
+        retry_base_seconds=0 if scenario == "dead-letter" else 1,
+    )
     app = _app(control=control, store=store, runtime=runtime, worker=worker)
 
     if scenario == "reject-guard-body":
@@ -101,6 +117,8 @@ async def _run_scenario_with_store(scenario: Scenario, store: DataStore) -> dict
     fixture_drain = await _drain_mission_control_fixture(app)
     body_action = _find_body_action(accepted_payload)
     dispatch_count = await worker.reconcile_once()
+    if scenario == "dead-letter":
+        dispatch_count += await worker.reconcile_once()
     row = await store.guard_actions.get(body_action["action_id"])
 
     result_response: dict[str, Any] | None = None
@@ -328,13 +346,28 @@ def _scenario_passed(
             and final.status == "failed"
             and "no ack/result" in (final.ack_json or {}).get("message", "")
         )
+    if scenario == "dead-letter":
+        return (
+            dispatch_count == 0
+            and row is not None
+            and final.status == "failed"
+            and final.delivery_attempt_count == 2
+            and "exhausted after 2 attempts" in (final.ack_json or {}).get("message", "")
+        )
     return False
 
 
 async def _main_async(args: argparse.Namespace) -> int:
     scenarios: list[Scenario]
     if args.scenario == "all":
-        scenarios = ["success", "offline", "mismatch", "timeout", "reject-guard-body"]
+        scenarios = [
+            "success",
+            "offline",
+            "mismatch",
+            "timeout",
+            "dead-letter",
+            "reject-guard-body",
+        ]
     else:
         scenarios = [args.scenario]
     results = [await run_scenario(scenario) for scenario in scenarios]
@@ -346,7 +379,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--scenario",
-        choices=["all", "success", "offline", "mismatch", "timeout", "reject-guard-body"],
+        choices=[
+            "all",
+            "success",
+            "offline",
+            "mismatch",
+            "timeout",
+            "dead-letter",
+            "reject-guard-body",
+        ],
         default="all",
         help="Fake E2E scenario to run.",
     )

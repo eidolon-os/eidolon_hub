@@ -15,6 +15,10 @@ from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_MAX_DELIVERY_ATTEMPTS = 5
+DEFAULT_RETRY_BASE_SECONDS = 1
+MAX_RETRY_DELAY_SECONDS = 60
+
 
 class GuardBodyActionDeliveryWorker:
     """Map durable Guard body actions to the existing device command path."""
@@ -24,27 +28,40 @@ class GuardBodyActionDeliveryWorker:
         store: DataStore,
         runtime: LiveKitAdminRuntime,
         control_plane: GuardControlPlane,
+        *,
+        max_delivery_attempts: int = DEFAULT_MAX_DELIVERY_ATTEMPTS,
+        retry_base_seconds: int = DEFAULT_RETRY_BASE_SECONDS,
     ) -> None:
+        if max_delivery_attempts < 1:
+            raise ValueError("max_delivery_attempts must be positive")
+        if retry_base_seconds < 0:
+            raise ValueError("retry_base_seconds must not be negative")
         self._store = store
         self._runtime = runtime
         self._control_plane = control_plane
+        self._max_delivery_attempts = max_delivery_attempts
+        self._retry_base_seconds = retry_base_seconds
 
     async def reconcile_once(self, *, limit: int = 50) -> int:
+        await self.reconcile_dead_letters(limit=limit)
         dispatched = 0
         rows = await self._store.guard_actions.list_ready_body_deliveries(
             action=BODY_OP_PRESENCE_SET,
             limit=limit,
         )
         for row in rows:
+            claimed = await self._store.guard_actions.claim_for_dispatch(row.action_id)
+            if claimed is None or not claimed.delivery_claim_token:
+                continue
             payload = {
-                "state": str((row.payload_json or {}).get("state") or "awake"),
-                "guard_epoch": row.guard_epoch,
-                "correlation_id": row.correlation_id,
-                "action_id": row.action_id,
+                "state": str((claimed.payload_json or {}).get("state") or "awake"),
+                "guard_epoch": claimed.guard_epoch,
+                "correlation_id": claimed.correlation_id,
+                "action_id": claimed.action_id,
             }
             try:
                 command = await self._runtime.send_command(
-                    row.subscriber,
+                    claimed.subscriber,
                     payload,
                     op=BODY_OP_PRESENCE_SET,
                     ttl_ms=30_000,
@@ -52,24 +69,53 @@ class GuardBodyActionDeliveryWorker:
                     priority="normal",
                 )
             except ValueError as exc:
-                await self._store.guard_actions.record_delivery_error(
-                    row.action_id,
-                    error=str(exc),
-                )
+                await self._release_after_error(claimed, str(exc))
                 continue
             except Exception as exc:  # pragma: no cover - transport boundary
-                logger.exception("Guard body action dispatch failed action_id=%s", row.action_id)
-                await self._store.guard_actions.record_delivery_error(
-                    row.action_id,
-                    error=str(exc),
-                )
+                logger.exception("Guard body action dispatch failed action_id=%s", claimed.action_id)
+                await self._release_after_error(claimed, str(exc))
                 continue
             if await self._store.guard_actions.mark_dispatched(
-                row.action_id,
+                claimed.action_id,
+                claim_token=claimed.delivery_claim_token,
                 command_id=str(command["command_id"]),
             ) is not None:
                 dispatched += 1
+        await self.reconcile_dead_letters(limit=limit)
         return dispatched
+
+    async def reconcile_dead_letters(self, *, limit: int = 50) -> int:
+        """Close actions whose bounded retry budget was exhausted."""
+        acknowledged = 0
+        rows = await self._store.guard_actions.list_dead_letter_body_deliveries(
+            action=BODY_OP_PRESENCE_SET,
+            limit=limit,
+        )
+        for row in rows:
+            ack = GuardPolicyActionAck(
+                guard_companion_id=row.guard_companion_id,
+                device_id=row.device_id,
+                correlation_id=row.correlation_id,
+                guard_epoch=row.guard_epoch,
+                ts_ms=max(int(time() * 1000), int(row.published_at.timestamp() * 1000)),
+                action_id=row.action_id,
+                subscriber=row.subscriber,
+                status="failed",
+                message=(
+                    f"body delivery exhausted after {row.delivery_attempt_count} attempts: "
+                    f"{row.last_error}"
+                )[:256],
+            )
+            try:
+                await self._control_plane.handle(
+                    ack.model_dump(mode="json"),
+                    source="body_delivery",
+                )
+            except GuardPolicyError:
+                logger.warning("Guard body dead letter rejected action_id=%s", row.action_id)
+                continue
+            acknowledged += 1
+        return acknowledged
 
     async def reconcile_command_results(self, *, limit: int = 50) -> int:
         """Close durable action rows whose standard body command is terminal."""
@@ -126,6 +172,19 @@ class GuardBodyActionDeliveryWorker:
             )
         except GuardPolicyError:
             logger.warning("Guard body result rejected action_id=%s command_id=%s", row.action_id, command_id)
+
+    async def _release_after_error(self, row, error: str) -> None:
+        delay_seconds = min(
+            self._retry_base_seconds * (2 ** max(row.delivery_attempt_count - 1, 0)),
+            MAX_RETRY_DELAY_SECONDS,
+        )
+        await self._store.guard_actions.release_claim_after_error(
+            row.action_id,
+            claim_token=row.delivery_claim_token,
+            error=error,
+            max_attempts=self._max_delivery_attempts,
+            retry_delay_seconds=delay_seconds,
+        )
 
 
 def _result_matches_action(result: Any, action_id: str) -> bool:

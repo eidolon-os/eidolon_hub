@@ -23,6 +23,7 @@ def _load_runner():
         ("offline", "published"),
         ("mismatch", "failed"),
         ("timeout", "failed"),
+        ("dead-letter", "failed"),
     ],
 )
 async def test_guard_fake_e2e_runner_scenarios(scenario: str, expected_status: str) -> None:
