@@ -249,6 +249,78 @@ def _pending_esp32_response(
     )
 
 
+def _is_registered_guard(device: object) -> bool:
+    metadata = getattr(device, "metadata", None)
+    if not isinstance(metadata, dict):
+        return False
+    declaration = metadata.get("guard_manifest")
+    return isinstance(declaration, dict) and declaration.get("enabled") is True
+
+
+def _guard_control_esp32_response(
+    *,
+    request: Request,
+    device_id: str,
+    status: ESP32ConfigStatus,
+    approved: bool,
+    bound: bool,
+    fingerprint: str = "",
+) -> ESP32ConfigResponse:
+    """Return the Guard-only control plane, never a normal voice room.
+
+    A Guard must stay reachable after approval but before a binding exists, so
+    it joins its stable control room even while its public status is
+    ``waiting_binding``.  The runtime command then causes a signed pull of the
+    binding-local configuration.  This avoids treating Guard as a normal slave
+    body merely to obtain a LiveKit token.
+    """
+    room_name = _default_control_room_name(device_id)
+    try:
+        _identity, token = generate_token(
+            room_name=room_name,
+            participant_name=device_id,
+            participant_metadata={
+                "kind": "guard_control",
+                "device_id": device_id,
+                "status": status.value,
+            },
+            dispatch_agent=False,
+            can_publish=False,
+            can_subscribe=True,
+            can_publish_data=True,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    server_url = _server_url(request)
+    control = ESP32ControlConfig(
+        server_url=server_url,
+        token=token,
+        identity=device_id,
+        room_name=room_name,
+    )
+    return ESP32ConfigResponse(
+        success=True,
+        status=status,
+        # Legacy ESP32 response has a mandatory active config.  For Guard it is
+        # deliberately the same data-only control room; the Guard firmware
+        # suppresses normal voice JOINs at compile time.
+        config=ESP32Config(
+            server_url=server_url,
+            token=token,
+            identity=device_id,
+            room_name=room_name,
+            audio=AudioConfig(),
+            control=control,
+        ),
+        device=_build_device_payload(
+            device_id=device_id,
+            approved=approved,
+            bound=bound,
+            fingerprint=fingerprint,
+        ),
+    )
+
+
 def _active_esp32_response(
     *,
     request: Request,
@@ -456,6 +528,32 @@ async def _esp32_response(
         method=method,
         body=body,
     )
+
+    # A declared Guard has a distinct lifecycle and never resolves through the
+    # ordinary persona/voice path.  This branch is intentionally before admin
+    # resolve so a missing generic workspace can never prevent its control plane
+    # from receiving the binding runtime command.
+    if _is_registered_guard(device):
+        if not device.approved:
+            return _pending_esp32_response(
+                request=request,
+                device_id=device_id,
+                status=ESP32ConfigStatus.PENDING_APPROVAL,
+                approved=False,
+                fingerprint=fingerprint,
+            )
+        store = getattr(request.app.state, "data_store", None)
+        if store is None:
+            raise HTTPException(status_code=503, detail="eidolon_data store unavailable")
+        binding = await store.guard_bindings.get_active_for_device(device_id)
+        return _guard_control_esp32_response(
+            request=request,
+            device_id=device_id,
+            status=(ESP32ConfigStatus.ACTIVE if binding is not None else ESP32ConfigStatus.WAITING_BINDING),
+            approved=True,
+            bound=binding is not None,
+            fingerprint=fingerprint,
+        )
 
     if not device.approved:
         return _pending_esp32_response(

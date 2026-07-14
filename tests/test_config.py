@@ -805,6 +805,78 @@ def test_device_register_persists_guard_capability_declaration(client: TestClien
     assert record.metadata["guard_manifest"] == {"enabled": True, "protocol_versions": [1]}
 
 
+def test_registered_guard_uses_control_lifecycle_without_persona_resolve(client: TestClient):
+    """An approved Guard stays reachable before claim and never receives voice config."""
+    import json
+
+    device_id = "atk-control-only"
+    key = ec.generate_private_key(ec.SECP256R1())
+    body = json.dumps(
+        {
+            "capabilities": [{"name": "guard.presence.candidate"}],
+            "guard": True,
+            "guard_protocol_versions": [1],
+        }
+    ).encode("utf-8")
+    dm = client.app.state.device_manager
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=(device_id, "guard-token"),
+    ):
+        registered = client.post(
+            "/api/device/register",
+            headers=_signed_post_headers(device_id=device_id, body=body, key=key),
+            content=body,
+        )
+    assert registered.status_code == 200
+    asyncio.run(dm.approve(device_id))
+    client.app.state.admin_resolve_client.resolve_device = AsyncMock()
+
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=(device_id, "guard-token"),
+    ):
+        waiting = client.get(
+            "/api/config",
+            headers=_signed_device_headers(
+                device_id=device_id,
+                nonce="guard-control-waiting",
+                key=key,
+            ),
+        )
+    assert waiting.status_code == 200
+    assert waiting.json()["status"] == "waiting_binding"
+    assert waiting.json()["config"]["room_name"] == "device-atk-control-only-control"
+    assert waiting.json()["config"]["control"]["room_name"] == "device-atk-control-only-control"
+    client.app.state.admin_resolve_client.resolve_device.assert_not_awaited()
+
+    store = client.app.state.data_store
+    asyncio.run(store.owners.create(owner_id="owner-test", display_name="Owner"))
+    asyncio.run(
+        store.guard_bindings.claim(
+            owner_id="owner-test",
+            device_id=device_id,
+            guard_companion_id="guard-control-only",
+        )
+    )
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=(device_id, "guard-token"),
+    ):
+        active = client.get(
+            "/api/config",
+            headers=_signed_device_headers(
+                device_id=device_id,
+                nonce="guard-control-active",
+                key=key,
+            ),
+        )
+    assert active.status_code == 200
+    assert active.json()["status"] == "active"
+    assert active.json()["device"]["bound"] is True
+    assert active.json()["config"]["room_name"] == "device-atk-control-only-control"
+
+
 def test_device_register_requires_signature(client: TestClient):
     r = client.post(
         "/api/device/register",

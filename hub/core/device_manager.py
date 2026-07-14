@@ -136,6 +136,10 @@ class DeviceManager:
             if capabilities:
                 updates["capabilities"] = list(capabilities)
             if guard_manifest is not None:
+                # Keep the declaration on the live object as well as the
+                # persisted registry record.  Config routing needs to know that
+                # this identity is a Guard before it has an owner binding.
+                metadata["guard_manifest"] = dict(guard_manifest)
                 updates["metadata"] = {
                     **record.metadata,
                     "guard_manifest": dict(guard_manifest),

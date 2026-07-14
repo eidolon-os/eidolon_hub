@@ -62,6 +62,7 @@ class LiveKitControlBridge:
         guard_control_plane: GuardControlPlane | None = None,
         guard_ingress: GuardIngress | None = None,
         guard_runtime_reconciler: Any | None = None,
+        guard_owner_face_profile_reconciler: Any | None = None,
         guard_body_delivery: Any | None = None,
     ):
         self._config = config
@@ -70,6 +71,7 @@ class LiveKitControlBridge:
         if self._guard_ingress is None and guard_control_plane is not None:
             self._guard_ingress = GuardIngress(guard_control_plane)
         self._guard_runtime_reconciler = guard_runtime_reconciler
+        self._guard_owner_face_profile_reconciler = guard_owner_face_profile_reconciler
         self._guard_body_delivery = guard_body_delivery
         self._rooms: dict[str, Any] = {}
         self._lock = asyncio.Lock()
@@ -242,6 +244,8 @@ class LiveKitControlBridge:
         )
         if updated is not None and self._guard_runtime_reconciler is not None:
             await self._guard_runtime_reconciler.apply_command_result(updated)
+        if updated is not None and self._guard_owner_face_profile_reconciler is not None:
+            await self._guard_owner_face_profile_reconciler.apply_command_result(updated)
         if updated is not None and self._guard_body_delivery is not None:
             await self._guard_body_delivery.apply_command_result(updated)
         if updated is None:
