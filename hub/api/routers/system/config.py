@@ -721,6 +721,7 @@ async def _web_body_response(
     device_id: str,
     agent_mode: AgentMode,
     interaction_mode: str,
+    avatar: bool = False,
 ) -> TokenResponse:
     """Mint a LiveKit token for a companion's host-local *web body*.
 
@@ -785,6 +786,7 @@ async def _web_body_response(
                 "companion_id": resolved.companion_id,
                 "interaction_mode": interaction_mode,
                 "session_intent": SESSION_INTENT_USER_INITIATED,
+                "avatar": avatar,
             },
         )
     except ValueError as exc:
@@ -1034,6 +1036,14 @@ async def get_config(
             "capability is declared separately by X-Device-Interaction-Mode."
         ),
     ),
+    avatar: bool = Query(
+        False,
+        description=(
+            "When true, the client requests a digital-human video avatar for this "
+            "session. Stamped into the token's participant metadata as ``avatar``; "
+            "channel reads it to run the avatar worker. Default false → audio-only."
+        ),
+    ),
     x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
     x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
     x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
@@ -1109,6 +1119,7 @@ async def get_config(
                 x_device_interaction_mode,
                 default=INTERACTION_MODE_FULL_DUPLEX,
             ),
+            avatar=avatar,
         )
 
     # Legacy owner-only web path (identity = owner_id); room_name required.
