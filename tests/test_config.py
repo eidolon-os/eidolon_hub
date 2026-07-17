@@ -748,6 +748,7 @@ def test_device_register_forwards_capabilities_and_returns_config(client: TestCl
     import json
 
     manifest = {
+        "device": {"name": "ESP BOX-3", "kind": "esp-box-3"},
         "capabilities": [
             {
                 "name": "display.update",
@@ -777,14 +778,18 @@ def test_device_register_forwards_capabilities_and_returns_config(client: TestCl
     assert data["config"]["identity"] == "dev-reg"
     caps = spy.call_args.kwargs["capabilities"]
     assert [c["name"] for c in caps] == ["display.update", "sound.play"]
-    assert dm.get("dev-reg") is not None
+    assert spy.call_args.kwargs["name"] == "ESP BOX-3"
+    assert spy.call_args.kwargs["kind"] == "esp-box-3"
+    assert dm.get("dev-reg").name == "ESP BOX-3"
+    assert dm.get("dev-reg").kind == "esp-box-3"
 
 
 def test_device_register_persists_guard_capability_declaration(client: TestClient):
     import json
 
     manifest = {
-        "capabilities": [{"name": "guard.presence.candidate"}],
+        "device": {"name": "ATK Guard", "kind": "atk-guard"},
+        "capabilities": [{"name": "device.roll_call"}],
         "guard": True,
         "guard_protocol_versions": [1],
     }
@@ -802,6 +807,9 @@ def test_device_register_persists_guard_capability_declaration(client: TestClien
     assert response.status_code == 200
     record = asyncio.run(dm._repository.get("atk-guard"))
     assert record is not None
+    assert record.name == "ATK Guard"
+    assert record.kind == "atk-guard"
+    assert [item["name"] for item in record.capabilities] == ["device.roll_call"]
     assert record.metadata["guard_manifest"] == {"enabled": True, "protocol_versions": [1]}
 
 

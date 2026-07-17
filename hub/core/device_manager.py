@@ -103,6 +103,7 @@ class DeviceManager:
         fingerprint: str,
         nonce: str,
         name: str = "",
+        kind: str | None = None,
         client_ip: str = "",
         capabilities: list[dict] | None = None,
         guard_manifest: dict | None = None,
@@ -119,7 +120,7 @@ class DeviceManager:
         fetch) leaves any operator-authored capabilities untouched.
         """
         async with self._lock:
-            device = self.register(device_id=device_id, name=name, kind="esp32")
+            device = self.register(device_id=device_id, name=name, kind=kind or "unknown")
             metadata = device.metadata
             if not metadata.get("public_key"):
                 metadata["public_key"] = public_key
@@ -133,8 +134,9 @@ class DeviceManager:
             del recent[:-32]
             record = _record_from_device(device)
             updates = {}
-            if capabilities:
+            if capabilities is not None:
                 updates["capabilities"] = list(capabilities)
+                updates["capabilities_declared"] = True
             if guard_manifest is not None:
                 # Keep the declaration on the live object as well as the
                 # persisted registry record.  Config routing needs to know that

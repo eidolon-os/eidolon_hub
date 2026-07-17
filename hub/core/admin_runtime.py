@@ -203,6 +203,8 @@ class LiveKitAdminRuntime:
         source_device_id: str | None = None,
         runtime_caller_id: str | None = None,
         runtime_session_id: str | None = None,
+        requester_owner_id: str | None = None,
+        requester_companion_id: str | None = None,
         op: str | None = None,
         ttl_ms: int = 30_000,
         qos: CommandQoS = "ack",
@@ -230,12 +232,21 @@ class LiveKitAdminRuntime:
             priority=priority,
             created_at=now,
         )
+        if requester_companion_id:
+            envelope["src"] = {
+                "type": "companion",
+                "id": requester_companion_id,
+                "owner_id": requester_owner_id or "",
+                "source_device_id": source_device_id or "",
+            }
         command = {
             "command_id": command_id,
             "device_id": device_id,
             "runtime_caller_id": runtime_caller_id,
             "runtime_session_id": runtime_session_id,
             "source_device_id": source_device_id,
+            "requester_owner_id": requester_owner_id,
+            "requester_companion_id": requester_companion_id,
             "topic": topic,
             "op": resolved_op,
             "payload": payload,

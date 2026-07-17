@@ -20,6 +20,7 @@ from hub.api.routers.admin import (
     admin_events_router,
     admin_guard_router,
 )
+from hub.api.routers.runtime import runtime_commands_router
 from hub.api.routers.system import config_router, guard_owner_face_router
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
@@ -130,6 +131,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
                     )
                     await admin_runtime.mark_command_timeout(app_config.admin.command_timeout_seconds)
                     await guard_body_delivery.reconcile_command_results()
+                    await guard_owner_face_profile_reconciler.reconcile_command_results()
                     await guard_runtime_reconciler.reconcile_once()
                     await guard_owner_face_profile_reconciler.reconcile_once()
                     await guard_body_delivery.reconcile_once()
@@ -183,6 +185,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(admin_commands_router)
     app.include_router(admin_events_router)
     app.include_router(admin_guard_router)
+    app.include_router(runtime_commands_router)
 
     return app
 

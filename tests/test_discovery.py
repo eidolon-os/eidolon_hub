@@ -12,9 +12,9 @@ import pytest
 from hub.config import DiscoveryConfig
 from hub.core.discovery import (
     DEFAULT_HOSTNAME,
-    MdnsDiscoveryState,
     SERVICE_NAME,
     SERVICE_TYPE,
+    MdnsDiscoveryState,
     _local_ipv4,
     mdns_lifespan,
 )
@@ -144,7 +144,7 @@ class TestMdnsLifespan:
             snap = state.snapshot()
             assert snap["registered"] is True
             assert snap["ip"] == "192.168.1.50"
-            assert snap["config_url"] == "http://192.168.1.50:8081/api/config"
+            assert snap["register_url"] == "http://192.168.1.50:8081/api/device/register"
             assert snap["last_registered_at"] is not None
             assert snap["last_error"] == ""
         assert state.snapshot()["registered"] is False
@@ -191,7 +191,7 @@ class TestMdnsLifespan:
         update.assert_awaited()
         new_info = update.await_args.args[0]
         assert socket.inet_aton("192.168.3.152") in new_info.addresses
-        assert b"192.168.3.152" in new_info.properties[b"config_url"]
+        assert b"192.168.3.152" in new_info.properties[b"register_url"]
 
     @pytest.mark.asyncio
     async def test_retries_registration_after_startup_failure(self, monkeypatch):
@@ -243,7 +243,7 @@ class TestMdnsLifespan:
                 await asyncio.sleep(0.01)
             snap = state.snapshot()
             assert snap["registered"] is False
-            assert snap["config_url"] == ""
+            assert snap["register_url"] == ""
             assert snap["last_error"] == "no LAN IPv4 address available"
 
     @pytest.mark.asyncio
@@ -372,7 +372,8 @@ class TestMdnsLifespan:
                     assert props[b"txtvers"] == b"1"
                     assert props[b"version"] == b"1.2.3"
                     assert props[b"api"] == b"v1"
-                    assert props[b"config_url"] == b"http://192.168.1.100:8081/api/config"
+                    assert props[b"register_url"] == b"http://192.168.1.100:8081/api/device/register"
+                    assert b"config_url" not in props
 
     @pytest.mark.asyncio
     async def test_service_info_server_name(self, mock_zeroconf):

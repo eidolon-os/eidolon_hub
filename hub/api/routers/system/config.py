@@ -396,10 +396,16 @@ def _active_esp32_response(
 _MAX_DECLARED_CAPABILITIES = 64
 
 
+class DeviceRegisterIdentity(BaseModel):
+    name: str = Field(default="", max_length=128)
+    kind: str = Field(default="esp32", min_length=1, max_length=64, pattern=r"^[a-z0-9._-]+$")
+
+
 class DeviceRegisterBody(BaseModel):
     """Body for ``POST /api/device/register`` — the device's self-declared manifest."""
 
     capabilities: list[dict] = Field(default_factory=list)
+    device: DeviceRegisterIdentity = Field(default_factory=DeviceRegisterIdentity)
     guard: bool = False
     guard_protocol_versions: list[int] = Field(default_factory=list, max_length=8)
 
@@ -454,6 +460,8 @@ async def _authenticate_signed_device(
     auth_headers: DeviceAuthHeaders,
     capabilities: list[dict] | None = None,
     guard_manifest: dict | None = None,
+    device_name: str = "",
+    device_kind: str | None = None,
     method: str = "GET",
     body: bytes = b"",
 ):
@@ -496,6 +504,8 @@ async def _authenticate_signed_device(
             public_key=public_key,
             fingerprint=fingerprint,
             nonce=auth_headers.nonce,
+            name=device_name,
+            kind=device_kind,
             client_ip=request.client.host if request.client else "",
             capabilities=capabilities,
             guard_manifest=guard_manifest,
@@ -516,6 +526,8 @@ async def _esp32_response(
     auth_headers: DeviceAuthHeaders,
     capabilities: list[dict] | None = None,
     guard_manifest: dict | None = None,
+    device_name: str = "",
+    device_kind: str | None = None,
     method: str = "GET",
     body: bytes = b"",
 ) -> ESP32ConfigResponse:
@@ -525,6 +537,8 @@ async def _esp32_response(
         auth_headers=auth_headers,
         capabilities=capabilities,
         guard_manifest=guard_manifest,
+        device_name=device_name,
+        device_kind=device_kind,
         method=method,
         body=body,
     )
@@ -828,9 +842,9 @@ async def register_device(
 
     A device declares its capability manifest in the signed request body and
     receives its runtime config in the same response — registration and
-    activation in one round-trip. Backward compatible: devices that still use
-    ``GET /api/config`` keep working unchanged; the declared capabilities are
-    persisted to ``devices.capabilities_json`` so the agent exposes each as a tool.
+    activation in one round-trip. Physical-device discovery has no legacy URL
+    fallback; the declared capabilities are persisted to
+    ``devices.capabilities_json`` so the agent can expose known ops as tools.
     """
     if not x_device_id:
         raise HTTPException(status_code=422, detail="X-Device-ID header is required")
@@ -869,6 +883,8 @@ async def register_device(
         ),
         capabilities=_normalize_capabilities(body.capabilities),
         guard_manifest=_guard_manifest(body),
+        device_name=body.device.name.strip(),
+        device_kind=body.device.kind,
         method="POST",
         body=raw_body,
     )

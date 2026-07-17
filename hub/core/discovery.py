@@ -36,7 +36,7 @@ class MdnsDiscoverySnapshot:
     port: int
     registered: bool = False
     ip: str = ""
-    config_url: str = ""
+    register_url: str = ""
     last_registered_at: str | None = None
     last_updated_at: str | None = None
     last_error: str = ""
@@ -61,7 +61,7 @@ class MdnsDiscoveryState:
         hostname: str,
         port: int,
         ip: str,
-        config_url: str,
+        register_url: str,
     ) -> None:
         self._snapshot = MdnsDiscoverySnapshot(
             service_type=service_type,
@@ -70,7 +70,7 @@ class MdnsDiscoveryState:
             port=port,
             registered=False,
             ip=ip,
-            config_url=config_url,
+            register_url=register_url,
             last_updated_at=_utc_now_iso(),
         )
 
@@ -81,9 +81,9 @@ class MdnsDiscoveryState:
         self._snapshot.last_updated_at = now
         self._snapshot.last_error = ""
 
-    def mark_updated(self, *, ip: str, config_url: str) -> None:
+    def mark_updated(self, *, ip: str, register_url: str) -> None:
         self._snapshot.ip = ip
-        self._snapshot.config_url = config_url
+        self._snapshot.register_url = register_url
         self._snapshot.registered = True
         self._snapshot.last_updated_at = _utc_now_iso()
         self._snapshot.last_error = ""
@@ -95,7 +95,7 @@ class MdnsDiscoveryState:
 
     def mark_unavailable(self, message: str) -> None:
         self._snapshot.registered = False
-        self._snapshot.config_url = ""
+        self._snapshot.register_url = ""
         self._snapshot.last_updated_at = _utc_now_iso()
         self._snapshot.last_error = message
 
@@ -147,19 +147,11 @@ async def mdns_lifespan(
     hostname = cfg.hostname
     txt_version = cfg.txt_version
     api_version = cfg.api_version
-    config_path = cfg.config_path
 
     aiozc = AsyncZeroconf(ip_version=IPVersion.V4Only)
 
-    def _config_url(ip: str) -> str:
-        return f"http://{ip}:{port}{config_path}"
-
     def _register_url(ip: str) -> str:
-        # Sibling of the config path (same /api prefix): the device-registration
-        # endpoint where a device POSTs its capability manifest and gets its
-        # runtime config back. Devices prefer this and fall back to config_url.
-        prefix = config_path.rsplit("/", 1)[0] if "/" in config_path else ""
-        return f"http://{ip}:{port}{prefix}/device/register"
+        return f"http://{ip}:{port}/api/device/register"
 
     def _service_info(ip: str) -> ServiceInfo:
         return ServiceInfo(
@@ -171,7 +163,6 @@ async def mdns_lifespan(
                 "txtvers": txt_version,
                 "version": version,
                 "api": api_version,
-                "config_url": _config_url(ip),
                 "register_url": _register_url(ip),
             },
             server=f"{hostname}.local.",
@@ -189,7 +180,7 @@ async def mdns_lifespan(
                 hostname=hostname,
                 port=port,
                 ip=ip if _is_advertisable_ipv4(ip) else "",
-                config_url=_config_url(ip) if _is_advertisable_ipv4(ip) else "",
+                register_url=_register_url(ip) if _is_advertisable_ipv4(ip) else "",
             )
 
     async def _unregister_current() -> None:
@@ -252,7 +243,7 @@ async def mdns_lifespan(
             if discovery_state is not None:
                 discovery_state.mark_updated(
                     ip=ip,
-                    config_url=_config_url(ip),
+                    register_url=_register_url(ip),
                 )
             logger.info("mDNS re-advertised after IP change -> %s", ip)
         except Exception as exc:  # pragma: no cover
@@ -263,10 +254,10 @@ async def mdns_lifespan(
     await _register(_local_ipv4())
 
     async def _maintain_advertisement() -> None:
-        # The advertised A record and config_url are pinned to the IP captured at
+        # The advertised A record and register_url are pinned to the IP captured at
         # registration time. On a DHCP renewal / network change the host IP can
         # move, leaving devices discovering a dead address (and the advertised
-        # config_url stale). Poll and keep the advertisement
+        # register_url stale). Poll and keep the advertisement
         # aligned with the current LAN address; also retry after startup failure.
         while True:
             await asyncio.sleep(_IP_REFRESH_INTERVAL_SEC)

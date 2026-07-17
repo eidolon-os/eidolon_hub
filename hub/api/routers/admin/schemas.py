@@ -35,7 +35,7 @@ class DiscoveryStatusResponse(BaseModel):
     port: int
     registered: bool
     ip: str = ""
-    config_url: str = ""
+    register_url: str = ""
     last_registered_at: str | None = None
     last_updated_at: str | None = None
     last_error: str = ""
