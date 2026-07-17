@@ -41,7 +41,7 @@ class _FakeAdminRuntime:
     def __init__(self) -> None:
         # device_id → True if "currently in presence cache"
         self._cache: dict[str, bool] = {}
-        self.forget_calls: list[str] = []
+        self.forget_calls: list[tuple[str, str | None]] = []
 
     def seed_presence(self, device_id: str) -> None:
         self._cache[device_id] = True
@@ -55,8 +55,13 @@ class _FakeAdminRuntime:
             consecutive_failures=0, total_cycles=0,
         )
 
-    async def forget_presence(self, device_id: str) -> bool:
-        self.forget_calls.append(device_id)
+    async def forget_presence(
+        self,
+        device_id: str,
+        *,
+        owner_id: str | None = None,
+    ) -> bool:
+        self.forget_calls.append((device_id, owner_id))
         return self._cache.pop(device_id, None) is not None
 
 

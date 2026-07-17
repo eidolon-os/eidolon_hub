@@ -53,7 +53,7 @@ async def _approved_binding(
     request: Request,
     headers: DeviceAuthHeaders,
 ):
-    device, _fingerprint = await _authenticate_signed_device(
+    device, _fingerprint, _registration_id = await _authenticate_signed_device(
         request=request,
         device_id=headers.device_id,
         auth_headers=headers,

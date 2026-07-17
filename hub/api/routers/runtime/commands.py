@@ -11,10 +11,12 @@ import hmac
 import os
 from typing import Any
 
-from eidolon_sdk.biz.body import capabilities_from_json
+from eidolon_sdk.biz.body import validate_capability_arguments
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from fastapi import APIRouter, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
+
+from hub.core.runtime_blackboard import RuntimeCapabilityUnavailable
 
 router = APIRouter(prefix="/api/runtime", tags=["Runtime Commands"])
 
@@ -65,25 +67,29 @@ async def send_runtime_device_command(
 ):
     _authorize_service(request, x_eidolon_service_token)
     store = _data_store(request)
-    target = await _authorize_target(
+    await _authorize_target(
         store,
         requester_owner_id=req.requester_owner_id,
         requester_companion_id=req.requester_companion_id,
         device_id=device_id,
         source_device_id=req.source_device_id,
     )
-    capabilities = capabilities_from_json(
-        target.capabilities_json or {},
-        device_kind=target.kind or "unknown",
-        known_only=True,
-    )
-    capability = next((item for item in capabilities if item.name == req.op), None)
-    if capability is None:
-        raise HTTPException(
-            status_code=403,
-            detail=f"device {device_id!r} does not declare an allowed {req.op!r} capability",
+    blackboard = _runtime_blackboard(request)
+    try:
+        _runtime_device, capability = await blackboard.resolve_current_capability(
+            owner_id=req.requester_owner_id,
+            requester_companion_id=req.requester_companion_id,
+            device_id=device_id,
+            capability_name=req.op,
         )
-    error = _validate_payload(capability.input_schema or {}, req.payload)
+    except RuntimeCapabilityUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="runtime device blackboard unavailable",
+        ) from exc
+    error = validate_capability_arguments(capability.input_schema, req.payload)
     if error:
         raise HTTPException(status_code=422, detail=error)
 
@@ -151,6 +157,13 @@ def _data_store(request: Request):
     return store
 
 
+def _runtime_blackboard(request: Request):
+    blackboard = getattr(request.app.state, "runtime_blackboard", None)
+    if blackboard is None:
+        raise HTTPException(status_code=503, detail="runtime blackboard unavailable")
+    return blackboard
+
+
 async def _authorize_requester(store, owner_id: str, companion_id: str):
     companion = await store.companions.get(companion_id)
     if (
@@ -205,35 +218,3 @@ async def _authorize_target(
         ):
             raise HTTPException(status_code=403, detail="source device is not valid for requester")
     return target
-
-
-def _validate_payload(schema: dict[str, Any], payload: dict[str, Any]) -> str | None:
-    if schema.get("type") == "object" and not isinstance(payload, dict):
-        return "capability payload must be an object"
-    required = schema.get("required") or []
-    missing = [str(key) for key in required if key not in payload]
-    if missing:
-        return f"capability payload missing required: {', '.join(missing)}"
-    properties = schema.get("properties") or {}
-    if schema.get("additionalProperties") is False:
-        extras = sorted(set(payload) - set(properties))
-        if extras:
-            return f"capability payload has unsupported fields: {', '.join(extras)}"
-    for key, field_schema in properties.items():
-        if key not in payload or not isinstance(field_schema, dict):
-            continue
-        expected = field_schema.get("type")
-        if expected and not _matches_json_type(payload[key], expected):
-            return f"capability payload field {key!r} must be {expected}"
-    return None
-
-
-def _matches_json_type(value: Any, expected: str) -> bool:
-    return {
-        "string": isinstance(value, str),
-        "integer": isinstance(value, int) and not isinstance(value, bool),
-        "number": isinstance(value, (int, float)) and not isinstance(value, bool),
-        "boolean": isinstance(value, bool),
-        "object": isinstance(value, dict),
-        "array": isinstance(value, list),
-    }.get(expected, True)

@@ -18,7 +18,11 @@ from eidolon_sdk.biz.admin import (
     AdminUnreachable,
     AdminUpstreamError,
 )
-from eidolon_sdk.biz.body import capability_from_json, capability_to_dict
+from eidolon_sdk.biz.body import (
+    MAX_CAPABILITIES_PER_DEVICE,
+    CapabilityDeclaration,
+    CapabilityManifest,
+)
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
     INTERACTION_MODE_HALF_DUPLEX,
@@ -125,6 +129,7 @@ class ESP32Config(BaseModel):
 class ESP32ConfigResponse(BaseModel):
     success: bool
     status: ESP32ConfigStatus = ESP32ConfigStatus.ACTIVE
+    registration_id: str | None = None
     config: ESP32Config
     device: dict[str, Any] | None = None
 
@@ -212,6 +217,7 @@ def _pending_esp32_response(
     device_id: str,
     status: ESP32ConfigStatus,
     approved: bool,
+    registration_id: str | None = None,
     fingerprint: str = "",
 ) -> ESP32ConfigResponse:
     try:
@@ -222,6 +228,7 @@ def _pending_esp32_response(
                 "kind": "device_pending",
                 "device_id": device_id,
                 "status": status.value,
+                "registration_id": registration_id or "",
             },
             dispatch_agent=False,
             can_publish=True,
@@ -233,6 +240,7 @@ def _pending_esp32_response(
     return ESP32ConfigResponse(
         success=True,
         status=status,
+        registration_id=registration_id,
         config=ESP32Config(
             server_url=_server_url(request),
             token=token,
@@ -264,6 +272,7 @@ def _guard_control_esp32_response(
     status: ESP32ConfigStatus,
     approved: bool,
     bound: bool,
+    registration_id: str | None = None,
     fingerprint: str = "",
 ) -> ESP32ConfigResponse:
     """Return the Guard-only control plane, never a normal voice room.
@@ -283,6 +292,7 @@ def _guard_control_esp32_response(
                 "kind": "guard_control",
                 "device_id": device_id,
                 "status": status.value,
+                "registration_id": registration_id or "",
             },
             dispatch_agent=False,
             can_publish=False,
@@ -301,6 +311,7 @@ def _guard_control_esp32_response(
     return ESP32ConfigResponse(
         success=True,
         status=status,
+        registration_id=registration_id,
         # Legacy ESP32 response has a mandatory active config.  For Guard it is
         # deliberately the same data-only control room; the Guard firmware
         # suppresses normal voice JOINs at compile time.
@@ -330,6 +341,7 @@ def _active_esp32_response(
     interaction_mode: str,
     session_intent: str,
     bound: bool,
+    registration_id: str | None = None,
     fingerprint: str = "",
 ) -> ESP32ConfigResponse:
     # Tag the ESP32 token with kind=device so channel knows to dispatch
@@ -350,6 +362,7 @@ def _active_esp32_response(
                 # orchestrator wake) makes channel suppress the welcome + run the
                 # short proactive window; user_initiated is a normal JOIN.
                 "session_intent": session_intent,
+                "registration_id": registration_id or "",
             },
         )
         _control_identity, control_token = generate_token(
@@ -359,6 +372,7 @@ def _active_esp32_response(
                 "kind": "device_control",
                 "device_id": device_id,
                 "voice_room": resolved_room,
+                "registration_id": registration_id or "",
             },
             dispatch_agent=False,
             can_publish=False,
@@ -371,6 +385,7 @@ def _active_esp32_response(
     return ESP32ConfigResponse(
         success=True,
         status=ESP32ConfigStatus.ACTIVE,
+        registration_id=registration_id,
         config=ESP32Config(
             server_url=server_url,
             token=token,
@@ -393,9 +408,6 @@ def _active_esp32_response(
     )
 
 
-_MAX_DECLARED_CAPABILITIES = 64
-
-
 class DeviceRegisterIdentity(BaseModel):
     name: str = Field(default="", max_length=128)
     kind: str = Field(default="esp32", min_length=1, max_length=64, pattern=r"^[a-z0-9._-]+$")
@@ -404,7 +416,10 @@ class DeviceRegisterIdentity(BaseModel):
 class DeviceRegisterBody(BaseModel):
     """Body for ``POST /api/device/register`` — the device's self-declared manifest."""
 
-    capabilities: list[dict] = Field(default_factory=list)
+    capabilities: tuple[CapabilityDeclaration, ...] = Field(
+        default_factory=tuple,
+        max_length=MAX_CAPABILITIES_PER_DEVICE,
+    )
     device: DeviceRegisterIdentity = Field(default_factory=DeviceRegisterIdentity)
     guard: bool = False
     guard_protocol_versions: list[int] = Field(default_factory=list, max_length=8)
@@ -415,33 +430,8 @@ class DeviceRegisterBody(BaseModel):
             raise ValueError("guard_protocol_versions requires guard=true")
         if self.guard and 1 not in self.guard_protocol_versions:
             raise ValueError("guard-capable devices must declare guard protocol version 1")
+        CapabilityManifest(capabilities=self.capabilities)
         return self
-
-
-def _normalize_capabilities(
-    raw: object, *, max_count: int = _MAX_DECLARED_CAPABILITIES
-) -> list[dict]:
-    """Parse a device capability manifest into the canonical stored shape.
-
-    Drops malformed/nameless entries, dedupes by op name, and caps the count so a
-    device can't blow up the tools array. Risky ops stay gated at *actuation* time
-    (BodyControlService enforces ``requires_confirmation``), so the hub accepts
-    well-formed device-declared ops rather than a fixed allowlist — that is what
-    makes the toolset dynamic and open to new device features.
-    """
-    if not isinstance(raw, list):
-        return []
-    out: list[dict] = []
-    seen: set[str] = set()
-    for item in raw:
-        cap = capability_from_json(item)
-        if cap is None or cap.name in seen:
-            continue
-        seen.add(cap.name)
-        out.append(capability_to_dict(cap))
-        if len(out) >= max_count:
-            break
-    return out
 
 
 def _guard_manifest(body: DeviceRegisterBody) -> dict | None:
@@ -458,7 +448,7 @@ async def _authenticate_signed_device(
     request: Request,
     device_id: str,
     auth_headers: DeviceAuthHeaders,
-    capabilities: list[dict] | None = None,
+    capability_manifest: CapabilityManifest | None = None,
     guard_manifest: dict | None = None,
     device_name: str = "",
     device_kind: str | None = None,
@@ -507,12 +497,76 @@ async def _authenticate_signed_device(
             name=device_name,
             kind=device_kind,
             client_ip=request.client.host if request.client else "",
-            capabilities=capabilities,
+            capabilities=None,
             guard_manifest=guard_manifest,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return device, str((device.metadata or {}).get("fingerprint") or "")
+    registration_id = None
+    blackboard = getattr(request.app.state, "runtime_blackboard", None)
+    store = getattr(request.app.state, "data_store", None)
+    row = await store.devices.get_device(device_id) if store is not None else None
+    owner_id = str(row.owner_id) if row is not None and row.owner_id else None
+    if capability_manifest is not None:
+        if blackboard is None or store is None:
+            raise HTTPException(status_code=503, detail="runtime blackboard unavailable")
+        provider_companion_id = (
+            str(row.bound_companion_id)
+            if row is not None and row.bound_companion_id
+            else None
+        )
+        runtime_name = device_name or device_id
+        visibility = "owner"
+        aliases: list[str] = []
+        if row is not None:
+            runtime_name = str(row.name or runtime_name)
+            policy = row.access_policy_json or {}
+            visibility = str(policy.get("capability_visibility") or "owner")
+            metadata = row.metadata_json or {}
+            raw_aliases = metadata.get("aliases") or metadata.get("alias")
+            if isinstance(raw_aliases, str):
+                aliases.append(raw_aliases)
+            elif isinstance(raw_aliases, list):
+                aliases.extend(str(item) for item in raw_aliases if item)
+        if provider_companion_id:
+            provider = await store.companions.get(provider_companion_id)
+            if provider is not None and provider.display_name:
+                aliases.append(str(provider.display_name))
+        try:
+            entry = await blackboard.register_device_manifest(
+                device_id=device_id,
+                manifest=capability_manifest,
+                owner_id=owner_id,
+                provider_companion_id=provider_companion_id,
+                name=runtime_name,
+                aliases=tuple(aliases),
+                visibility=visibility,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="runtime device blackboard write failed",
+            ) from exc
+        registration_id = entry.registration_id
+    elif blackboard is not None:
+        # Auxiliary signed device endpoints (for example Guard runtime config)
+        # must preserve the registration generation established by the latest
+        # manifest POST.  They may refresh a LiveKit token, but must not detach
+        # the resulting participant from that manifest.
+        try:
+            entry = await blackboard.get_device(owner_id=owner_id, device_id=device_id)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="runtime device blackboard read failed",
+            ) from exc
+        if entry is not None:
+            registration_id = entry.registration_id
+    return (
+        device,
+        str((device.metadata or {}).get("fingerprint") or ""),
+        registration_id,
+    )
 
 
 async def _esp32_response(
@@ -524,18 +578,18 @@ async def _esp32_response(
     interaction_mode: str,
     session_intent: str = SESSION_INTENT_USER_INITIATED,
     auth_headers: DeviceAuthHeaders,
-    capabilities: list[dict] | None = None,
+    capability_manifest: CapabilityManifest | None = None,
     guard_manifest: dict | None = None,
     device_name: str = "",
     device_kind: str | None = None,
     method: str = "GET",
     body: bytes = b"",
 ) -> ESP32ConfigResponse:
-    device, fingerprint = await _authenticate_signed_device(
+    device, fingerprint, registration_id = await _authenticate_signed_device(
         request=request,
         device_id=device_id,
         auth_headers=auth_headers,
-        capabilities=capabilities,
+        capability_manifest=capability_manifest,
         guard_manifest=guard_manifest,
         device_name=device_name,
         device_kind=device_kind,
@@ -554,6 +608,7 @@ async def _esp32_response(
                 device_id=device_id,
                 status=ESP32ConfigStatus.PENDING_APPROVAL,
                 approved=False,
+                registration_id=registration_id,
                 fingerprint=fingerprint,
             )
         store = getattr(request.app.state, "data_store", None)
@@ -566,6 +621,7 @@ async def _esp32_response(
             status=(ESP32ConfigStatus.ACTIVE if binding is not None else ESP32ConfigStatus.WAITING_BINDING),
             approved=True,
             bound=binding is not None,
+            registration_id=registration_id,
             fingerprint=fingerprint,
         )
 
@@ -575,6 +631,7 @@ async def _esp32_response(
             device_id=device_id,
             status=ESP32ConfigStatus.PENDING_APPROVAL,
             approved=False,
+            registration_id=registration_id,
             fingerprint=fingerprint,
         )
 
@@ -596,6 +653,7 @@ async def _esp32_response(
             device_id=device_id,
             status=ESP32ConfigStatus.WAITING_BINDING,
             approved=True,
+            registration_id=registration_id,
             fingerprint=fingerprint,
         )
     except AdminResolveNotFound as exc:
@@ -605,6 +663,7 @@ async def _esp32_response(
             device_id=device_id,
             status=ESP32ConfigStatus.WAITING_BINDING,
             approved=True,
+            registration_id=registration_id,
             fingerprint=fingerprint,
         )
     except AdminResolveUnreachable as exc:
@@ -632,6 +691,7 @@ async def _esp32_response(
         interaction_mode=interaction_mode,
         session_intent=session_intent,
         bound=True,
+        registration_id=registration_id,
         fingerprint=fingerprint,
     )
 
@@ -843,8 +903,8 @@ async def register_device(
     A device declares its capability manifest in the signed request body and
     receives its runtime config in the same response — registration and
     activation in one round-trip. Physical-device discovery has no legacy URL
-    fallback; the declared capabilities are persisted to
-    ``devices.capabilities_json`` so the agent can expose known ops as tools.
+    fallback. The signed capability manifest is written only to the Hub runtime
+    blackboard and becomes visible after the matching control participant is online.
     """
     if not x_device_id:
         raise HTTPException(status_code=422, detail="X-Device-ID header is required")
@@ -881,7 +941,7 @@ async def register_device(
             public_key=x_device_public_key,
             signature=x_device_signature or "",
         ),
-        capabilities=_normalize_capabilities(body.capabilities),
+        capability_manifest=CapabilityManifest(capabilities=body.capabilities),
         guard_manifest=_guard_manifest(body),
         device_name=body.device.name.strip(),
         device_kind=body.device.kind,
@@ -925,7 +985,7 @@ async def get_guard_runtime_config(
             status_code=422,
             detail=f"missing device auth headers: {', '.join(missing_auth)}",
         )
-    device, _fingerprint = await _authenticate_signed_device(
+    device, _fingerprint, registration_id = await _authenticate_signed_device(
         request=request,
         device_id=x_device_id,
         auth_headers=DeviceAuthHeaders(
@@ -956,6 +1016,7 @@ async def get_guard_runtime_config(
                 "kind": "guard_control",
                 "device_id": x_device_id,
                 "guard_companion_id": binding.guard_companion_id,
+                "registration_id": registration_id or "",
             },
             dispatch_agent=False,
             can_publish=False,

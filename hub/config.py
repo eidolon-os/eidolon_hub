@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from eidolon_sdk.biz.body import DEVICE_BLACKBOARD_BUCKET
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
@@ -150,6 +151,14 @@ class RuntimeAdminConfig:
     """
 
     admin_api_url: str = "http://127.0.0.1:9000"
+
+
+@dataclass
+class DeviceBlackboardConfig:
+    nats_url: str = "nats://127.0.0.1:4222"
+    creds_path: str = ""
+    bucket: str = DEVICE_BLACKBOARD_BUCKET
+    lease_seconds: int = 45
 
 
 @dataclass
@@ -314,6 +323,20 @@ def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
     return RuntimeAdminConfig(admin_api_url=admin_url)
 
 
+def _device_blackboard_from_yaml(y: dict[str, Any]) -> DeviceBlackboardConfig:
+    sec = _section(y, "device_blackboard")
+    default = DeviceBlackboardConfig()
+    return DeviceBlackboardConfig(
+        nats_url=(os.getenv("NATS_URL") or str(sec.get("nats_url") or "")).strip()
+        or default.nats_url,
+        creds_path=(
+            os.getenv("NATS_CREDS") or str(sec.get("creds_path") or "")
+        ).strip(),
+        bucket=str(sec.get("bucket") or default.bucket).strip() or default.bucket,
+        lease_seconds=max(15, int(sec.get("lease_seconds", default.lease_seconds))),
+    )
+
+
 def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     sec = _section(y, "admin_probe")
     if not sec:
@@ -368,6 +391,9 @@ class AppConfig:
     admin: AdminConfig = field(default_factory=AdminConfig)
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
+    device_blackboard: DeviceBlackboardConfig = field(
+        default_factory=DeviceBlackboardConfig
+    )
     proactive_wake: ProactiveWakeConfig = field(default_factory=ProactiveWakeConfig)
 
     @classmethod
@@ -383,6 +409,7 @@ class AppConfig:
             admin=_admin_from_yaml(y),
             control_bridge=_control_bridge_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
+            device_blackboard=_device_blackboard_from_yaml(y),
             proactive_wake=_proactive_wake_from_yaml(y),
         )
 

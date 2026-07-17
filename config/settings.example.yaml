@@ -53,3 +53,9 @@ control_bridge:
 # Admin lookup is unconditional.
 runtime_admin:
   admin_api_url: http://127.0.0.1:9000
+
+# Owner-isolated runtime device capability snapshots in JetStream KV.
+device_blackboard:
+  nats_url: nats://127.0.0.1:4222
+  bucket: EIDOLON_RUNTIME_DEVICES
+  lease_seconds: 45

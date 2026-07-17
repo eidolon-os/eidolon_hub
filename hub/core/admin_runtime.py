@@ -43,6 +43,43 @@ class DevicePresence:
     missed_probes: int = 0
 
 
+def _participant_metadata(participant: Any) -> dict[str, Any]:
+    raw = getattr(participant, "metadata", "")
+    if not isinstance(raw, str) or not raw:
+        return {}
+    try:
+        metadata = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(metadata, dict):
+        return {}
+    return metadata
+
+
+def _participant_registration_id(participant: Any) -> str:
+    metadata = _participant_metadata(participant)
+    return str(metadata.get("registration_id") or "")
+
+
+def _participant_kind(participant: Any) -> str:
+    return str(_participant_metadata(participant).get("kind") or "")
+
+
+def _is_control_participant(kind: str) -> bool:
+    return kind in {"device_control", "guard_control"}
+
+
+def _is_capability_transport_participant(kind: str) -> bool:
+    """Return whether a device session can carry runtime commands.
+
+    Voice devices deliberately leave their idle control room while they are in
+    a voice room.  The Hub control bridge follows that room and can still send
+    data commands there, so a matching ``device`` participant is just as valid
+    for capability availability as the dedicated control participants.
+    """
+    return kind in {"device", "device_control", "guard_control"}
+
+
 _COMMAND_RESULT_EVENT = {
     "succeeded": "device.command.acked",
     "rejected": "device.command.denied",
@@ -54,9 +91,15 @@ _COMMAND_RESULT_EVENT = {
 
 
 class LiveKitAdminRuntime:
-    def __init__(self, config: AppConfig, data_store: Any | None = None):
+    def __init__(
+        self,
+        config: AppConfig,
+        data_store: Any | None = None,
+        runtime_blackboard: Any | None = None,
+    ):
         self._config = config
         self._data_store = data_store
+        self._runtime_blackboard = runtime_blackboard
         self._state: dict[str, DevicePresence] = {}
         self._probe_health = ProbeHealth()
         self._lock = asyncio.Lock()
@@ -64,6 +107,7 @@ class LiveKitAdminRuntime:
         self._commands: dict[str, dict[str, Any]] = {}
         self._command_order: list[str] = []
         self._control_bridge: Any | None = None
+        self._manifest_refresh_requested_at: dict[str, datetime] = {}
 
     def set_control_bridge(self, bridge: Any | None) -> None:
         self._control_bridge = bridge
@@ -83,7 +127,7 @@ class LiveKitAdminRuntime:
 
     async def run_probe_cycle(self, known_device_ids: list[str]) -> None:
         self._probe_health.total_cycles += 1
-        detected: dict[str, tuple[str, str]] = {}
+        detected: dict[str, tuple[str, str, str, str]] = {}
         known = set(known_device_ids)
         livekit_api: api.LiveKitAPI | None = None
         now = datetime.now(UTC)
@@ -96,14 +140,25 @@ class LiveKitAdminRuntime:
                     api.ListParticipantsRequest(room=room.name)
                 )
                 for participant in participants.participants:
-                    detected[participant.identity] = (room.name, participant.sid)
+                    candidate = (
+                        room.name,
+                        participant.sid,
+                        _participant_registration_id(participant),
+                        _participant_kind(participant),
+                    )
+                    previous = detected.get(participant.identity)
+                    if previous is None or (
+                        _is_control_participant(candidate[3])
+                        and not _is_control_participant(previous[3])
+                    ):
+                        detected[participant.identity] = candidate
 
             async with self._lock:
                 next_state: dict[str, DevicePresence] = {}
                 for device_id in known:
                     current = self._state.get(device_id) or DevicePresence(device_id=device_id)
                     if device_id in detected:
-                        room_name, participant_sid = detected[device_id]
+                        room_name, participant_sid, _registration_id, _kind = detected[device_id]
                         status = "online"
                         current.status = status
                         current.room_name = room_name
@@ -120,6 +175,49 @@ class LiveKitAdminRuntime:
                             current.status = "degraded"
                     next_state[device_id] = current
                 self._state = next_state
+            if self._runtime_blackboard is not None:
+                manifest_refresh_devices: list[str] = []
+                for device_id, presence in next_state.items():
+                    row = (
+                        await self._data_store.devices.get_device(device_id)
+                        if self._data_store is not None
+                        else None
+                    )
+                    owner_id = str(row.owner_id) if row is not None and row.owner_id else None
+                    detected_item = detected.get(device_id)
+                    registration_id = detected_item[2] if detected_item else ""
+                    participant_kind = detected_item[3] if detected_item else ""
+                    if (
+                        owner_id
+                        and presence.status == "online"
+                        and _is_capability_transport_participant(participant_kind)
+                    ):
+                        entry = None
+                        if registration_id:
+                            entry = await self._runtime_blackboard.mark_device_online(
+                                owner_id=owner_id,
+                                device_id=device_id,
+                                registration_id=registration_id,
+                                room_name=presence.room_name,
+                                participant_sid=presence.participant_sid,
+                                presence_revision=presence.participant_sid,
+                                seen_at=presence.last_seen_at,
+                            )
+                        if entry is None:
+                            # Missing registration metadata and a registration
+                            # from a previous Hub generation both require the
+                            # same recovery: signed re-registration.
+                            manifest_refresh_devices.append(device_id)
+                        else:
+                            self._manifest_refresh_requested_at.pop(device_id, None)
+                    elif presence.status == "offline":
+                        await self._runtime_blackboard.remove_device_session(
+                            owner_id=owner_id,
+                            device_id=device_id
+                        )
+                        self._manifest_refresh_requested_at.pop(device_id, None)
+                for device_id in manifest_refresh_devices:
+                    await self._request_manifest_refresh(device_id, now=now)
             status_counts = {
                 "online": sum(1 for item in next_state.values() if item.status == "online"),
                 "degraded": sum(1 for item in next_state.values() if item.status == "degraded"),
@@ -171,7 +269,7 @@ class LiveKitAdminRuntime:
         async with self._lock:
             return list(self._state.values())
 
-    async def forget_presence(self, device_id: str) -> bool:
+    async def forget_presence(self, device_id: str, *, owner_id: str | None = None) -> bool:
         """Drop the presence cache entry for a device. Returns True if one
         was present. Idempotent.
 
@@ -185,14 +283,47 @@ class LiveKitAdminRuntime:
         device will then re-appear in admin as a *new* unapproved record
         (because device_manager forgot the persistent approval state).
         """
+        removed = False
         async with self._lock:
-            if device_id not in self._state:
-                return False
-            del self._state[device_id]
-        return True
+            if device_id in self._state:
+                del self._state[device_id]
+                removed = True
+        if self._runtime_blackboard is not None:
+            await self._runtime_blackboard.remove_device_session(
+                owner_id=owner_id,
+                device_id=device_id,
+            )
+        return removed
 
     def get_probe_health(self) -> ProbeHealth:
         return self._probe_health
+
+    async def _request_manifest_refresh(self, device_id: str, *, now: datetime) -> None:
+        """Ask a connected device to repeat its signed registration.
+
+        ``config.refresh`` already means register again and reconnect on the
+        firmware. Reusing it avoids a second control-plane command with the
+        same lifecycle. Requests are throttled while the device is recovering.
+        """
+        previous = self._manifest_refresh_requested_at.get(device_id)
+        if previous is not None and now - previous < timedelta(seconds=30):
+            return
+        self._manifest_refresh_requested_at[device_id] = now
+        try:
+            await self.send_command(
+                device_id,
+                {"reason": "runtime_blackboard_manifest_missing"},
+                op="config.refresh",
+                ttl_ms=5_000,
+                qos="fire_and_forget",
+                priority="high",
+            )
+        except Exception:
+            logger.warning(
+                "Failed to request capability manifest refresh from device_id=%s",
+                device_id,
+                exc_info=True,
+            )
 
     async def send_command(
         self,
@@ -200,6 +331,7 @@ class LiveKitAdminRuntime:
         payload: dict[str, Any],
         topic: str = CONTROL_TOPIC,
         *,
+        command_id: str | None = None,
         source_device_id: str | None = None,
         runtime_caller_id: str | None = None,
         runtime_session_id: str | None = None,
@@ -219,7 +351,7 @@ class LiveKitAdminRuntime:
         if self._control_bridge is not None:
             await self._control_bridge.ensure_room(room_name)
 
-        command_id = str(uuid4())
+        command_id = command_id or str(uuid4())
         now = datetime.now(UTC)
         resolved_op = infer_op(payload, op)
         envelope = build_command_envelope(
@@ -407,14 +539,30 @@ class LiveKitAdminRuntime:
         for command in commands:
             if command["status"] not in {"sent", "accepted", "running"}:
                 continue
-            created_at = datetime.fromisoformat(command["created_at"])
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=UTC)
-            if (now - created_at).total_seconds() < timeout_seconds:
+            status = command["status"]
+            reference_at = datetime.fromisoformat(
+                command["updated_at"]
+                if status in {"accepted", "running"}
+                else command["created_at"]
+            )
+            if reference_at.tzinfo is None:
+                reference_at = reference_at.replace(tzinfo=UTC)
+            effective_timeout_seconds = timeout_seconds
+            if status in {"accepted", "running"}:
+                ttl_ms = command.get("ttl_ms")
+                if isinstance(ttl_ms, int) and ttl_ms > 0:
+                    effective_timeout_seconds = max(
+                        timeout_seconds, (ttl_ms + 999) // 1000
+                    )
+            if (now - reference_at).total_seconds() < effective_timeout_seconds:
                 continue
             command["status"] = "timeout"
             command["updated_at"] = now.isoformat()
-            command["error"] = f"no ack/result within {timeout_seconds}s"
+            command["error"] = (
+                f"no result within {effective_timeout_seconds}s"
+                if status in {"accepted", "running"}
+                else f"no ack/result within {effective_timeout_seconds}s"
+            )
             touched += 1
             await self._persist_command(command)
             await self._audit_command_result(command, actor_type="system")

@@ -49,6 +49,11 @@ control_bridge:
 runtime_admin:
   admin_api_url: http://127.0.0.1:9000
 
+device_blackboard:
+  nats_url: nats://127.0.0.1:4222
+  bucket: EIDOLON_RUNTIME_DEVICES
+  lease_seconds: 45
+
 # Phase 3: subscribe to the agent's proactive-trigger events on NATS and wake the
 # target device via a room.join control command (pure router — device_id + full
 # payload come in the event). Needs a running NATS at nats_url. The subject must

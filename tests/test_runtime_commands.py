@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from types import SimpleNamespace
 
+from eidolon_sdk.biz.body import CapabilityManifest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from hub.api.routers.runtime.commands import router
+from hub.core.runtime_blackboard import OwnerRuntimeBlackboard
 
 
 class _Repo:
@@ -85,8 +88,55 @@ def _client(*, visibility="owner", capabilities=None, target_owner="owner-1"):
         companions=_Repo(companions),
         devices=_Repo(devices),
     )
+    blackboard = OwnerRuntimeBlackboard()
+    declared = (
+        capabilities
+        if capabilities is not None
+        else [_capability("device.roll_call")]
+    )
+    asyncio.run(
+        blackboard.register_device_manifest(
+            device_id="atk-guard",
+            manifest=CapabilityManifest.model_validate({"capabilities": declared}),
+            owner_id=target_owner,
+            provider_companion_id="companion-b",
+            name="ATK Guard",
+            visibility=visibility,
+            registration_id="reg-guard",
+        )
+    )
+    asyncio.run(
+        blackboard.mark_device_online(
+            owner_id=target_owner,
+            device_id="atk-guard",
+            registration_id="reg-guard",
+            room_name="guard-control",
+            participant_sid="PA_GUARD",
+            presence_revision="presence-guard",
+        )
+    )
+    app.state.runtime_blackboard = blackboard
     app.state.admin_runtime = _Runtime()
     return TestClient(app), app.state.admin_runtime
+
+
+def _capability(name: str) -> dict:
+    return {
+        "name": name,
+        "version": 1,
+        "description": f"Execute {name} on this device.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "result_schema": {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    }
 
 
 def _body():
@@ -130,10 +180,26 @@ def test_cross_owner_target_is_rejected_at_hub_boundary():
     assert runtime.sent == []
 
 
-def test_undeclared_or_unknown_capability_is_not_dispatched():
-    client, runtime = _client(capabilities=[{"name": "vendor.unreviewed"}])
+def test_undeclared_capability_is_not_dispatched():
+    client, runtime = _client(capabilities=[_capability("vendor.unreviewed")])
 
     response = client.post("/api/runtime/devices/atk-guard/commands", json=_body())
 
-    assert response.status_code == 403
+    assert response.status_code == 409
     assert runtime.sent == []
+
+
+def test_dynamically_declared_unknown_capability_is_dispatched():
+    client, runtime = _client(capabilities=[_capability("vendor.unreviewed")])
+    body = _body()
+    body["op"] = "vendor.unreviewed"
+
+    response = client.post("/api/runtime/devices/atk-guard/commands", json=body)
+
+    assert response.status_code == 200
+    assert runtime.sent[0]["op"] == "vendor.unreviewed"
+
+
+def test_runtime_blackboard_http_projection_is_removed():
+    client, _runtime = _client()
+    assert client.get("/api/runtime/blackboard").status_code == 404

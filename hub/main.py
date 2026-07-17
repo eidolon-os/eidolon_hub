@@ -33,7 +33,9 @@ from hub.core.guard_ingress import GuardIngress
 from hub.core.guard_owner_face_profile_reconciler import GuardOwnerFaceProfileReconciler
 from hub.core.guard_policy import GuardControlPlane
 from hub.core.guard_runtime_reconciler import GuardRuntimeReconciler
+from hub.core.nats_kv import HubNatsKVBucket
 from hub.core.proactive_wake import ProactiveWakeOrchestrator
+from hub.core.runtime_blackboard import OwnerRuntimeBlackboard
 from hub.logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -50,8 +52,26 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         data_store = DataStore.open(load_settings())
         device_manager = DeviceManager(EidolonDataDeviceRegistryRepository(data_store))
         await device_manager.load()
-        admin_runtime = LiveKitAdminRuntime(app_config, data_store=data_store)
-        guard_control_plane = GuardControlPlane(data_store)
+        blackboard_kv = await HubNatsKVBucket.connect(
+            url=app_config.device_blackboard.nats_url,
+            bucket=app_config.device_blackboard.bucket,
+            creds_path=app_config.device_blackboard.creds_path or None,
+        )
+        runtime_blackboard = OwnerRuntimeBlackboard(
+            blackboard_kv,
+            lease_seconds=app_config.device_blackboard.lease_seconds,
+        )
+        owner_ids = [owner.owner_id for owner in await data_store.owners.list()]
+        await runtime_blackboard.initialize(owner_ids)
+        admin_runtime = LiveKitAdminRuntime(
+            app_config,
+            data_store=data_store,
+            runtime_blackboard=runtime_blackboard,
+        )
+        guard_control_plane = GuardControlPlane(
+            data_store,
+            runtime_blackboard=runtime_blackboard,
+        )
         guard_ingress = GuardIngress(guard_control_plane)
         guard_runtime_reconciler = GuardRuntimeReconciler(data_store, admin_runtime)
         guard_owner_face_profile_reconciler = GuardOwnerFaceProfileReconciler(
@@ -90,6 +110,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.device_manager = device_manager
         app.state.data_store = data_store
         app.state.admin_runtime = admin_runtime
+        app.state.runtime_blackboard = runtime_blackboard
+        app.state.device_blackboard_kv = blackboard_kv
         app.state.guard_control_plane = guard_control_plane
         app.state.guard_ingress = guard_ingress
         app.state.guard_runtime_reconciler = guard_runtime_reconciler
@@ -105,6 +127,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         probe_task = None
         await control_bridge.start()
+        await runtime_blackboard.mark_ready(owner_ids)
         # Phase 3: proactive wake — subscribe to the agent's proactive events and
         # route each to a room.join wake (pure router; device_id comes in the event).
         proactive_wake = ProactiveWakeOrchestrator(app_config, admin_runtime)
@@ -161,6 +184,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         await device_manager.save()
         await data_store.close()
         await http_client.aclose()
+        await blackboard_kv.close()
         logger.info("Hub stopped")
 
     app = FastAPI(

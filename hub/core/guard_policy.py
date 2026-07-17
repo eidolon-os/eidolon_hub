@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from uuid import uuid4
 
 from eidolon_data import DataStore
-from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET, capabilities_from_json
+from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from eidolon_sdk.biz.guard import (
     GuardPolicyAction,
@@ -41,9 +41,16 @@ class GuardControlPlane:
     consumes the durable action outbox.
     """
 
-    def __init__(self, store: DataStore, *, policy_engine: GuardPolicyEngine | None = None) -> None:
+    def __init__(
+        self,
+        store: DataStore,
+        *,
+        policy_engine: GuardPolicyEngine | None = None,
+        runtime_blackboard=None,
+    ) -> None:
         self._store = store
         self._policy = policy_engine or GuardPolicyEngine()
+        self._runtime_blackboard = runtime_blackboard
 
     async def handle(
         self,
@@ -245,16 +252,14 @@ class GuardControlPlane:
         presence = "candidate" if isinstance(message, GuardPresenceCandidate) else "absent"
         decisions: list[GuardPolicyDecision] = []
         seen: set[str] = set()
-        for device in await self._store.devices.list_devices_for_owner(owner_id):
+        if self._runtime_blackboard is None:
+            return []
+        for device in await self._runtime_blackboard.list_online_devices_for_owner(
+            owner_id=owner_id
+        ):
             if device.device_id == message.device_id:
                 continue
-            if device.revoked_at is not None or device.status == "revoked":
-                continue
-            capabilities = capabilities_from_json(
-                device.capabilities_json or {},
-                device_kind=device.kind or "unknown",
-            )
-            if not any(capability.name == BODY_OP_PRESENCE_SET for capability in capabilities):
+            if device.capability(BODY_OP_PRESENCE_SET) is None:
                 continue
             if device.device_id in seen:
                 continue

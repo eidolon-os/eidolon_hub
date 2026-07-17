@@ -150,10 +150,16 @@ async def unregister_device(device_id: str, request: Request):
     """
     device_manager = request.app.state.device_manager
     admin_runtime = request.app.state.admin_runtime
+    store = getattr(request.app.state, "data_store", None)
+    row = await store.devices.get_device(device_id) if store is not None else None
+    owner_id = str(row.owner_id) if row is not None and row.owner_id else None
     existed = await device_manager.unregister(device_id)
     presence_existed = False
     if admin_runtime is not None:
-        presence_existed = await admin_runtime.forget_presence(device_id)
+        presence_existed = await admin_runtime.forget_presence(
+            device_id,
+            owner_id=owner_id,
+        )
     return UnregisterDeviceResponse(
         device_id=device_id,
         existed=existed,

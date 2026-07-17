@@ -17,6 +17,7 @@ from eidolon_sdk.biz.admin import (
     AdminResolvePrecondition,
     ResolvedContext,
 )
+from eidolon_sdk.biz.body import CapabilityManifest
 from eidolon_sdk.biz.devices import body_sha256_hex, canonical_request, public_key_fingerprint
 from fastapi.testclient import TestClient
 
@@ -28,6 +29,7 @@ from hub.config import (
     resolve_eidolon_livekit_client_url,
 )
 from hub.core.device_manager import DeviceManager
+from hub.core.runtime_blackboard import OwnerRuntimeBlackboard
 from hub.main import create_app
 
 
@@ -46,6 +48,7 @@ def client(tmp_path):
         dm = DeviceManager(EidolonDataDeviceRegistryRepository(store, owner_id="owner-test"))
         asyncio.run(dm.load())
         app.state.device_manager = dm
+        app.state.runtime_blackboard = OwnerRuntimeBlackboard()
         app.state.data_store = store
         app.state.admin_client = AsyncMock()
         app.state.admin_resolve_client = AsyncMock()
@@ -170,6 +173,18 @@ def test_guard_runtime_config_uses_active_guard_binding_without_persona_resoluti
         )
     )
     asyncio.run(client.app.state.device_manager.load())
+    asyncio.run(
+        client.app.state.runtime_blackboard.register_device_manifest(
+            device_id=device_id,
+            manifest=CapabilityManifest.model_validate(
+                {"capabilities": [_declared_capability("device.roll_call")]}
+            ),
+            owner_id="owner-guard",
+            provider_companion_id="guard-runtime",
+            name="ATK Guard",
+            registration_id="reg-guard-runtime",
+        )
+    )
     key = ec.generate_private_key(ec.SECP256R1())
     with patch(
         "hub.api.routers.system.config.generate_token",
@@ -196,6 +211,9 @@ def test_guard_runtime_config_uses_active_guard_binding_without_persona_resoluti
     assert generate_token.call_args.kwargs["can_publish"] is False
     assert generate_token.call_args.kwargs["can_subscribe"] is True
     assert generate_token.call_args.kwargs["can_publish_data"] is True
+    assert generate_token.call_args.kwargs["participant_metadata"]["registration_id"] == (
+        "reg-guard-runtime"
+    )
 
 
 def test_config_esp32_explicit_client_type(client: TestClient):
@@ -744,18 +762,33 @@ def _signed_post_headers(
     }
 
 
+def _declared_capability(name: str, *, description: str | None = None) -> dict:
+    return {
+        "name": name,
+        "version": 1,
+        "description": description or f"Execute {name} on this device.",
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        },
+        "result_schema": {
+            "type": "object",
+            "properties": {"ok": {"type": "boolean"}},
+            "required": ["ok"],
+            "additionalProperties": False,
+        },
+    }
+
+
 def test_device_register_forwards_capabilities_and_returns_config(client: TestClient):
     import json
 
     manifest = {
         "device": {"name": "ESP BOX-3", "kind": "esp-box-3"},
         "capabilities": [
-            {
-                "name": "display.update",
-                "description": "Update screen",
-                "input_schema": {"type": "object", "properties": {"text": {"type": "string"}}},
-            },
-            {"name": "sound.play"},
+            _declared_capability("display.update", description="Update screen"),
+            _declared_capability("sound.play"),
         ]
     }
     body_bytes = json.dumps(manifest).encode("utf-8")
@@ -776,20 +809,19 @@ def test_device_register_forwards_capabilities_and_returns_config(client: TestCl
     data = r.json()
     assert data["success"] is True
     assert data["config"]["identity"] == "dev-reg"
-    caps = spy.call_args.kwargs["capabilities"]
-    assert [c["name"] for c in caps] == ["display.update", "sound.play"]
+    assert spy.call_args.kwargs["capabilities"] is None
     assert spy.call_args.kwargs["name"] == "ESP BOX-3"
     assert spy.call_args.kwargs["kind"] == "esp-box-3"
     assert dm.get("dev-reg").name == "ESP BOX-3"
     assert dm.get("dev-reg").kind == "esp-box-3"
 
 
-def test_device_register_persists_guard_capability_declaration(client: TestClient):
+def test_unowned_device_capability_is_not_written_to_an_owner_blackboard(client: TestClient):
     import json
 
     manifest = {
         "device": {"name": "ATK Guard", "kind": "atk-guard"},
-        "capabilities": [{"name": "device.roll_call"}],
+        "capabilities": [_declared_capability("device.roll_call")],
         "guard": True,
         "guard_protocol_versions": [1],
     }
@@ -805,12 +837,21 @@ def test_device_register_persists_guard_capability_declaration(client: TestClien
             content=body_bytes,
         )
     assert response.status_code == 200
+    registration_id = response.json()["registration_id"]
+    assert registration_id
     record = asyncio.run(dm._repository.get("atk-guard"))
     assert record is not None
     assert record.name == "ATK Guard"
     assert record.kind == "atk-guard"
-    assert [item["name"] for item in record.capabilities] == ["device.roll_call"]
+    assert record.capabilities == []
     assert record.metadata["guard_manifest"] == {"enabled": True, "protocol_versions": [1]}
+    runtime_entry = asyncio.run(
+        client.app.state.runtime_blackboard.get_device(
+            owner_id=None,
+            device_id="atk-guard",
+        )
+    )
+    assert runtime_entry is None
 
 
 def test_registered_guard_uses_control_lifecycle_without_persona_resolve(client: TestClient):
@@ -821,7 +862,7 @@ def test_registered_guard_uses_control_lifecycle_without_persona_resolve(client:
     key = ec.generate_private_key(ec.SECP256R1())
     body = json.dumps(
         {
-            "capabilities": [{"name": "guard.presence.candidate"}],
+            "capabilities": [_declared_capability("guard.presence.candidate")],
             "guard": True,
             "guard_protocol_versions": [1],
         }

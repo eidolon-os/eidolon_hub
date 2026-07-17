@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 from eidolon_data import DataSettings, DataStore
-from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET
+from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET, CapabilityManifest
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
@@ -18,6 +18,7 @@ from hub.core.guard_body_delivery import GuardBodyActionDeliveryWorker
 from hub.core.guard_fixture_subscriber import MissionControlFixtureSubscriber
 from hub.core.guard_ingress import GuardIngress
 from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
+from hub.core.runtime_blackboard import OwnerRuntimeBlackboard
 
 
 @pytest.fixture
@@ -38,8 +39,10 @@ async def plane(tmp_path):
         device_id="atk-1",
         guard_companion_id="guard-1",
     )
+    blackboard = OwnerRuntimeBlackboard()
+    store._test_runtime_blackboard = blackboard
     try:
-        yield GuardControlPlane(store), store
+        yield GuardControlPlane(store, runtime_blackboard=blackboard), store
     finally:
         await store.close()
 
@@ -114,7 +117,43 @@ async def _install_stackchan_body(store: DataStore) -> None:
         name="StackChan",
         kind="m5stack-core-s3",
         bound_companion_id="companion-body",
-        capabilities_json={"ops": [BODY_OP_PRESENCE_SET]},
+        capabilities_json={},
+    )
+    blackboard = store._test_runtime_blackboard
+    entry = await blackboard.register_device_manifest(
+        device_id="stackchan-1",
+        manifest=CapabilityManifest.model_validate(
+            {
+                "capabilities": [
+                    {
+                        "name": BODY_OP_PRESENCE_SET,
+                        "version": 1,
+                        "description": "Update local presence state",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": True,
+                        },
+                        "result_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": True,
+                        },
+                    }
+                ]
+            }
+        ),
+        owner_id="owner-1",
+        provider_companion_id="companion-body",
+        name="StackChan",
+    )
+    await blackboard.mark_device_online(
+        owner_id="owner-1",
+        device_id="stackchan-1",
+        registration_id=entry.registration_id,
+        room_name="room-body",
+        participant_sid="PA_body",
+        presence_revision="PA_body",
     )
 
 

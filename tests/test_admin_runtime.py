@@ -5,10 +5,12 @@ from types import SimpleNamespace
 
 import pytest
 from eidolon_data import DataSettings, DataStore
+from eidolon_sdk.biz.body import CapabilityManifest
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 
 from hub.config import AppConfig, LiveKitConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.runtime_blackboard import OwnerRuntimeBlackboard
 
 
 class _FakeRoomService:
@@ -61,6 +63,20 @@ class _FakeControlBridge:
         self.rooms.append(room_name)
 
 
+class _FakeDeviceRepo:
+    async def get_device(self, device_id: str):
+        if device_id != "esp32-1":
+            return None
+        return SimpleNamespace(
+            owner_id="owner-1",
+            bound_companion_id="companion-1",
+        )
+
+
+class _FakeDataStore:
+    devices = _FakeDeviceRepo()
+
+
 @pytest.mark.asyncio
 async def test_probe_cycle_updates_presence():
     cfg = AppConfig()
@@ -75,6 +91,196 @@ async def test_probe_cycle_updates_presence():
     assert devices[0].device_id == "esp32-1"
     assert devices[0].status == "online"
     assert devices[0].room_name == "room-a"
+
+
+@pytest.mark.asyncio
+async def test_probe_cycle_activates_only_matching_blackboard_registration():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    blackboard = OwnerRuntimeBlackboard()
+    await blackboard.register_device_manifest(
+        device_id="esp32-1",
+        manifest=CapabilityManifest.model_validate(
+            {
+                "capabilities": [
+                    {
+                        "name": "camera.capture",
+                        "version": 1,
+                        "description": "Capture an image.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                        "result_schema": {
+                            "type": "object",
+                            "properties": {"ok": {"type": "boolean"}},
+                            "required": ["ok"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            }
+        ),
+        owner_id="owner-1",
+        provider_companion_id="companion-1",
+        name="Camera",
+        registration_id="reg-1",
+    )
+    runtime = LiveKitAdminRuntime(
+        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
+    )
+    fake_api = _FakeLiveKitAPI()
+    fake_api.room._participants["room-a"][0].metadata = json.dumps(
+        {"kind": "device_control", "registration_id": "reg-1"}
+    )
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+
+    entry = await blackboard.get_device(owner_id="owner-1", device_id="esp32-1")
+    assert entry is not None
+    assert entry.status == "online"
+    assert entry.participant_sid == "PA_1"
+
+
+@pytest.mark.asyncio
+async def test_probe_cycle_activates_matching_voice_session_registration():
+    """A Box remains capability-online after switching control -> voice room."""
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    blackboard = OwnerRuntimeBlackboard()
+    await blackboard.register_device_manifest(
+        device_id="esp32-1",
+        manifest=CapabilityManifest.model_validate(
+            {
+                "capabilities": [
+                    {
+                        "name": "device.identify",
+                        "version": 1,
+                        "description": "Identify locally.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                        "result_schema": {
+                            "type": "object",
+                            "properties": {"played": {"type": "boolean"}},
+                            "required": ["played"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            }
+        ),
+        owner_id="owner-1",
+        provider_companion_id="companion-1",
+        name="Box",
+        registration_id="reg-voice",
+    )
+    runtime = LiveKitAdminRuntime(
+        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
+    )
+    fake_api = _FakeLiveKitAPI()
+    fake_api.room._participants["room-a"][0].metadata = json.dumps(
+        {"kind": "device", "registration_id": "reg-voice"}
+    )
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+
+    entry = await blackboard.get_device(owner_id="owner-1", device_id="esp32-1")
+    assert entry is not None
+    assert entry.status == "online"
+    assert entry.room_name == "room-a"
+    command = await runtime.send_command("esp32-1", {}, op="device.identify")
+    assert command["status"] == "sent"
+    assert fake_api.room.sent_payloads[0].room == "room-a"
+
+
+@pytest.mark.asyncio
+async def test_probe_cycle_requests_signed_reregistration_when_manifest_is_missing():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    blackboard = OwnerRuntimeBlackboard()
+    runtime = LiveKitAdminRuntime(
+        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
+    )
+    fake_api = _FakeLiveKitAPI()
+    fake_api.room._participants["room-a"][0].metadata = json.dumps(
+        {
+            "kind": "device_control",
+            "registration_id": "reg-from-before-hub-restart",
+        }
+    )
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    await runtime.run_probe_cycle(["esp32-1"])
+
+    assert len(fake_api.room.sent_payloads) == 1
+    envelope = json.loads(fake_api.room.sent_payloads[0].data.decode("utf-8"))
+    assert envelope["op"] == "config.refresh"
+    assert envelope["payload"] == {"reason": "runtime_blackboard_manifest_missing"}
+    assert envelope["qos"] == "fire_and_forget"
+
+
+@pytest.mark.asyncio
+async def test_probe_cycle_requests_reregistration_when_session_lacks_registration_id():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    blackboard = OwnerRuntimeBlackboard()
+    runtime = LiveKitAdminRuntime(
+        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
+    )
+    fake_api = _FakeLiveKitAPI()
+    fake_api.room._participants["room-a"][0].metadata = json.dumps(
+        {"kind": "guard_control"}
+    )
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+
+    assert len(fake_api.room.sent_payloads) == 1
+    envelope = json.loads(fake_api.room.sent_payloads[0].data.decode("utf-8"))
+    assert envelope["op"] == "config.refresh"
+    assert envelope["payload"] == {"reason": "runtime_blackboard_manifest_missing"}
+
+
+@pytest.mark.asyncio
+async def test_probe_prefers_control_session_over_same_device_voice_session():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    fake_api.room._rooms = [
+        SimpleNamespace(name="voice-room"),
+        SimpleNamespace(name="control-room"),
+    ]
+    fake_api.room._participants = {
+        "voice-room": [
+            SimpleNamespace(
+                identity="esp32-1",
+                sid="PA_VOICE",
+                metadata=json.dumps({"kind": "device"}),
+            )
+        ],
+        "control-room": [
+            SimpleNamespace(
+                identity="esp32-1",
+                sid="PA_CONTROL",
+                metadata=json.dumps({"kind": "device_control"}),
+            )
+        ],
+    }
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command("esp32-1", {}, op="device.identify")
+
+    assert command["status"] == "sent"
+    assert fake_api.room.sent_payloads[0].room == "control-room"
 
 
 @pytest.mark.asyncio
@@ -232,6 +438,41 @@ async def test_mark_command_timeout_and_metrics():
 
     metrics = await runtime.get_metrics()
     assert metrics["commands"]["timeout"] == 1
+
+
+@pytest.mark.asyncio
+async def test_accepted_command_uses_ttl_for_result_timeout():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(
+        api_url="http://localhost:7880", api_key="k", api_secret="s"
+    )
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command(
+        "esp32-1",
+        {"profile_revision": 1},
+        op="guard.owner_face_profile.sync",
+        ttl_ms=300_000,
+        qos="result",
+    )
+    accepted = await runtime.apply_command_ack(
+        {
+            "v": 1,
+            "kind": "ack",
+            "ref": command["command_id"],
+            "device_id": "esp32-1",
+            "op": "guard.owner_face_profile.sync",
+            "status": "accepted",
+            "code": "OK",
+        }
+    )
+
+    assert accepted is not None
+    assert accepted["status"] == "accepted"
+    assert await runtime.mark_command_timeout(timeout_seconds=0) == 0
 
 
 @pytest.mark.asyncio
