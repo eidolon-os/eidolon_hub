@@ -21,7 +21,7 @@ from hub.api.routers.admin import (
     admin_guard_router,
 )
 from hub.api.routers.runtime import runtime_commands_router
-from hub.api.routers.system import config_router, guard_owner_face_router
+from hub.api.routers.system import config_router, guard_owner_face_router, sense_router
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
 from hub.core.control_bridge import LiveKitControlBridge
@@ -204,6 +204,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
     app.include_router(config_router)
     app.include_router(guard_owner_face_router)
+    app.include_router(sense_router)
     app.include_router(admin_devices_router)
     app.include_router(admin_discovery_router)
     app.include_router(admin_commands_router)

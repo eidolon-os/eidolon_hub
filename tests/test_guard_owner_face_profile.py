@@ -21,13 +21,24 @@ from hub.core.guard_owner_face_profile_reconciler import GuardOwnerFaceProfileRe
 class _Runtime:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.command_results: list[dict] = []
+        self.commands_by_id: dict[str, dict] = {}
         self.online = True
 
     async def send_command(self, device_id: str, payload: dict, **kwargs):
         if not self.online:
             raise ValueError(f"Device {device_id} is not currently connected")
         self.calls.append({"device_id": device_id, "payload": payload, **kwargs})
-        return {"command_id": f"cmd-face-{len(self.calls)}"}
+        command_id = kwargs.get("command_id") or f"cmd-face-{len(self.calls)}"
+        command = {"command_id": command_id, "status": "sent"}
+        self.commands_by_id[command_id] = command
+        return command
+
+    async def get_command(self, command_id: str):
+        return self.commands_by_id.get(command_id)
+
+    async def list_commands(self, limit: int = 50):
+        return self.command_results[:limit]
 
 
 @pytest.fixture
@@ -211,9 +222,17 @@ async def test_profile_reconciler_retries_offline_and_records_apply(context) -> 
     profile, _references = await _desired_profile(store, "owner-1")
     runtime = _Runtime()
     runtime.online = False
-    reconciler = GuardOwnerFaceProfileReconciler(store, runtime)  # type: ignore[arg-type]
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
 
     assert await reconciler.reconcile_once() == 0
+    delivery = (
+        await store.guard_owner_face_profile_deliveries.list_for_binding(
+            binding.binding_id
+        )
+    )[0]
+    assert delivery.attempt_count == 0
     runtime.online = True
     assert await reconciler.reconcile_once() == 1
     assert runtime.calls[0]["op"] == "guard.owner_face_profile.sync"
@@ -226,7 +245,7 @@ async def test_profile_reconciler_retries_offline_and_records_apply(context) -> 
 
     await reconciler.apply_command_result(
         {
-            "command_id": "cmd-face-1",
+            "command_id": runtime.calls[0]["command_id"],
             "op": "guard.owner_face_profile.sync",
             "status": "succeeded",
             "result": {
@@ -247,6 +266,99 @@ async def test_profile_reconciler_retries_offline_and_records_apply(context) -> 
     events = await store.events.list_for_owner("owner-1")
     assert events[0].event_type == "guard.owner_face_profile.applied"
 
+    # Periodic reconciliation scans persisted terminal commands. Replaying the
+    # same command must not rewrite an already-terminal delivery or emit the
+    # deterministic audit event twice.
+    await reconciler.apply_command_result(
+        {
+            "command_id": runtime.calls[0]["command_id"],
+            "op": "guard.owner_face_profile.sync",
+            "status": "succeeded",
+            "result": {
+                "binding_id": binding.binding_id,
+                "profile_id": profile.profile_id,
+                "profile_revision": 1,
+                "applied_state": "active",
+                "model_id": "esp-who-human-face-recognition-v1",
+                "preprocessing_version": "rgb565-be-qvga-v1",
+                "template_count": 3,
+            },
+        }
+    )
+    assert len(await store.events.list_for_owner("owner-1")) == 1
+
+
+async def test_profile_reconciler_requeues_no_ack_timeout_without_burning_attempt(
+    context,
+) -> None:
+    store, manager, _client = context
+    await store.owners.create(owner_id="owner-timeout", display_name="Owner")
+    await _approved_device(manager, "atk-timeout")
+    binding = await store.guard_bindings.claim(
+        owner_id="owner-timeout",
+        device_id="atk-timeout",
+        guard_companion_id="guard-timeout",
+    )
+    await _desired_profile(store, "owner-timeout")
+    runtime = _Runtime()
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
+
+    assert await reconciler.reconcile_once() == 1
+    runtime.command_results = [
+        {
+            "command_id": runtime.calls[0]["command_id"],
+            "op": "guard.owner_face_profile.sync",
+            "status": "timeout",
+            "error": "no result within 300s",
+        }
+    ]
+
+    assert await reconciler.reconcile_command_results() == 1
+    delivery = (
+        await store.guard_owner_face_profile_deliveries.list_for_binding(binding.binding_id)
+    )[0]
+    assert delivery.status == "pending"
+    assert delivery.attempt_count == 0
+    assert await reconciler.reconcile_command_results() == 0
+
+
+async def test_profile_reconciler_accepted_timeout_consumes_device_attempt(context) -> None:
+    store, manager, _client = context
+    await store.owners.create(owner_id="owner-accepted-timeout", display_name="Owner")
+    await _approved_device(manager, "atk-accepted-timeout")
+    binding = await store.guard_bindings.claim(
+        owner_id="owner-accepted-timeout",
+        device_id="atk-accepted-timeout",
+        guard_companion_id="guard-accepted-timeout",
+    )
+    await _desired_profile(store, "owner-accepted-timeout")
+    runtime = _Runtime()
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
+
+    assert await reconciler.reconcile_once() == 1
+    runtime.command_results = [
+        {
+            "command_id": runtime.calls[0]["command_id"],
+            "op": "guard.owner_face_profile.sync",
+            "status": "timeout",
+            "error": "no result within 300s",
+            "ack": {"kind": "ack", "status": "accepted"},
+        }
+    ]
+
+    assert await reconciler.reconcile_command_results() == 1
+    delivery = (
+        await store.guard_owner_face_profile_deliveries.list_for_binding(
+            binding.binding_id
+        )
+    )[0]
+    assert delivery.status == "pending"
+    assert delivery.attempt_count == 1
+
 
 async def test_profile_reconciler_applies_clear_and_retries_transient_failure(context) -> None:
     store, manager, _client = context
@@ -258,7 +370,9 @@ async def test_profile_reconciler_applies_clear_and_retries_transient_failure(co
     profile, _references = await _desired_profile(store, "owner-clear")
     cleared = await store.owner_face_profiles.clear(owner_id="owner-clear")
     runtime = _Runtime()
-    reconciler = GuardOwnerFaceProfileReconciler(store, runtime)  # type: ignore[arg-type]
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
 
     assert await reconciler.reconcile_once() == 1
     assert runtime.calls[0]["payload"] == {
@@ -269,7 +383,7 @@ async def test_profile_reconciler_applies_clear_and_retries_transient_failure(co
     }
     await reconciler.apply_command_result(
         {
-            "command_id": "cmd-face-1",
+            "command_id": runtime.calls[0]["command_id"],
             "op": "guard.owner_face_profile.sync",
             "status": "failed",
             "error": "OWNER_FACE_MANIFEST_FETCH_FAILED",
@@ -284,7 +398,7 @@ async def test_profile_reconciler_applies_clear_and_retries_transient_failure(co
     assert await reconciler.reconcile_once() == 1
     await reconciler.apply_command_result(
         {
-            "command_id": "cmd-face-2",
+            "command_id": runtime.calls[1]["command_id"],
             "op": "guard.owner_face_profile.sync",
             "status": "succeeded",
             "result": {
@@ -318,12 +432,14 @@ async def test_profile_reconciler_rejects_malformed_success_result(context) -> N
     )
     profile, _references = await _desired_profile(store, "owner-bad-result")
     runtime = _Runtime()
-    reconciler = GuardOwnerFaceProfileReconciler(store, runtime)  # type: ignore[arg-type]
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
 
     assert await reconciler.reconcile_once() == 1
     await reconciler.apply_command_result(
         {
-            "command_id": "cmd-face-1",
+            "command_id": runtime.calls[0]["command_id"],
             "op": "guard.owner_face_profile.sync",
             "status": "succeeded",
             "result": {
@@ -344,3 +460,45 @@ async def test_profile_reconciler_rejects_malformed_success_result(context) -> N
     assert delivery.last_error == "owner face profile result is invalid"
     events = await store.events.list_for_owner("owner-bad-result")
     assert events[0].event_type == "guard.owner_face_profile.failed"
+
+
+async def test_profile_reconciler_recovers_inflight_command_without_resending(
+    context,
+) -> None:
+    store, manager, _client = context
+    await store.owners.create(owner_id="owner-crash", display_name="Owner")
+    await _approved_device(manager, "atk-crash")
+    binding = await store.guard_bindings.claim(
+        owner_id="owner-crash",
+        device_id="atk-crash",
+        guard_companion_id="guard-crash",
+    )
+    await _desired_profile(store, "owner-crash")
+    delivery = (
+        await store.guard_owner_face_profile_deliveries.list_for_binding(binding.binding_id)
+    )[0]
+    claimed = await store.guard_owner_face_profile_deliveries.claim_for_dispatch(
+        delivery.delivery_id,
+        command_id="cmd-before-hub-restart",
+        lease_seconds=0,
+    )
+    assert claimed is not None
+
+    runtime = _Runtime()
+    runtime.commands_by_id["cmd-before-hub-restart"] = {
+        "command_id": "cmd-before-hub-restart",
+        "status": "accepted",
+    }
+    reconciler = GuardOwnerFaceProfileReconciler(  # type: ignore[arg-type]
+        store, runtime, retry_base_seconds=0
+    )
+
+    assert await reconciler.reconcile_once() == 1
+    assert runtime.calls == []
+    recovered = (
+        await store.guard_owner_face_profile_deliveries.list_for_binding(binding.binding_id)
+    )[0]
+    assert recovered.status == "dispatched"
+    assert recovered.command_id == "cmd-before-hub-restart"
+    assert recovered.attempt_count == 1
+    assert await reconciler.reconcile_once() == 0

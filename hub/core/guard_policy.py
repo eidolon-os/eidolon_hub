@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from uuid import uuid4
 
 from eidolon_data import DataStore
 from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from eidolon_sdk.biz.guard import (
+    GuardOwnerPresence,
     GuardPolicyAction,
     GuardPolicyActionAck,
     GuardPresenceAbsent,
@@ -71,6 +73,8 @@ class GuardControlPlane:
 
         if isinstance(message, GuardPolicyActionAck):
             return await self._accept_ack(binding.owner_id, message)
+        if isinstance(message, GuardOwnerPresence):
+            return await self._accept_owner_presence(binding, message)
         if not isinstance(
             message,
             (GuardPresenceCandidate, GuardPresenceVerified, GuardPresenceAbsent),
@@ -196,13 +200,18 @@ class GuardControlPlane:
 
     def _assert_source_boundary(self, message, source: str) -> None:
         if source in {"livekit", "fake_atk"}:
-            if isinstance(message, (GuardPresenceCandidate, GuardPresenceAbsent)):
+            if isinstance(
+                message,
+                (GuardPresenceCandidate, GuardPresenceAbsent, GuardOwnerPresence),
+            ):
                 return
             if isinstance(message, GuardPresenceVerified):
                 raise GuardPolicyError("verified guard facts are fixture-only")
             if isinstance(message, GuardPolicyActionAck):
                 raise GuardPolicyError("device ingress does not accept guard action acknowledgements")
-            raise GuardPolicyError("device ingress only accepts candidate or absent guard facts")
+            raise GuardPolicyError(
+                "device ingress only accepts candidate, absent, or owner presence facts"
+            )
         if source == "body_delivery" and not isinstance(message, GuardPolicyActionAck):
             raise GuardPolicyError("body delivery source may only acknowledge actions")
 
@@ -240,6 +249,50 @@ class GuardControlPlane:
             payload_json=ack.model_dump(mode="json"),
         )
         return GuardPolicyResult(accepted=ack.model_dump(mode="json"))
+
+    async def _accept_owner_presence(
+        self,
+        binding,
+        message: GuardOwnerPresence,
+    ) -> GuardPolicyResult:
+        projection = await self._store.guard_bindings.apply_owner_presence(
+            binding_id=binding.binding_id,
+            state=message.state,
+            profile_revision=message.profile_revision,
+            correlation_id=message.correlation_id,
+            guard_epoch=message.guard_epoch,
+            sequence=message.sequence,
+            lease_ms=message.lease_ms,
+        )
+        if projection is None:
+            raise GuardPolicyError("owner presence binding is no longer active")
+        accepted = message.model_dump(mode="json")
+        accepted["transition"] = projection.transition
+        if projection.transition not in {"entered", "left"}:
+            return GuardPolicyResult(accepted=accepted)
+
+        await self._store.events.record_event(
+            event_id="guard_owner_presence_"
+            + sha256(
+                (
+                    f"{binding.binding_id}\0{message.correlation_id}\0"
+                    f"{message.guard_epoch}\0{message.state}\0{message.sequence}"
+                ).encode("utf-8")
+            ).hexdigest()[:40],
+            owner_id=binding.owner_id,
+            subject_type="guard_binding",
+            subject_id=binding.guard_companion_id,
+            event_type=f"guard.owner_presence.{message.state}",
+            actor_type="device",
+            actor_id=message.device_id,
+            data_classification="sensitive",
+            payload_json={
+                "profile_revision": message.profile_revision,
+                "guard_epoch": message.guard_epoch,
+                "sequence": message.sequence,
+            },
+        )
+        return GuardPolicyResult(accepted=accepted)
 
     async def _body_presence_decisions(
         self,

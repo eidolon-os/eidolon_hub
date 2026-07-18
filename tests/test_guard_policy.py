@@ -78,6 +78,28 @@ def _verified(correlation_id: str = "corr-verified") -> dict:
     }
 
 
+def _owner_presence(
+    *,
+    state: str = "present",
+    sequence: int = 1,
+    correlation_id: str = "op-boot1-r5-e1",
+) -> dict:
+    return {
+        "type": "guard.owner_presence",
+        "schema_v": 1,
+        "guard_companion_id": "guard-1",
+        "device_id": "atk-1",
+        "correlation_id": correlation_id,
+        "guard_epoch": 1,
+        "ts_ms": 1_700_000_000_000,
+        "state": state,
+        "profile_revision": 5,
+        "sequence": sequence,
+        "lease_ms": 30_000 if state == "present" else 0,
+        "raw_retention": "none",
+    }
+
+
 class _FakeRoomService:
     def __init__(self) -> None:
         self._rooms = [SimpleNamespace(name="room-body")]
@@ -120,7 +142,7 @@ async def _install_stackchan_body(store: DataStore) -> None:
         capabilities_json={},
     )
     blackboard = store._test_runtime_blackboard
-    entry = await blackboard.register_device_manifest(
+    await blackboard.register_device_manifest(
         device_id="stackchan-1",
         manifest=CapabilityManifest.model_validate(
             {
@@ -150,7 +172,6 @@ async def _install_stackchan_body(store: DataStore) -> None:
     await blackboard.mark_device_online(
         owner_id="owner-1",
         device_id="stackchan-1",
-        registration_id=entry.registration_id,
         room_name="room-body",
         participant_sid="PA_body",
         presence_revision="PA_body",
@@ -373,7 +394,7 @@ async def test_fake_atk_ingress_uses_raw_packet_sender_identity_and_replay_dedup
             source="fake_atk",
             require_guard=True,
         )
-    with pytest.raises(GuardPolicyError, match="only accepts candidate or absent"):
+    with pytest.raises(GuardPolicyError, match="candidate, absent, or owner presence"):
         await ingress.handle_packet(
             topic=CONTROL_TOPIC,
             data=json.dumps(accepted.action).encode("utf-8"),
@@ -381,6 +402,59 @@ async def test_fake_atk_ingress_uses_raw_packet_sender_identity_and_replay_dedup
             source="fake_atk",
             require_guard=True,
         )
+
+
+async def test_owner_presence_projects_transitions_without_policy_or_body_actions(
+    plane,
+) -> None:
+    control, store = plane
+
+    entered = await control.handle(
+        _owner_presence(), sender_identity="atk-1", source="livekit"
+    )
+    assert entered.accepted["transition"] == "entered"
+    assert entered.actions is None
+
+    renewed = await control.handle(
+        _owner_presence(sequence=2), sender_identity="atk-1", source="livekit"
+    )
+    assert renewed.accepted["transition"] == "renewed"
+    assert renewed.actions is None
+
+    replay = await control.handle(
+        _owner_presence(sequence=2), sender_identity="atk-1", source="livekit"
+    )
+    assert replay.accepted["transition"] == "stale"
+
+    left = await control.handle(
+        _owner_presence(state="absent", sequence=3),
+        sender_identity="atk-1",
+        source="livekit",
+    )
+    assert left.accepted["transition"] == "left"
+    assert await control.pending_actions() == []
+
+    events = await store.events.list_for_owner("owner-1")
+    owner_presence_events = [
+        event for event in events if event.event_type.startswith("guard.owner_presence.")
+    ]
+    assert [event.event_type for event in reversed(owner_presence_events)] == [
+        "guard.owner_presence.present",
+        "guard.owner_presence.absent",
+    ]
+
+    reentered = await control.handle(
+        _owner_presence(correlation_id="op-boot2-r5-e1"),
+        sender_identity="atk-1",
+        source="livekit",
+    )
+    assert reentered.accepted["transition"] == "entered"
+    owner_presence_events = [
+        event
+        for event in await store.events.list_for_owner("owner-1")
+        if event.event_type.startswith("guard.owner_presence.")
+    ]
+    assert len(owner_presence_events) == 3
 
 
 async def test_concurrent_fact_replay_publishes_one_atomic_action_set(plane) -> None:

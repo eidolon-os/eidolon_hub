@@ -216,7 +216,7 @@ async def _runtime(
 
 async def _body_blackboard() -> OwnerRuntimeBlackboard:
     blackboard = OwnerRuntimeBlackboard()
-    entry = await blackboard.register_device_manifest(
+    await blackboard.register_device_manifest(
         device_id="stackchan-1",
         manifest=CapabilityManifest.model_validate(
             {
@@ -246,7 +246,6 @@ async def _body_blackboard() -> OwnerRuntimeBlackboard:
     await blackboard.mark_device_online(
         owner_id="owner-1",
         device_id="stackchan-1",
-        registration_id=entry.registration_id,
         room_name="fake-control-room",
         participant_sid="PA_fake_body",
         presence_revision="PA_fake_body",

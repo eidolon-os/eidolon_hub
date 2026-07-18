@@ -516,6 +516,7 @@ async def _authenticate_signed_device(
             else None
         )
         runtime_name = device_name or device_id
+        provider_companion_name = provider_companion_id or ""
         visibility = "owner"
         aliases: list[str] = []
         if row is not None:
@@ -531,13 +532,14 @@ async def _authenticate_signed_device(
         if provider_companion_id:
             provider = await store.companions.get(provider_companion_id)
             if provider is not None and provider.display_name:
-                aliases.append(str(provider.display_name))
+                provider_companion_name = str(provider.display_name)
         try:
             entry = await blackboard.register_device_manifest(
                 device_id=device_id,
                 manifest=capability_manifest,
                 owner_id=owner_id,
                 provider_companion_id=provider_companion_id,
+                provider_companion_name=provider_companion_name,
                 name=runtime_name,
                 aliases=tuple(aliases),
                 visibility=visibility,
