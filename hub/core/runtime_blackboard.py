@@ -108,6 +108,7 @@ class OwnerRuntimeBlackboard:
         provider_companion_id: str | None,
         name: str,
         aliases: tuple[str, ...] = (),
+        provider_companion_name: str = "",
         visibility: str = "owner",
         registration_id: str | None = None,
         registered_at: datetime | None = None,
@@ -120,6 +121,7 @@ class OwnerRuntimeBlackboard:
             device_id=device_id,
             registration_id=registration_id or f"reg_{uuid4().hex}",
             provider_companion_id=provider_companion_id,
+            provider_companion_name=provider_companion_name,
             name=name or device_id,
             aliases=tuple(dict.fromkeys(item.strip() for item in aliases if item.strip())),
             visibility=visibility,
@@ -135,6 +137,22 @@ class OwnerRuntimeBlackboard:
             return entry
         async with self._lock:
             snapshot = await self._load(owner_id)
+            current = snapshot.devices.get(device_id)
+            if current is not None and current.is_online(now=lease_now):
+                # A signed manifest refresh and a LiveKit presence probe are
+                # independent observations about the same physical device.
+                # Refreshing the manifest must not make an already reachable
+                # transport disappear while it reconnects with a newer token.
+                entry = entry.model_copy(
+                    update={
+                        "status": "online",
+                        "room_name": current.room_name,
+                        "participant_sid": current.participant_sid,
+                        "presence_revision": current.presence_revision,
+                        "last_seen_at": current.last_seen_at,
+                        "lease_expires_at": current.lease_expires_at,
+                    }
+                )
             devices = dict(snapshot.devices)
             devices[device_id] = entry
             await self._write(self._next_snapshot(snapshot, devices=devices))
@@ -145,7 +163,6 @@ class OwnerRuntimeBlackboard:
         *,
         owner_id: str,
         device_id: str,
-        registration_id: str,
         room_name: str,
         participant_sid: str,
         presence_revision: str,
@@ -155,7 +172,7 @@ class OwnerRuntimeBlackboard:
         async with self._lock:
             snapshot = await self._load(owner_id)
             current = snapshot.devices.get(device_id)
-            if current is None or current.registration_id != registration_id:
+            if current is None:
                 return None
             updated = current.model_copy(
                 update={
@@ -177,7 +194,6 @@ class OwnerRuntimeBlackboard:
         *,
         owner_id: str | None,
         device_id: str,
-        registration_id: str | None = None,
     ) -> bool:
         if not owner_id:
             return False
@@ -185,8 +201,6 @@ class OwnerRuntimeBlackboard:
             snapshot = await self._load(owner_id)
             current = snapshot.devices.get(device_id)
             if current is None:
-                return False
-            if registration_id is not None and current.registration_id != registration_id:
                 return False
             devices = dict(snapshot.devices)
             del devices[device_id]
@@ -201,9 +215,7 @@ class OwnerRuntimeBlackboard:
         snapshot = await self.read_owner_snapshot(owner_id)
         return snapshot.devices.get(device_id) if snapshot is not None else None
 
-    async def read_owner_snapshot(
-        self, owner_id: str
-    ) -> OwnerDeviceBlackboardSnapshot | None:
+    async def read_owner_snapshot(self, owner_id: str) -> OwnerDeviceBlackboardSnapshot | None:
         raw = await self._kv.get(owner_device_blackboard_key(owner_id))
         if raw is None:
             return None
@@ -220,9 +232,7 @@ class OwnerRuntimeBlackboard:
             return []
         return snapshot.visible_devices(requester_companion_id=requester_companion_id)
 
-    async def list_online_devices_for_owner(
-        self, *, owner_id: str
-    ) -> list[RuntimeDeviceEntry]:
+    async def list_online_devices_for_owner(self, *, owner_id: str) -> list[RuntimeDeviceEntry]:
         snapshot = await self.read_owner_snapshot(owner_id)
         if snapshot is None or not snapshot.is_available():
             return []
@@ -238,6 +248,7 @@ class OwnerRuntimeBlackboard:
         requester_companion_id: str,
         device_id: str,
         capability_name: str,
+        capability_version: int,
     ) -> tuple[RuntimeDeviceEntry, CapabilityDeclaration]:
         snapshot = await self.read_owner_snapshot(owner_id)
         if snapshot is None or not snapshot.is_available():
@@ -250,10 +261,11 @@ class OwnerRuntimeBlackboard:
             and entry.provider_companion_id != requester_companion_id
         ):
             raise RuntimeCapabilityUnavailable("device capabilities are private")
-        capability = entry.capability(capability_name)
+        capability = entry.capability(capability_name, capability_version)
         if capability is None:
             raise RuntimeCapabilityUnavailable(
-                f"device {device_id!r} does not currently declare {capability_name!r}"
+                f"device {device_id!r} does not currently declare "
+                f"{capability_name!r}.v{capability_version}"
             )
         return entry, capability
 
@@ -269,9 +281,7 @@ class OwnerRuntimeBlackboard:
             snapshot.to_bytes(),
         )
 
-    def _empty_snapshot(
-        self, owner_id: str, *, ready: bool
-    ) -> OwnerDeviceBlackboardSnapshot:
+    def _empty_snapshot(self, owner_id: str, *, ready: bool) -> OwnerDeviceBlackboardSnapshot:
         now = datetime.now(UTC)
         return OwnerDeviceBlackboardSnapshot(
             owner_id=owner_id,

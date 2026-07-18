@@ -25,17 +25,28 @@ class _Repo:
 class _Runtime:
     def __init__(self):
         self.sent = []
+        self.commands = {}
+
+    async def get_command(self, command_id):
+        return self.commands.get(command_id)
 
     async def send_command(self, **kwargs):
         self.sent.append(kwargs)
-        return {
-            "command_id": "cmd-1",
+        command = {
+            "command_id": kwargs["command_id"],
             "device_id": kwargs["device_id"],
             "runtime_caller_id": kwargs.get("runtime_caller_id"),
             "runtime_session_id": kwargs.get("runtime_session_id"),
+            "runtime_trace_id": kwargs.get("runtime_trace_id"),
+            "runtime_turn_id": kwargs.get("runtime_turn_id"),
+            "runtime_tool_call_id": kwargs.get("runtime_tool_call_id"),
+            "idempotency_key": kwargs.get("idempotency_key"),
+            "owner_id": kwargs.get("requester_owner_id"),
+            "requester_companion_id": kwargs.get("requester_companion_id"),
             "source_device_id": kwargs.get("source_device_id"),
             "topic": kwargs["topic"],
             "op": kwargs["op"],
+            "capability_version": kwargs["capability_version"],
             "status": "sent",
             "created_at": "2026-07-17T00:00:00+00:00",
             "payload": kwargs["payload"],
@@ -45,6 +56,8 @@ class _Runtime:
             "priority": kwargs["priority"],
             "updated_at": "2026-07-17T00:00:00+00:00",
         }
+        self.commands[command["command_id"]] = command
+        return command
 
 
 def _client(*, visibility="owner", capabilities=None, target_owner="owner-1"):
@@ -77,9 +90,7 @@ def _client(*, visibility="owner", capabilities=None, target_owner="owner-1"):
             revoked_at=None,
             kind="atk-guard",
             capabilities_json={
-                "ops": capabilities
-                if capabilities is not None
-                else [{"name": "device.roll_call"}]
+                "ops": capabilities if capabilities is not None else [{"name": "device.roll_call"}]
             },
             access_policy_json={"capability_visibility": visibility},
         ),
@@ -89,11 +100,7 @@ def _client(*, visibility="owner", capabilities=None, target_owner="owner-1"):
         devices=_Repo(devices),
     )
     blackboard = OwnerRuntimeBlackboard()
-    declared = (
-        capabilities
-        if capabilities is not None
-        else [_capability("device.roll_call")]
-    )
+    declared = capabilities if capabilities is not None else [_capability("device.roll_call")]
     asyncio.run(
         blackboard.register_device_manifest(
             device_id="atk-guard",
@@ -109,7 +116,6 @@ def _client(*, visibility="owner", capabilities=None, target_owner="owner-1"):
         blackboard.mark_device_online(
             owner_id=target_owner,
             device_id="atk-guard",
-            registration_id="reg-guard",
             room_name="guard-control",
             participant_sid="PA_GUARD",
             presence_revision="presence-guard",
@@ -145,6 +151,11 @@ def _body():
         "requester_companion_id": "companion-a",
         "source_device_id": "box-3",
         "op": "device.roll_call",
+        "capability_version": 1,
+        "idempotency_key": "test-runtime-command",
+        "runtime_trace_id": "trace-1",
+        "runtime_turn_id": "turn-1",
+        "runtime_tool_call_id": "call-1",
         "payload": {},
         "qos": "result",
         "ttl_ms": 5000,
@@ -198,6 +209,43 @@ def test_dynamically_declared_unknown_capability_is_dispatched():
 
     assert response.status_code == 200
     assert runtime.sent[0]["op"] == "vendor.unreviewed"
+
+
+def test_contract_version_mismatch_is_rejected_before_dispatch():
+    client, runtime = _client()
+    body = _body()
+    body["capability_version"] = 2
+
+    response = client.post("/api/runtime/devices/atk-guard/commands", json=body)
+
+    assert response.status_code == 409
+    assert "device.roll_call" in response.json()["detail"]
+    assert runtime.sent == []
+
+
+def test_same_idempotency_key_returns_existing_command_without_redispatch():
+    client, runtime = _client()
+    body = _body()
+
+    first = client.post("/api/runtime/devices/atk-guard/commands", json=body)
+    second = client.post("/api/runtime/devices/atk-guard/commands", json=body)
+
+    assert first.status_code == second.status_code == 200
+    assert first.json()["command_id"] == second.json()["command_id"]
+    assert len(runtime.sent) == 1
+
+
+def test_reusing_idempotency_key_for_different_payload_is_rejected():
+    client, runtime = _client()
+    first = client.post("/api/runtime/devices/atk-guard/commands", json=_body())
+    changed = _body()
+    changed["payload"] = {"unexpected": True}
+    second = client.post("/api/runtime/devices/atk-guard/commands", json=changed)
+
+    assert first.status_code == 200
+    assert second.status_code == 409
+    assert "idempotency key" in second.json()["detail"]
+    assert len(runtime.sent) == 1
 
 
 def test_runtime_blackboard_http_projection_is_removed():

@@ -67,6 +67,7 @@ async def _register(board: OwnerRuntimeBlackboard, *, visibility: str = "owner")
         manifest=_manifest("device.roll_call"),
         owner_id="owner-1",
         provider_companion_id="companion-guard",
+        provider_companion_name="Guard",
         name="ATK Guard",
         aliases=("Guard", "Guard"),
         visibility=visibility,
@@ -108,30 +109,24 @@ async def test_initialization_replaces_stale_state_with_one_snapshot_per_owner()
 
 
 @pytest.mark.asyncio
-async def test_registered_manifest_is_not_visible_until_matching_transport_is_online() -> None:
+async def test_registered_manifest_is_not_visible_until_transport_is_online() -> None:
     board = OwnerRuntimeBlackboard()
     entry = await _register(board)
 
     assert entry.status == "registered_waiting_transport"
-    assert await board.list_visible_runtime_devices(
-        owner_id="owner-1", requester_companion_id="companion-a"
-    ) == []
+    assert (
+        await board.list_visible_runtime_devices(
+            owner_id="owner-1", requester_companion_id="companion-a"
+        )
+        == []
+    )
 
-    assert await board.mark_device_online(
-        owner_id="owner-1",
-        device_id="guard-1",
-        registration_id="wrong-generation",
-        room_name="guard-control",
-        participant_sid="PA_OLD",
-        presence_revision="presence-old",
-    ) is None
     online = await board.mark_device_online(
         owner_id="owner-1",
         device_id="guard-1",
-        registration_id="reg-1",
         room_name="guard-control",
-        participant_sid="PA_NEW",
-        presence_revision="presence-new",
+        participant_sid="PA_OLD_TOKEN",
+        presence_revision="presence-old-token",
     )
 
     assert online is not None
@@ -140,12 +135,20 @@ async def test_registered_manifest_is_not_visible_until_matching_transport_is_on
     )
     assert [item.device_id for item in visible] == ["guard-1"]
     assert visible[0].aliases == ("Guard",)
+    assert visible[0].provider_companion_name == "Guard"
 
 
 @pytest.mark.asyncio
 async def test_registration_atomically_replaces_manifest_and_empty_list_clears_it() -> None:
     board = OwnerRuntimeBlackboard()
     first = await _register(board)
+    await board.mark_device_online(
+        owner_id="owner-1",
+        device_id="guard-1",
+        room_name="guard-control",
+        participant_sid="PA_EXISTING",
+        presence_revision="presence-existing",
+    )
     replacement = await board.register_device_manifest(
         device_id="guard-1",
         manifest=_manifest("camera.capture"),
@@ -157,9 +160,8 @@ async def test_registration_atomically_replaces_manifest_and_empty_list_clears_i
 
     assert replacement.registration_id != first.registration_id
     assert [item.name for item in replacement.capabilities] == ["camera.capture"]
-    assert await board.remove_device_session(
-        owner_id="owner-1", device_id="guard-1", registration_id="reg-1"
-    ) is False
+    assert replacement.status == "online"
+    assert replacement.participant_sid == "PA_EXISTING"
 
     cleared = await board.register_device_manifest(
         device_id="guard-1",
@@ -179,23 +181,31 @@ async def test_visibility_and_owner_boundaries_are_enforced_by_the_blackboard() 
     await board.mark_device_online(
         owner_id="owner-1",
         device_id="guard-1",
-        registration_id="reg-1",
         room_name="guard-control",
         participant_sid="PA_GUARD",
         presence_revision="presence-1",
     )
 
-    assert await board.list_visible_runtime_devices(
-        owner_id="owner-1", requester_companion_id="companion-a"
-    ) == []
-    assert len(
+    assert (
         await board.list_visible_runtime_devices(
-            owner_id="owner-1", requester_companion_id="companion-guard"
+            owner_id="owner-1", requester_companion_id="companion-a"
         )
-    ) == 1
-    assert await board.list_visible_runtime_devices(
-        owner_id="owner-2", requester_companion_id="companion-guard"
-    ) == []
+        == []
+    )
+    assert (
+        len(
+            await board.list_visible_runtime_devices(
+                owner_id="owner-1", requester_companion_id="companion-guard"
+            )
+        )
+        == 1
+    )
+    assert (
+        await board.list_visible_runtime_devices(
+            owner_id="owner-2", requester_companion_id="companion-guard"
+        )
+        == []
+    )
 
 
 @pytest.mark.asyncio
@@ -205,7 +215,6 @@ async def test_current_capability_resolution_fails_closed_after_disconnect() -> 
     await board.mark_device_online(
         owner_id="owner-1",
         device_id="guard-1",
-        registration_id="reg-1",
         room_name="guard-control",
         participant_sid="PA_GUARD",
         presence_revision="presence-1",
@@ -216,17 +225,17 @@ async def test_current_capability_resolution_fails_closed_after_disconnect() -> 
         requester_companion_id="companion-a",
         device_id="guard-1",
         capability_name="device.roll_call",
+        capability_version=1,
     )
     assert entry.device_id == "guard-1"
     assert capability.name == "device.roll_call"
 
-    assert await board.remove_device_session(
-        owner_id="owner-1", device_id="guard-1", registration_id="reg-1"
-    ) is True
+    assert await board.remove_device_session(owner_id="owner-1", device_id="guard-1") is True
     with pytest.raises(RuntimeCapabilityUnavailable, match="not online"):
         await board.resolve_current_capability(
             owner_id="owner-1",
             requester_companion_id="companion-a",
             device_id="guard-1",
             capability_name="device.roll_call",
+            capability_version=1,
         )

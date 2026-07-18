@@ -8,6 +8,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
+from eidolon_sdk.biz.body import validate_capability_arguments
 from eidolon_sdk.biz.contracts import CONTROL_TOPIC
 from eidolon_sdk.biz.control import (
     CommandPriority,
@@ -54,11 +55,6 @@ def _participant_metadata(participant: Any) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         return {}
     return metadata
-
-
-def _participant_registration_id(participant: Any) -> str:
-    metadata = _participant_metadata(participant)
-    return str(metadata.get("registration_id") or "")
 
 
 def _participant_kind(participant: Any) -> str:
@@ -127,7 +123,7 @@ class LiveKitAdminRuntime:
 
     async def run_probe_cycle(self, known_device_ids: list[str]) -> None:
         self._probe_health.total_cycles += 1
-        detected: dict[str, tuple[str, str, str, str]] = {}
+        detected: dict[str, tuple[str, str, str]] = {}
         known = set(known_device_ids)
         livekit_api: api.LiveKitAPI | None = None
         now = datetime.now(UTC)
@@ -143,13 +139,12 @@ class LiveKitAdminRuntime:
                     candidate = (
                         room.name,
                         participant.sid,
-                        _participant_registration_id(participant),
                         _participant_kind(participant),
                     )
                     previous = detected.get(participant.identity)
                     if previous is None or (
-                        _is_control_participant(candidate[3])
-                        and not _is_control_participant(previous[3])
+                        _is_control_participant(candidate[2])
+                        and not _is_control_participant(previous[2])
                     ):
                         detected[participant.identity] = candidate
 
@@ -158,7 +153,7 @@ class LiveKitAdminRuntime:
                 for device_id in known:
                     current = self._state.get(device_id) or DevicePresence(device_id=device_id)
                     if device_id in detected:
-                        room_name, participant_sid, _registration_id, _kind = detected[device_id]
+                        room_name, participant_sid, _kind = detected[device_id]
                         status = "online"
                         current.status = status
                         current.room_name = room_name
@@ -171,7 +166,9 @@ class LiveKitAdminRuntime:
                             current.status = "offline"
                             current.room_name = ""
                             current.participant_sid = ""
-                        elif current.missed_probes >= self._config.admin.degraded_after_missed_probes:
+                        elif (
+                            current.missed_probes >= self._config.admin.degraded_after_missed_probes
+                        ):
                             current.status = "degraded"
                     next_state[device_id] = current
                 self._state = next_state
@@ -185,35 +182,29 @@ class LiveKitAdminRuntime:
                     )
                     owner_id = str(row.owner_id) if row is not None and row.owner_id else None
                     detected_item = detected.get(device_id)
-                    registration_id = detected_item[2] if detected_item else ""
-                    participant_kind = detected_item[3] if detected_item else ""
+                    participant_kind = detected_item[2] if detected_item else ""
                     if (
                         owner_id
                         and presence.status == "online"
                         and _is_capability_transport_participant(participant_kind)
                     ):
-                        entry = None
-                        if registration_id:
-                            entry = await self._runtime_blackboard.mark_device_online(
-                                owner_id=owner_id,
-                                device_id=device_id,
-                                registration_id=registration_id,
-                                room_name=presence.room_name,
-                                participant_sid=presence.participant_sid,
-                                presence_revision=presence.participant_sid,
-                                seen_at=presence.last_seen_at,
-                            )
+                        entry = await self._runtime_blackboard.mark_device_online(
+                            owner_id=owner_id,
+                            device_id=device_id,
+                            room_name=presence.room_name,
+                            participant_sid=presence.participant_sid,
+                            presence_revision=presence.participant_sid,
+                            seen_at=presence.last_seen_at,
+                        )
                         if entry is None:
-                            # Missing registration metadata and a registration
-                            # from a previous Hub generation both require the
-                            # same recovery: signed re-registration.
+                            # Presence alone does not declare capabilities. Ask
+                            # the connected device for a fresh signed manifest.
                             manifest_refresh_devices.append(device_id)
                         else:
                             self._manifest_refresh_requested_at.pop(device_id, None)
                     elif presence.status == "offline":
                         await self._runtime_blackboard.remove_device_session(
-                            owner_id=owner_id,
-                            device_id=device_id
+                            owner_id=owner_id, device_id=device_id
                         )
                         self._manifest_refresh_requested_at.pop(device_id, None)
                 for device_id in manifest_refresh_devices:
@@ -335,14 +326,24 @@ class LiveKitAdminRuntime:
         source_device_id: str | None = None,
         runtime_caller_id: str | None = None,
         runtime_session_id: str | None = None,
+        runtime_trace_id: str | None = None,
+        runtime_turn_id: str | None = None,
+        runtime_tool_call_id: str | None = None,
+        idempotency_key: str | None = None,
         requester_owner_id: str | None = None,
         requester_companion_id: str | None = None,
         op: str | None = None,
+        capability_version: int | None = None,
+        capability_contract: dict[str, Any] | None = None,
         ttl_ms: int = 30_000,
         qos: CommandQoS = "ack",
         priority: CommandPriority = "normal",
     ) -> dict[str, Any]:
+        command_id = command_id or str(uuid4())
         async with self._lock:
+            existing = self._commands.get(command_id)
+            if existing is not None:
+                return existing
             presence = self._state.get(device_id)
             if not presence or not presence.room_name or presence.status != "online":
                 raise ValueError(f"Device {device_id} is not currently connected")
@@ -351,7 +352,6 @@ class LiveKitAdminRuntime:
         if self._control_bridge is not None:
             await self._control_bridge.ensure_room(room_name)
 
-        command_id = command_id or str(uuid4())
         now = datetime.now(UTC)
         resolved_op = infer_op(payload, op)
         envelope = build_command_envelope(
@@ -359,6 +359,7 @@ class LiveKitAdminRuntime:
             device_id=device_id,
             payload=payload,
             op=resolved_op,
+            capability_version=capability_version,
             ttl_ms=ttl_ms,
             qos=qos,
             priority=priority,
@@ -376,11 +377,17 @@ class LiveKitAdminRuntime:
             "device_id": device_id,
             "runtime_caller_id": runtime_caller_id,
             "runtime_session_id": runtime_session_id,
+            "runtime_trace_id": runtime_trace_id,
+            "runtime_turn_id": runtime_turn_id,
+            "runtime_tool_call_id": runtime_tool_call_id,
+            "idempotency_key": idempotency_key,
             "source_device_id": source_device_id,
             "requester_owner_id": requester_owner_id,
             "requester_companion_id": requester_companion_id,
             "topic": topic,
             "op": resolved_op,
+            "capability_version": capability_version,
+            "capability_contract": dict(capability_contract or {}),
             "payload": payload,
             "envelope": envelope,
             "ttl_ms": ttl_ms,
@@ -393,9 +400,13 @@ class LiveKitAdminRuntime:
             "ack": None,
             "result": None,
         }
+        async with self._lock:
+            existing = self._commands.get(command_id)
+            if existing is not None:
+                return existing
+            self._commands[command_id] = command
+            self._command_order.append(command_id)
         await self._hydrate_command_binding(command)
-        self._commands[command_id] = command
-        self._command_order.append(command_id)
         await self._persist_command(command)
         message = json.dumps(envelope, separators=(",", ":")).encode("utf-8")
 
@@ -445,7 +456,11 @@ class LiveKitAdminRuntime:
         if not command:
             return None
         ack_device_id = envelope.get("device_id")
-        if isinstance(ack_device_id, str) and ack_device_id and ack_device_id != command["device_id"]:
+        if (
+            isinstance(ack_device_id, str)
+            and ack_device_id
+            and ack_device_id != command["device_id"]
+        ):
             logger.warning(
                 "Ignoring command ack with mismatched device_id command_id=%s expected=%s got=%s",
                 command_id,
@@ -461,14 +476,54 @@ class LiveKitAdminRuntime:
                 sender_identity,
             )
             return None
+        ack_op = envelope.get("op")
+        if isinstance(ack_op, str) and ack_op and ack_op != command.get("op"):
+            logger.warning(
+                "Ignoring command result with mismatched op command_id=%s expected=%s got=%s",
+                command_id,
+                command.get("op"),
+                ack_op,
+            )
+            return None
+        ack_version = envelope.get("capability_version")
+        if (
+            isinstance(ack_version, int)
+            and not isinstance(ack_version, bool)
+            and command.get("capability_version") is not None
+            and ack_version != command.get("capability_version")
+        ):
+            logger.warning(
+                "Ignoring command result with mismatched capability version "
+                "command_id=%s expected=%s got=%s",
+                command_id,
+                command.get("capability_version"),
+                ack_version,
+            )
+            return None
 
         status_value = envelope.get("status")
         status = normalize_ack_status(status_value if isinstance(status_value, str) else "failed")
         command["status"] = command_status_from_ack(status)
         command["ack"] = envelope
-        if envelope.get("kind") == "result" or "result" in envelope:
-            command["result"] = envelope.get("result", envelope)
-        if command["status"] in {"failed", "rejected", "expired"}:
+        is_result = envelope.get("kind") == "result" or "result" in envelope
+        if is_result:
+            command["result"] = envelope.get("result")
+            if command["status"] == "succeeded":
+                contract = command.get("capability_contract") or {}
+                result_schema = contract.get("result_schema")
+                if isinstance(result_schema, dict):
+                    result_error = validate_capability_arguments(
+                        result_schema,
+                        command["result"],
+                    )
+                    if result_error:
+                        command["status"] = "failed"
+                        command["error"] = (
+                            "invalid capability result for "
+                            f"{contract.get('name')}.v{contract.get('version')}: "
+                            f"{result_error}"
+                        )
+        if command["status"] in {"failed", "rejected", "expired"} and not command.get("error"):
             message = envelope.get("message") or envelope.get("code") or command["status"]
             command["error"] = str(message)
         command["updated_at"] = datetime.now(UTC).isoformat()
@@ -551,9 +606,7 @@ class LiveKitAdminRuntime:
             if status in {"accepted", "running"}:
                 ttl_ms = command.get("ttl_ms")
                 if isinstance(ttl_ms, int) and ttl_ms > 0:
-                    effective_timeout_seconds = max(
-                        timeout_seconds, (ttl_ms + 999) // 1000
-                    )
+                    effective_timeout_seconds = max(timeout_seconds, (ttl_ms + 999) // 1000)
             if (now - reference_at).total_seconds() < effective_timeout_seconds:
                 continue
             command["status"] = "timeout"
@@ -595,6 +648,10 @@ class LiveKitAdminRuntime:
                 payload_json={
                     "command_id": command.get("command_id"),
                     "op": command.get("op"),
+                    "capability_version": command.get("capability_version"),
+                    "runtime_trace_id": command.get("runtime_trace_id"),
+                    "runtime_turn_id": command.get("runtime_turn_id"),
+                    "runtime_tool_call_id": command.get("runtime_tool_call_id"),
                     "status": command.get("status"),
                     "error": command.get("error") or None,
                 },
@@ -694,9 +751,9 @@ class LiveKitAdminRuntime:
                 op=command.get("op") or "",
                 status=command.get("status") or "queued",
                 payload_json=command.get("payload") or {},
-                envelope_json=command.get("envelope") or {},
+                envelope_json=_persisted_command_envelope(command),
                 ack_json=command.get("ack"),
-                result_json=_json_dict_or_none(command.get("result")),
+                result_json=command.get("result"),
                 ttl_ms=int(command.get("ttl_ms") or 30_000),
                 qos=str(command.get("qos") or "ack"),
                 priority=str(command.get("priority") or "normal"),
@@ -714,6 +771,9 @@ class LiveKitAdminRuntime:
 
 
 def _command_from_row(row: Any) -> dict[str, Any]:
+    envelope = dict(row.envelope_json or {})
+    runtime_metadata = envelope.pop("_hub_runtime", {})
+    capability_contract = envelope.pop("_hub_capability_contract", {})
     return {
         "command_id": row.command_id,
         "owner_id": row.owner_id,
@@ -721,11 +781,19 @@ def _command_from_row(row: Any) -> dict[str, Any]:
         "device_id": row.device_id,
         "runtime_caller_id": row.runtime_caller_id,
         "runtime_session_id": row.runtime_session_id,
+        "runtime_trace_id": runtime_metadata.get("trace_id"),
+        "runtime_turn_id": runtime_metadata.get("turn_id"),
+        "runtime_tool_call_id": runtime_metadata.get("tool_call_id"),
+        "idempotency_key": runtime_metadata.get("idempotency_key"),
+        "requester_owner_id": runtime_metadata.get("requester_owner_id"),
+        "requester_companion_id": runtime_metadata.get("requester_companion_id"),
         "source_device_id": row.source_device_id,
         "topic": row.topic,
         "op": row.op,
+        "capability_version": capability_contract.get("version"),
+        "capability_contract": capability_contract,
         "payload": row.payload_json or {},
-        "envelope": row.envelope_json or {},
+        "envelope": envelope,
         "ttl_ms": row.ttl_ms,
         "qos": row.qos,
         "priority": row.priority,
@@ -736,6 +804,22 @@ def _command_from_row(row: Any) -> dict[str, Any]:
         "ack": row.ack_json,
         "result": row.result_json,
     }
+
+
+def _persisted_command_envelope(command: dict[str, Any]) -> dict[str, Any]:
+    envelope = dict(command.get("envelope") or {})
+    envelope["_hub_runtime"] = {
+        "trace_id": command.get("runtime_trace_id"),
+        "turn_id": command.get("runtime_turn_id"),
+        "tool_call_id": command.get("runtime_tool_call_id"),
+        "idempotency_key": command.get("idempotency_key"),
+        "requester_owner_id": command.get("requester_owner_id"),
+        "requester_companion_id": command.get("requester_companion_id"),
+    }
+    contract = command.get("capability_contract")
+    if isinstance(contract, dict) and contract:
+        envelope["_hub_capability_contract"] = contract
+    return envelope
 
 
 def _parse_datetime(value: Any) -> datetime | None:
@@ -760,11 +844,3 @@ def _command_expires_at(command: dict[str, Any]) -> datetime | None:
     if ttl_ms <= 0:
         return None
     return created_at + timedelta(milliseconds=ttl_ms)
-
-
-def _json_dict_or_none(value: Any) -> dict[str, Any] | None:
-    if value is None:
-        return None
-    if isinstance(value, dict):
-        return value
-    return {"value": value}

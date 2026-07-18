@@ -94,7 +94,7 @@ async def test_probe_cycle_updates_presence():
 
 
 @pytest.mark.asyncio
-async def test_probe_cycle_activates_only_matching_blackboard_registration():
+async def test_probe_cycle_activates_transport_with_stale_registration_metadata():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     blackboard = OwnerRuntimeBlackboard()
@@ -127,12 +127,10 @@ async def test_probe_cycle_activates_only_matching_blackboard_registration():
         name="Camera",
         registration_id="reg-1",
     )
-    runtime = LiveKitAdminRuntime(
-        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
-    )
+    runtime = LiveKitAdminRuntime(cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard)
     fake_api = _FakeLiveKitAPI()
     fake_api.room._participants["room-a"][0].metadata = json.dumps(
-        {"kind": "device_control", "registration_id": "reg-1"}
+        {"kind": "device_control", "registration_id": "stale-transport-generation"}
     )
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
 
@@ -145,7 +143,7 @@ async def test_probe_cycle_activates_only_matching_blackboard_registration():
 
 
 @pytest.mark.asyncio
-async def test_probe_cycle_activates_matching_voice_session_registration():
+async def test_probe_cycle_activates_voice_session_transport():
     """A Box remains capability-online after switching control -> voice room."""
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
@@ -179,9 +177,7 @@ async def test_probe_cycle_activates_matching_voice_session_registration():
         name="Box",
         registration_id="reg-voice",
     )
-    runtime = LiveKitAdminRuntime(
-        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
-    )
+    runtime = LiveKitAdminRuntime(cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard)
     fake_api = _FakeLiveKitAPI()
     fake_api.room._participants["room-a"][0].metadata = json.dumps(
         {"kind": "device", "registration_id": "reg-voice"}
@@ -204,9 +200,7 @@ async def test_probe_cycle_requests_signed_reregistration_when_manifest_is_missi
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     blackboard = OwnerRuntimeBlackboard()
-    runtime = LiveKitAdminRuntime(
-        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
-    )
+    runtime = LiveKitAdminRuntime(cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard)
     fake_api = _FakeLiveKitAPI()
     fake_api.room._participants["room-a"][0].metadata = json.dumps(
         {
@@ -227,25 +221,49 @@ async def test_probe_cycle_requests_signed_reregistration_when_manifest_is_missi
 
 
 @pytest.mark.asyncio
-async def test_probe_cycle_requests_reregistration_when_session_lacks_registration_id():
+async def test_probe_cycle_does_not_require_registration_id_when_manifest_exists():
     cfg = AppConfig()
     cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     blackboard = OwnerRuntimeBlackboard()
-    runtime = LiveKitAdminRuntime(
-        cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard
+    await blackboard.register_device_manifest(
+        device_id="esp32-1",
+        manifest=CapabilityManifest.model_validate(
+            {
+                "capabilities": [
+                    {
+                        "name": "device.identify",
+                        "version": 1,
+                        "description": "Identify locally.",
+                        "input_schema": {
+                            "type": "object",
+                            "properties": {},
+                            "additionalProperties": False,
+                        },
+                        "result_schema": {
+                            "type": "object",
+                            "properties": {"played": {"type": "boolean"}},
+                            "required": ["played"],
+                            "additionalProperties": False,
+                        },
+                    }
+                ]
+            }
+        ),
+        owner_id="owner-1",
+        provider_companion_id="companion-1",
+        name="Box",
     )
+    runtime = LiveKitAdminRuntime(cfg, data_store=_FakeDataStore(), runtime_blackboard=blackboard)
     fake_api = _FakeLiveKitAPI()
-    fake_api.room._participants["room-a"][0].metadata = json.dumps(
-        {"kind": "guard_control"}
-    )
+    fake_api.room._participants["room-a"][0].metadata = json.dumps({"kind": "guard_control"})
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
 
     await runtime.run_probe_cycle(["esp32-1"])
 
-    assert len(fake_api.room.sent_payloads) == 1
-    envelope = json.loads(fake_api.room.sent_payloads[0].data.decode("utf-8"))
-    assert envelope["op"] == "config.refresh"
-    assert envelope["payload"] == {"reason": "runtime_blackboard_manifest_missing"}
+    entry = await blackboard.get_device(owner_id="owner-1", device_id="esp32-1")
+    assert entry is not None
+    assert entry.status == "online"
+    assert fake_api.room.sent_payloads == []
 
 
 @pytest.mark.asyncio
@@ -443,9 +461,7 @@ async def test_mark_command_timeout_and_metrics():
 @pytest.mark.asyncio
 async def test_accepted_command_uses_ttl_for_result_timeout():
     cfg = AppConfig()
-    cfg.livekit = LiveKitConfig(
-        api_url="http://localhost:7880", api_key="k", api_secret="s"
-    )
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
     runtime = LiveKitAdminRuntime(cfg)
     fake_api = _FakeLiveKitAPI()
     runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
@@ -504,6 +520,55 @@ async def test_apply_command_ack_updates_command_status():
     assert updated["error"] == ""
     assert updated["ack"]["code"] == "OK"
     assert updated["result"] == {"status": "active"}
+
+
+@pytest.mark.asyncio
+async def test_capability_result_schema_failure_turns_completed_result_into_failure():
+    cfg = AppConfig()
+    cfg.livekit = LiveKitConfig(api_url="http://localhost:7880", api_key="k", api_secret="s")
+    runtime = LiveKitAdminRuntime(cfg)
+    fake_api = _FakeLiveKitAPI()
+    runtime._build_livekit_api = lambda: fake_api  # type: ignore[method-assign]
+
+    await runtime.run_probe_cycle(["esp32-1"])
+    command = await runtime.send_command(
+        "esp32-1",
+        {},
+        op="device.roll_call",
+        capability_version=1,
+        capability_contract={
+            "name": "device.roll_call",
+            "version": 1,
+            "manifest_revision": "sha256:test",
+            "result_schema": {
+                "type": "object",
+                "properties": {"played": {"type": "boolean"}},
+                "required": ["played"],
+                "additionalProperties": False,
+            },
+        },
+        qos="result",
+    )
+
+    updated = await runtime.apply_command_ack(
+        {
+            "v": 1,
+            "kind": "result",
+            "ref": command["command_id"],
+            "device_id": "esp32-1",
+            "op": "device.roll_call",
+            "capability_version": 1,
+            "status": "completed",
+            "code": "OK",
+            "result": {"played": "yes"},
+        }
+    )
+
+    assert updated is not None
+    assert updated["status"] == "failed"
+    assert "invalid capability result" in updated["error"]
+    assert "$.played expected boolean" in updated["error"]
+    assert updated["result"] == {"played": "yes"}
 
 
 @pytest.mark.asyncio
@@ -566,7 +631,21 @@ async def test_send_command_persists_body_command_status(tmp_path):
             op="device.identify",
             runtime_caller_id="rc-1",
             runtime_session_id="rs-1",
+            runtime_trace_id="trace-1",
+            runtime_turn_id="turn-1",
+            runtime_tool_call_id="call-1",
+            idempotency_key="idem-1",
             source_device_id="source-1",
+            capability_version=1,
+            capability_contract={
+                "name": "device.identify",
+                "version": 1,
+                "manifest_revision": "sha256:test",
+                "result_schema": {
+                    "type": "object",
+                    "properties": {"played": {"type": "boolean"}},
+                },
+            },
         )
         row = await store.body_commands.get_command(command["command_id"])
 
@@ -578,6 +657,8 @@ async def test_send_command_persists_body_command_status(tmp_path):
         assert row.runtime_caller_id == "rc-1"
         assert row.runtime_session_id == "rs-1"
         assert row.source_device_id == "source-1"
+        assert row.envelope_json["_hub_runtime"]["trace_id"] == "trace-1"
+        assert row.envelope_json["_hub_capability_contract"]["version"] == 1
 
         await runtime.apply_command_ack(
             {
@@ -601,6 +682,12 @@ async def test_send_command_persists_body_command_status(tmp_path):
         assert cold_command["status"] == "accepted"
         assert cold_command["runtime_caller_id"] == "rc-1"
         assert cold_command["runtime_session_id"] == "rs-1"
+        assert cold_command["runtime_trace_id"] == "trace-1"
+        assert cold_command["runtime_turn_id"] == "turn-1"
+        assert cold_command["runtime_tool_call_id"] == "call-1"
+        assert cold_command["idempotency_key"] == "idem-1"
+        assert cold_command["capability_version"] == 1
+        assert "_hub_runtime" not in cold_command["envelope"]
         assert cold_command["source_device_id"] == "source-1"
     finally:
         await store.close()
@@ -634,8 +721,15 @@ async def test_command_terminal_results_emit_audit_events(tmp_path):
         # success ack → device.command.acked
         c1 = await runtime.send_command("esp32-1", {"reason": "t"}, op="config.refresh")
         await runtime.apply_command_ack(
-            {"v": 1, "kind": "result", "ref": c1["command_id"], "device_id": "esp32-1",
-             "op": "config.refresh", "status": "completed", "code": "OK"}
+            {
+                "v": 1,
+                "kind": "result",
+                "ref": c1["command_id"],
+                "device_id": "esp32-1",
+                "op": "config.refresh",
+                "status": "completed",
+                "code": "OK",
+            }
         )
         # timeout → device.command.failed (hub-detected)
         c2 = await runtime.send_command("esp32-1", {"reason": "t2"}, op="config.refresh")
