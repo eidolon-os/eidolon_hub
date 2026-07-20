@@ -680,10 +680,15 @@ async def _esp32_response(
     # on the header-less session-token fetch.
     declared = interaction_mode  # normalized header; None when not declared
     stored = _admin_interaction_mode_override(resolved)
-    if declared is not None and stored is None:
-        # First declaration for a device with no stored mode: persist it so
-        # header-less config/token fetches and channel's resolve_device see the
-        # same value. Do NOT clobber an operator-set admin override (stored).
+    if declared is not None and declared != stored:
+        # Firmware is the source of truth: a board's interaction mode is a
+        # compile-time hardware property re-declared on every register, so keep
+        # the device row in sync with the declared value whenever it differs.
+        # This covers the first declaration, a NULL/stale row, AND a firmware
+        # mode change (e.g. full_duplex -> half_duplex). The previous "persist
+        # only when the stored value is None" rule let any previously-stored
+        # value permanently block a later firmware change. An absent/invalid
+        # header (declared is None) never clobbers the stored value.
         store = getattr(request.app.state, "data_store", None)
         if store is not None:
             try:
@@ -692,10 +697,11 @@ async def _esp32_response(
                 _log.warning(
                     "persist device interaction_mode failed device=%s: %s", device_id, exc
                 )
-    # Effective mode: an operator's admin override wins; else the device's
-    # declaration; else None. NO silent half_duplex default — a device with no
-    # declared/stored mode stays null (visible), never a fabricated half-duplex.
-    interaction_mode = stored if stored is not None else declared
+    # Effective mode: the firmware-declared value (now persisted) wins; if the
+    # device declared nothing this fetch, fall back to the stored value; else
+    # None. NO silent half_duplex default — an undeclared/unstored mode stays
+    # null (visible), never a fabricated half-duplex.
+    interaction_mode = declared if declared is not None else stored
 
     # An explicit ?room_name= override (web / tests) is honored verbatim; the
     # default device path gets a fresh per-session voice room each call.

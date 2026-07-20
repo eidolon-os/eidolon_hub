@@ -419,11 +419,15 @@ def test_config_esp32_session_intent_defaults_user_initiated(client: TestClient)
     assert voice_meta["session_intent"] == "user_initiated"
 
 
-def test_config_esp32_admin_override_beats_device_header(client: TestClient):
-    """Phase 6: an admin per-device interaction_mode (on the binding) wins over
-    the device's self-declared header."""
+def test_config_esp32_device_header_updates_stale_stored_mode(client: TestClient):
+    """Firmware is the sole source of truth: the device's declared header wins
+    over a previously-stored value and is re-persisted. interaction_mode is a
+    compile-time board property re-declared every register; a stored value (e.g.
+    from an earlier firmware era) must NOT permanently block a firmware mode
+    change. (There is no admin override on this single column — owner decision.)"""
     key = ec.generate_private_key(ec.SECP256R1())
     _approve_and_resolve(client, "dev-override", key)
+    # Simulate a stale stored mode (device row still holds an earlier value).
     client.app.state.admin_resolve_client.resolve_device.return_value = _resolved_context(
         "dev-override", interaction_mode="full_duplex"
     )
@@ -442,13 +446,13 @@ def test_config_esp32_admin_override_beats_device_header(client: TestClient):
                     key=key,
                     include_public_key=False,
                 ),
-                # Device says half; admin override says full → admin wins.
+                # Device now declares half_duplex; the stale full_duplex must lose.
                 "X-Device-Interaction-Mode": "half_duplex",
             },
         )
     assert r.status_code == 200
     voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
-    assert voice_meta["interaction_mode"] == "full_duplex"
+    assert voice_meta["interaction_mode"] == "half_duplex"
 
 
 def test_config_esp32_no_admin_override_keeps_device_header(client: TestClient):
