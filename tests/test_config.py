@@ -308,9 +308,10 @@ def test_config_esp32_stamps_interaction_mode_from_header(client: TestClient):
     assert voice_meta["interaction_mode"] == "full_duplex"
 
 
-def test_config_esp32_defaults_half_duplex_when_header_absent(client: TestClient):
-    """Defense default (plan §1): a device that doesn't declare a mode is
-    treated as half_duplex — no accidental barge-in."""
+def test_config_esp32_null_when_header_absent_and_unset(client: TestClient):
+    """No silent default (avoid a hidden pit): a device that declares no mode
+    and has no stored mode resolves to null — never a fabricated half_duplex
+    that would silently disable barge-in on a full-duplex board."""
     key = ec.generate_private_key(ec.SECP256R1())
     _approve_and_resolve(client, "dev-default", key)
     with patch(
@@ -330,11 +331,12 @@ def test_config_esp32_defaults_half_duplex_when_header_absent(client: TestClient
         )
     assert r.status_code == 200
     voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
-    assert voice_meta["interaction_mode"] == "half_duplex"
+    assert voice_meta["interaction_mode"] is None
 
 
-def test_config_esp32_invalid_mode_degrades_to_half(client: TestClient):
-    """An unrecognized header value degrades to the safe device default."""
+def test_config_esp32_invalid_mode_is_null_not_downgraded(client: TestClient):
+    """An unrecognized header value is treated as unset (null), not silently
+    degraded to half_duplex."""
     key = ec.generate_private_key(ec.SECP256R1())
     _approve_and_resolve(client, "dev-bad", key)
     with patch(
@@ -357,7 +359,7 @@ def test_config_esp32_invalid_mode_degrades_to_half(client: TestClient):
         )
     assert r.status_code == 200
     voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
-    assert voice_meta["interaction_mode"] == "half_duplex"
+    assert voice_meta["interaction_mode"] is None
 
 
 def test_config_esp32_stamps_proactive_session_intent_from_header(client: TestClient):

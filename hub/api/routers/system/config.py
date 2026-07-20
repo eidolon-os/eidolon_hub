@@ -80,20 +80,18 @@ def _normalize_session_intent(
     return default
 
 
-def _normalize_interaction_mode(raw: str | None, *, default: str) -> str:
-    """Map the (untrusted, unsigned) header value to a known mode.
+def _normalize_interaction_mode(raw: str | None) -> str | None:
+    """Map the (untrusted, unsigned) header value to a known mode, or ``None``.
 
-    Defense default (plan §1): anything missing or unrecognized degrades to
-    ``default`` — ``half_duplex`` for devices (safe: no accidental barge-in on
-    boards with poor AEC), ``full_duplex`` for web. The header is NOT part of
-    the device signature (``canonical_request`` excludes it), so it is a hint,
-    not a security artifact; the authoritative per-device override is the admin
-    path (plan Phase 6).
+    NO silent default: an absent/unrecognized value returns ``None`` so a
+    device's real interaction_mode is never masked by a fabricated
+    ``half_duplex`` (which would silently disable barge-in on a full-duplex
+    board — a hidden pit). The per-device value persisted from this header on
+    registration is the source of truth; callers that genuinely need a fallback
+    (web) apply it explicitly at the call site.
     """
     candidate = (raw or "").strip().lower()
-    if candidate in VALID_INTERACTION_MODES:
-        return candidate
-    return default
+    return candidate if candidate in VALID_INTERACTION_MODES else None
 
 
 def _admin_interaction_mode_override(resolved: Any) -> str | None:
@@ -338,7 +336,7 @@ def _active_esp32_response(
     resolved_room: str,
     device_id: str,
     agent_mode: AgentMode,
-    interaction_mode: str,
+    interaction_mode: str | None,
     session_intent: str,
     bound: bool,
     registration_id: str | None = None,
@@ -577,7 +575,7 @@ async def _esp32_response(
     room_name: str | None,
     device_id: str,
     agent_mode: AgentMode,
-    interaction_mode: str,
+    interaction_mode: str | None,
     session_intent: str = SESSION_INTENT_USER_INITIATED,
     auth_headers: DeviceAuthHeaders,
     capability_manifest: CapabilityManifest | None = None,
@@ -675,12 +673,29 @@ async def _esp32_response(
             status_code=502, detail=f"admin upstream: {exc.message}"
         ) from exc
 
-    # Phase 6: an admin per-device override (set on the device binding) takes
-    # priority over the device's self-declared header. Unset / unknown → keep
-    # the (already-defaulted) device-declared value.
-    admin_override = _admin_interaction_mode_override(resolved)
-    if admin_override is not None:
-        interaction_mode = admin_override
+    # Firmware-declared interaction_mode (the signed device's header, sent on the
+    # register POST) is the source of truth. Persist it to the shared device row
+    # so header-less config/token fetches AND channel's resolve_device see the
+    # same value — otherwise a full-duplex device silently resolves half_duplex
+    # on the header-less session-token fetch.
+    declared = interaction_mode  # normalized header; None when not declared
+    stored = _admin_interaction_mode_override(resolved)
+    if declared is not None and stored is None:
+        # First declaration for a device with no stored mode: persist it so
+        # header-less config/token fetches and channel's resolve_device see the
+        # same value. Do NOT clobber an operator-set admin override (stored).
+        store = getattr(request.app.state, "data_store", None)
+        if store is not None:
+            try:
+                await store.devices.update_device(device_id, interaction_mode=declared)
+            except Exception as exc:  # non-fatal — config still returns
+                _log.warning(
+                    "persist device interaction_mode failed device=%s: %s", device_id, exc
+                )
+    # Effective mode: an operator's admin override wins; else the device's
+    # declaration; else None. NO silent half_duplex default — a device with no
+    # declared/stored mode stays null (visible), never a fabricated half-duplex.
+    interaction_mode = stored if stored is not None else declared
 
     # An explicit ?room_name= override (web / tests) is honored verbatim; the
     # default device path gets a fresh per-session voice room each call.
@@ -932,9 +947,7 @@ async def register_device(
         room_name=room_name,
         device_id=x_device_id,
         agent_mode=agent_mode,
-        interaction_mode=_normalize_interaction_mode(
-            x_device_interaction_mode, default=INTERACTION_MODE_HALF_DUPLEX
-        ),
+        interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
         session_intent=_normalize_session_intent(x_device_session_intent),
         auth_headers=DeviceAuthHeaders(
             device_id=x_device_id,
@@ -1160,10 +1173,7 @@ async def get_config(
             room_name=room_name,
             device_id=x_device_id,
             agent_mode=agent_mode,
-            interaction_mode=_normalize_interaction_mode(
-                x_device_interaction_mode,
-                default=INTERACTION_MODE_HALF_DUPLEX,
-            ),
+            interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
             session_intent=_normalize_session_intent(x_device_session_intent),
             auth_headers=DeviceAuthHeaders(
                 device_id=x_device_id,
@@ -1194,10 +1204,8 @@ async def get_config(
             companion_id=companion_id,
             device_id=device_id,
             agent_mode=agent_mode,
-            interaction_mode=_normalize_interaction_mode(
-                x_device_interaction_mode,
-                default=INTERACTION_MODE_FULL_DUPLEX,
-            ),
+            interaction_mode=_normalize_interaction_mode(x_device_interaction_mode)
+            or INTERACTION_MODE_FULL_DUPLEX,
             avatar=avatar,
         )
 
@@ -1213,8 +1221,6 @@ async def get_config(
         room_name=room_name,
         owner_id=owner_id,
         agent_mode=agent_mode,
-        interaction_mode=_normalize_interaction_mode(
-            x_device_interaction_mode,
-            default=INTERACTION_MODE_FULL_DUPLEX,
-        ),
+        interaction_mode=_normalize_interaction_mode(x_device_interaction_mode)
+        or INTERACTION_MODE_FULL_DUPLEX,
     )

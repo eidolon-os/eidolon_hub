@@ -22,6 +22,9 @@ class AdminDevice(BaseModel):
     room_name: str = ""
     participant_sid: str = ""
     missed_probes: int = 0
+    # Firmware-declared turn-taking mode; None when the device has not declared
+    # one (shown as null in admin — never silently defaulted to half_duplex).
+    interaction_mode: str | None = None
 
 
 class AdminDeviceListResponse(BaseModel):

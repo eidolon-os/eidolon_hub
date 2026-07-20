@@ -24,7 +24,10 @@ async def list_devices(
 ):
     runtime = request.app.state.admin_runtime
     device_manager = request.app.state.device_manager
-    devices = await build_admin_devices(runtime=runtime, device_manager=device_manager)
+    store = getattr(request.app.state, "data_store", None)
+    devices = await build_admin_devices(
+        runtime=runtime, device_manager=device_manager, store=store
+    )
     if status:
         devices = [device for device in devices if device.status == status]
     return AdminDeviceListResponse(devices=devices)
@@ -51,6 +54,7 @@ async def refresh_devices(request: Request):
         device_manager=device_manager,
         control_bridge=control_bridge,
         command_timeout_seconds=timeout,
+        store=getattr(request.app.state, "data_store", None),
     )
     return AdminDeviceListResponse(devices=devices)
 

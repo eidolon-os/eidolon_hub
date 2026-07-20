@@ -10,10 +10,21 @@ from hub.core.device_manager import DeviceManager
 async def build_admin_devices(
     runtime: LiveKitAdminRuntime,
     device_manager: DeviceManager,
+    *,
+    store: Any | None = None,
 ) -> list[AdminDevice]:
     # The registry adapter already excludes virtual web bodies, so every device
     # reaching here is Hub-managed hardware (see EidolonDataDeviceRegistryRepository).
     presence = {item.device_id: item for item in await runtime.get_presence_snapshot()}
+    # interaction_mode is a business fact on the device row (not the hub registry
+    # record), so read it straight from the store. null = unset (never defaulted).
+    modes: dict[str, str | None] = {}
+    if store is not None:
+        try:
+            for row in await store.devices.list_all_devices():
+                modes[row.device_id] = row.interaction_mode
+        except Exception:  # pragma: no cover - display-only, tolerate store hiccups
+            modes = {}
     rows: list[AdminDevice] = []
 
     for device in device_manager.list_all():
@@ -36,6 +47,7 @@ async def build_admin_devices(
                 room_name=p.room_name if p else "",
                 participant_sid=p.participant_sid if p else "",
                 missed_probes=p.missed_probes if p else 0,
+                interaction_mode=modes.get(device.device_id),
             )
         )
 
@@ -49,6 +61,7 @@ async def refresh_admin_devices(
     *,
     control_bridge: Any | None = None,
     command_timeout_seconds: int | None = None,
+    store: Any | None = None,
 ) -> list[AdminDevice]:
     """Refresh runtime overlays, then return the composed Hub device view.
 
@@ -69,4 +82,6 @@ async def refresh_admin_devices(
         )
     if command_timeout_seconds is not None:
         await runtime.mark_command_timeout(command_timeout_seconds)
-    return await build_admin_devices(runtime=runtime, device_manager=device_manager)
+    return await build_admin_devices(
+        runtime=runtime, device_manager=device_manager, store=store
+    )
