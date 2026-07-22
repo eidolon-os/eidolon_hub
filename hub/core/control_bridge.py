@@ -229,6 +229,12 @@ class LiveKitControlBridge:
                 logger.warning("LiveKit control bridge rejected guard event sender=%s", sender_identity)
                 return
             if accepted is not None:
+                # Realtime reflex: a guard fact that produced durable body
+                # actions kicks the delivery worker immediately instead of
+                # waiting for the next probe cycle. reconcile_once is claim-based
+                # (lease per action), so it is safe alongside the periodic probe.
+                if self._guard_body_delivery is not None and accepted.actions:
+                    asyncio.create_task(self._guard_body_delivery.reconcile_once())
                 return
         try:
             envelope = json.loads(raw.decode("utf-8"))

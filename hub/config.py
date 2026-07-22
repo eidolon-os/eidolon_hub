@@ -121,7 +121,10 @@ class DiscoveryConfig:
 @dataclass
 class AdminConfig:
     probe_enabled: bool = True
-    probe_interval_seconds: int = 10
+    # Backstop cadence for presence probing + guard body-action delivery. The
+    # reflex path is kicked immediately on each guard fact (see control_bridge),
+    # so this only bounds worst-case latency for missed kicks / presence.
+    probe_interval_seconds: int = 3
     offline_after_missed_probes: int = 3
     degraded_after_missed_probes: int = 2
     command_timeout_seconds: int = 30
@@ -344,7 +347,7 @@ def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
     return AdminConfig(
         probe_enabled=bool(sec.get("enabled", sec.get("probe_enabled", True))),
         probe_interval_seconds=int(
-            sec.get("interval_seconds", sec.get("probe_interval_seconds", 10))
+            sec.get("interval_seconds", sec.get("probe_interval_seconds", 3))
         ),
         offline_after_missed_probes=int(
             sec.get("offline_after_missed_probes", 3)
