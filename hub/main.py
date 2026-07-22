@@ -24,6 +24,7 @@ from hub.api.routers.runtime import runtime_commands_router
 from hub.api.routers.system import config_router, guard_owner_face_router, sense_router
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.body_presence_dispatcher import BodyPresenceDispatcher
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
 from hub.core.discovery import MdnsDiscoveryState, mdns_lifespan
@@ -72,6 +73,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             data_store,
             runtime_blackboard=runtime_blackboard,
         )
+        # Single body.presence.set command seam shared by the durable guard
+        # reflex worker and the manual admin wiggle endpoint.
+        body_presence_dispatcher = BodyPresenceDispatcher(admin_runtime)
         guard_ingress = GuardIngress(guard_control_plane)
         guard_runtime_reconciler = GuardRuntimeReconciler(data_store, admin_runtime)
         guard_owner_face_profile_reconciler = GuardOwnerFaceProfileReconciler(
@@ -81,6 +85,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             data_store,
             admin_runtime,
             guard_control_plane,
+            dispatcher=body_presence_dispatcher,
         )
         guard_fixture_subscriber = MissionControlFixtureSubscriber(guard_control_plane)
         control_bridge = LiveKitControlBridge(
@@ -113,6 +118,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.runtime_blackboard = runtime_blackboard
         app.state.device_blackboard_kv = blackboard_kv
         app.state.guard_control_plane = guard_control_plane
+        app.state.body_presence_dispatcher = body_presence_dispatcher
         app.state.guard_ingress = guard_ingress
         app.state.guard_runtime_reconciler = guard_runtime_reconciler
         app.state.guard_owner_face_profile_reconciler = guard_owner_face_profile_reconciler

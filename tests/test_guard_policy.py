@@ -457,6 +457,40 @@ async def test_owner_presence_projects_transitions_without_policy_or_body_action
     assert len(owner_presence_events) == 3
 
 
+async def test_owner_presence_transitions_drive_shared_body_presence(plane) -> None:
+    control, store = plane
+    await _install_stackchan_body(store)
+
+    entered = await control.handle(
+        _owner_presence(), sender_identity="atk-1", source="livekit"
+    )
+    assert entered.accepted["transition"] == "entered"
+    assert entered.actions is not None
+    body = next(a for a in entered.actions if a["action"] == BODY_OP_PRESENCE_SET)
+    assert body["subscriber"] == "stackchan-1"
+    assert body["payload"] == {"state": "awake", "presence": "present"}
+
+    left = await control.handle(
+        _owner_presence(state="absent", sequence=2),
+        sender_identity="atk-1",
+        source="livekit",
+    )
+    assert left.accepted["transition"] == "left"
+    assert left.actions is not None
+    body_left = next(a for a in left.actions if a["action"] == BODY_OP_PRESENCE_SET)
+    assert body_left["payload"] == {"state": "warm", "presence": "absent"}
+
+    # A later return within the same guard epoch must fire again: the outbox
+    # replay key carries state + sequence, so it is not suppressed by the
+    # earlier "entered" action's key.
+    reentered = await control.handle(
+        _owner_presence(sequence=3), sender_identity="atk-1", source="livekit"
+    )
+    assert reentered.accepted["transition"] == "entered"
+    assert reentered.actions is not None
+    assert any(a["action"] == BODY_OP_PRESENCE_SET for a in reentered.actions)
+
+
 async def test_concurrent_fact_replay_publishes_one_atomic_action_set(plane) -> None:
     control, store = plane
     await _install_stackchan_body(store)

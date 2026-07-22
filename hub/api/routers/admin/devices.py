@@ -9,6 +9,7 @@ from hub.api.routers.admin.schemas import (
     AdminDevice,
     AdminDeviceListResponse,
     ApproveDeviceResponse,
+    CommandResponse,
     UnregisterDeviceResponse,
 )
 from hub.api.routers.admin.service import build_admin_devices, refresh_admin_devices
@@ -31,6 +32,29 @@ async def list_devices(
     if status:
         devices = [device for device in devices if device.status == status]
     return AdminDeviceListResponse(devices=devices)
+
+
+@router.post("/{device_id}/wiggle", response_model=CommandResponse)
+async def wiggle_device(device_id: str, request: Request):
+    """Manually nudge a body device with body.presence.set 'awake'.
+
+    Shares the BodyPresenceDispatcher command seam with the guard
+    owner-presence reflex, so the wiggle and the reflex do not hand-roll
+    separate command payloads. Delivery is immediate here (409 when the device
+    is offline) -- the right feedback for an operator action, unlike the reflex
+    which is durable.
+    """
+    dispatcher = request.app.state.body_presence_dispatcher
+    try:
+        command = await dispatcher.dispatch(
+            device_id,
+            state="awake",
+            correlation_id="owner_admin_wiggle",
+            ttl_ms=15_000,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return CommandResponse(**command)
 
 
 @router.post("/refresh", response_model=AdminDeviceListResponse)

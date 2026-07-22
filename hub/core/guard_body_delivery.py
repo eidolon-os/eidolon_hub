@@ -11,6 +11,7 @@ from eidolon_sdk.biz.body import BODY_OP_PRESENCE_SET
 from eidolon_sdk.biz.guard import GuardPolicyActionAck
 
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.body_presence_dispatcher import BodyPresenceDispatcher
 from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class GuardBodyActionDeliveryWorker:
         runtime: LiveKitAdminRuntime,
         control_plane: GuardControlPlane,
         *,
+        dispatcher: BodyPresenceDispatcher | None = None,
         max_delivery_attempts: int = DEFAULT_MAX_DELIVERY_ATTEMPTS,
         retry_base_seconds: int = DEFAULT_RETRY_BASE_SECONDS,
     ) -> None:
@@ -39,6 +41,9 @@ class GuardBodyActionDeliveryWorker:
         self._store = store
         self._runtime = runtime
         self._control_plane = control_plane
+        # The reflex path shares the same command seam as the manual admin
+        # wiggle; keep runtime for get_command result reconciliation.
+        self._dispatcher = dispatcher or BodyPresenceDispatcher(runtime)
         self._max_delivery_attempts = max_delivery_attempts
         self._retry_base_seconds = retry_base_seconds
 
@@ -53,17 +58,13 @@ class GuardBodyActionDeliveryWorker:
             claimed = await self._store.guard_actions.claim_for_dispatch(row.action_id)
             if claimed is None or not claimed.delivery_claim_token:
                 continue
-            payload = {
-                "state": str((claimed.payload_json or {}).get("state") or "awake"),
-                "guard_epoch": claimed.guard_epoch,
-                "correlation_id": claimed.correlation_id,
-                "action_id": claimed.action_id,
-            }
             try:
-                command = await self._runtime.send_command(
+                command = await self._dispatcher.dispatch(
                     claimed.subscriber,
-                    payload,
-                    op=BODY_OP_PRESENCE_SET,
+                    state=str((claimed.payload_json or {}).get("state") or "awake"),
+                    correlation_id=claimed.correlation_id,
+                    action_id=claimed.action_id,
+                    guard_epoch=claimed.guard_epoch,
                     ttl_ms=30_000,
                     qos="result",
                     priority="normal",

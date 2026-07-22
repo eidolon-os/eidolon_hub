@@ -114,7 +114,17 @@ class GuardControlPlane:
         decisions: list[GuardPolicyDecision] = []
         if decision is not None:
             decisions.append(decision)
-            decisions.extend(await self._body_presence_decisions(binding.owner_id, message))
+            body_intent = self._body_presence_for_fact(message)
+            if body_intent is not None:
+                state, presence = body_intent
+                decisions.extend(
+                    await self._body_presence_decisions(
+                        binding.owner_id,
+                        self_device_id=message.device_id,
+                        state=state,
+                        presence=presence,
+                    )
+                )
         await self._record_evaluation(
             binding.owner_id,
             message,
@@ -124,10 +134,34 @@ class GuardControlPlane:
         )
         if not decisions:
             return GuardPolicyResult(accepted=message.model_dump(mode="json"))
+        actions = await self._publish_body_actions(
+            binding, message, decisions, fact_type=message.type
+        )
+        return GuardPolicyResult(
+            accepted=message.model_dump(mode="json"),
+            action=actions[0] if actions else None,
+            actions=actions or None,
+        )
 
-        action_messages: list[GuardPolicyAction] = []
-        for item in decisions:
-            action = GuardPolicyAction(
+    async def _publish_body_actions(
+        self,
+        binding,
+        message,
+        decisions: list[GuardPolicyDecision],
+        *,
+        fact_type: str,
+    ) -> list[dict]:
+        """Persist decisions to the durable guard-action outbox.
+
+        Shared by the person-presence policy path and the owner-presence
+        reflex so neither hand-rolls a second publish/outbox path. Idempotency
+        is the outbox replay key (binding, correlation, epoch, fact_type,
+        action, subscriber); callers pick a fact_type that is unique per intent.
+        """
+        if not decisions:
+            return []
+        action_messages: list[GuardPolicyAction] = [
+            GuardPolicyAction(
                 guard_companion_id=message.guard_companion_id,
                 device_id=message.device_id,
                 correlation_id=message.correlation_id,
@@ -139,8 +173,8 @@ class GuardControlPlane:
                 subscriber=item.subscriber,
                 payload=item.payload,
             )
-            action_messages.append(action)
-
+            for item in decisions
+        ]
         published = await self._store.guard_actions.publish_many(
             actions=[
                 {
@@ -151,7 +185,7 @@ class GuardControlPlane:
                     "device_id": action.device_id,
                     "correlation_id": action.correlation_id,
                     "guard_epoch": action.guard_epoch,
-                    "fact_type": message.type,
+                    "fact_type": fact_type,
                     "policy_id": action.policy_id,
                     "action": action.action,
                     "subscriber": action.subscriber,
@@ -165,26 +199,16 @@ class GuardControlPlane:
                 binding_id=binding.binding_id,
                 correlation_id=message.correlation_id,
                 guard_epoch=message.guard_epoch,
-                fact_type=message.type,
+                fact_type=fact_type,
             )
             if not replayed:
                 raise GuardPolicyError("guard fact replay is still being committed")
-            actions = [self._action_from_row(row) for row in replayed]
-            return GuardPolicyResult(
-                accepted=message.model_dump(mode="json"),
-                action=actions[0],
-                actions=actions,
-            )
-
+            return [self._action_from_row(row) for row in replayed]
         actions: list[dict] = []
         for action in action_messages:
             await self._record_action(binding.owner_id, action)
             actions.append(action.model_dump(mode="json"))
-        return GuardPolicyResult(
-            accepted=message.model_dump(mode="json"),
-            action=actions[0],
-            actions=actions,
-        )
+        return actions
 
     async def pending_actions(self, *, subscriber: str | None = None) -> list[dict]:
         rows = await self._store.guard_actions.list_pending(subscriber=subscriber)
@@ -292,25 +316,73 @@ class GuardControlPlane:
                 "sequence": message.sequence,
             },
         )
-        return GuardPolicyResult(accepted=accepted)
+
+        # Reflex bridge: an owner arriving/leaving drives the same owner-scoped
+        # body-presence fan-out + durable outbox as a person-presence decision,
+        # so the owner reflex and the person-presence path share one delivery
+        # path (fan-out in _body_presence_decisions, outbox in
+        # _publish_body_actions, send in BodyPresenceDispatcher).
+        if projection.transition == "entered":
+            state, presence = "awake", "present"
+        else:  # "left"
+            state, presence = "warm", "absent"
+        decisions = await self._body_presence_decisions(
+            binding.owner_id,
+            self_device_id=message.device_id,
+            state=state,
+            presence=presence,
+        )
+        # State + sequence make each transition a distinct outbox replay key: a
+        # resend of the same fact still dedups, but a later leave/return within
+        # the same guard epoch is not suppressed.
+        actions = await self._publish_body_actions(
+            binding,
+            message,
+            decisions,
+            fact_type=f"{message.type}.{message.state}.{message.sequence}",
+        )
+        return GuardPolicyResult(
+            accepted=accepted,
+            action=actions[0] if actions else None,
+            actions=actions or None,
+        )
+
+    @staticmethod
+    def _body_presence_for_fact(
+        message: GuardPresenceCandidate | GuardPresenceVerified | GuardPresenceAbsent,
+    ) -> tuple[str, str] | None:
+        """Map a person-presence fact to a (state, presence) body intent.
+
+        Verified facts carry no body reaction; candidate wakes, absent relaxes.
+        """
+        if isinstance(message, GuardPresenceCandidate):
+            return ("awake", "candidate")
+        if isinstance(message, GuardPresenceAbsent):
+            return ("warm", "absent")
+        return None
 
     async def _body_presence_decisions(
         self,
         owner_id: str,
-        message: GuardPresenceCandidate | GuardPresenceVerified | GuardPresenceAbsent,
+        *,
+        self_device_id: str,
+        state: str,
+        presence: str,
     ) -> list[GuardPolicyDecision]:
-        if isinstance(message, GuardPresenceVerified):
-            return []
-        state = "awake" if isinstance(message, GuardPresenceCandidate) else "warm"
-        presence = "candidate" if isinstance(message, GuardPresenceCandidate) else "absent"
-        decisions: list[GuardPolicyDecision] = []
-        seen: set[str] = set()
+        """Fan a body-presence intent out to the owner's capable body devices.
+
+        Layer 1 (device resolution + capability gating) shared by the
+        person-presence policy path and the owner-presence reflex; callers own
+        durability and BodyPresenceDispatcher owns the send.
+        """
         if self._runtime_blackboard is None:
             return []
+        decisions: list[GuardPolicyDecision] = []
+        seen: set[str] = set()
         for device in await self._runtime_blackboard.list_online_devices_for_owner(
             owner_id=owner_id
         ):
-            if device.device_id == message.device_id:
+            if device.device_id == self_device_id:
                 continue
             if device.capability(BODY_OP_PRESENCE_SET) is None:
                 continue
