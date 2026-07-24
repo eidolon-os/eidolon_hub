@@ -878,6 +878,97 @@ def test_device_register_avatar_defaults_false(client: TestClient):
     assert voice_meta["avatar"] is False
 
 
+# --------------------------------------------------- GET /api/avatar/idle/video
+class _FakeFaceAsset:
+    def __init__(
+        self,
+        *,
+        idle_status="ready",
+        idle_storage_key="idle/k.mp4",
+        idle_sha256=None,
+        idle_content_type="video/mp4",
+    ):
+        self.idle_status = idle_status
+        self.idle_storage_key = idle_storage_key
+        self.idle_sha256 = idle_sha256
+        self.idle_content_type = idle_content_type
+
+
+class _FakeFaceRepo:
+    def __init__(self, asset):
+        self._asset = asset
+
+    async def get_active(self, companion_id):
+        return self._asset
+
+
+class _FakeObjStore:
+    def __init__(self, data: bytes):
+        self._data = data
+
+    def get(self, key):
+        return self._data
+
+
+class _IdleStoreWrap:
+    """Wrap the real data_store, overriding only the two accessors the idle
+    endpoint reads (device auth still uses the real ``devices`` etc.)."""
+
+    def __init__(self, real, asset, data: bytes):
+        self._real = real
+        self.companion_face_assets = _FakeFaceRepo(asset)
+        self.object_storage = _FakeObjStore(data)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_avatar_idle_serves_ready_clip(client: TestClient):
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-idle", key)  # resolve -> companion-test
+    client.app.state.data_store = _IdleStoreWrap(
+        client.app.state.data_store, _FakeFaceAsset(), b"IDLE-CLIP-BYTES"
+    )
+    r = client.get(
+        "/api/avatar/idle/video",
+        headers=_signed_device_headers(
+            device_id="dev-idle",
+            path_query="/api/avatar/idle/video",
+            nonce="nonce-idle",
+            key=key,
+            include_public_key=False,
+        ),
+    )
+    assert r.status_code == 200, r.text
+    assert r.content == b"IDLE-CLIP-BYTES"
+    assert r.headers["content-type"] == "video/mp4"
+
+
+def test_avatar_idle_404_when_not_ready(client: TestClient):
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-idle2", key)
+    client.app.state.data_store = _IdleStoreWrap(
+        client.app.state.data_store,
+        _FakeFaceAsset(idle_status="none", idle_storage_key=None),
+        b"",
+    )
+    r = client.get(
+        "/api/avatar/idle/video",
+        headers=_signed_device_headers(
+            device_id="dev-idle2",
+            path_query="/api/avatar/idle/video",
+            nonce="nonce-idle2",
+            key=key,
+            include_public_key=False,
+        ),
+    )
+    assert r.status_code == 404
+
+
+def test_avatar_idle_requires_signature(client: TestClient):
+    assert client.get("/api/avatar/idle/video").status_code == 422
+
+
 def test_unowned_device_capability_is_not_written_to_an_owner_blackboard(client: TestClient):
     import json
 
