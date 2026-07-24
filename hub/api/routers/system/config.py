@@ -341,6 +341,7 @@ def _active_esp32_response(
     bound: bool,
     registration_id: str | None = None,
     fingerprint: str = "",
+    avatar: bool = False,
 ) -> ESP32ConfigResponse:
     # Tag the ESP32 token with kind=device so channel knows to dispatch
     # /api/resolve/device/{id} (vs /api/resolve/owner for the web flow).
@@ -361,6 +362,10 @@ def _active_esp32_response(
                 # short proactive window; user_initiated is a normal JOIN.
                 "session_intent": session_intent,
                 "registration_id": registration_id or "",
+                # Digital-human video request (default off → audio-only). Channel's
+                # resolve_avatar_requested reads this to run the avatar worker;
+                # mirrors the web-body path so any client kind can opt in.
+                "avatar": avatar,
             },
         )
         _control_identity, control_token = generate_token(
@@ -584,6 +589,7 @@ async def _esp32_response(
     device_kind: str | None = None,
     method: str = "GET",
     body: bytes = b"",
+    avatar: bool = False,
 ) -> ESP32ConfigResponse:
     device, fingerprint, registration_id = await _authenticate_signed_device(
         request=request,
@@ -716,6 +722,7 @@ async def _esp32_response(
         bound=True,
         registration_id=registration_id,
         fingerprint=fingerprint,
+        avatar=avatar,
     )
 
 
@@ -909,6 +916,15 @@ async def register_device(
     body: DeviceRegisterBody,
     room_name: str | None = Query(default=None),
     agent_mode: AgentMode = Query(AgentMode.STREAMING),
+    avatar: bool = Query(
+        default=False,
+        description=(
+            "When true, the device requests a digital-human video avatar for this "
+            "session. Stamped into the voice token's participant metadata as "
+            "``avatar``; channel reads it to run the avatar worker. Default false "
+            "→ audio-only (unchanged for firmware that never sends it)."
+        ),
+    ),
     x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
     x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
     x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
@@ -968,6 +984,74 @@ async def register_device(
         device_kind=body.device.kind,
         method="POST",
         body=raw_body,
+        avatar=avatar,
+    )
+
+
+@router.get(
+    "/device/config",
+    response_model=ESP32ConfigResponse,
+    summary="Legacy signed-GET runtime config (pre-registration-manifest firmware compat)",
+)
+async def get_device_config_legacy(
+    request: Request,
+    room_name: str | None = Query(default=None),
+    agent_mode: AgentMode = Query(AgentMode.STREAMING),
+    x_device_id: str | None = Header(default=None, alias="X-Device-ID"),
+    x_device_nonce: str | None = Header(default=None, alias="X-Device-Nonce"),
+    x_device_timestamp: str | None = Header(default=None, alias="X-Device-Timestamp"),
+    x_device_public_key: str | None = Header(default=None, alias="X-Device-Public-Key"),
+    x_device_signature: str | None = Header(default=None, alias="X-Device-Signature"),
+    x_device_interaction_mode: str | None = Header(
+        default=None, alias="X-Device-Interaction-Mode"
+    ),
+    x_device_session_intent: str | None = Header(
+        default=None, alias="X-Device-Session-Intent"
+    ),
+) -> ESP32ConfigResponse:
+    """Backward-compat for firmware predating the signed registration manifest.
+
+    Devices from before Hub commit bf200c8 discover the Hub via the legacy
+    ``config_url`` mDNS TXT key and fetch their runtime config with a *signed GET*
+    (no capability-manifest body). This returns the same ``ESP32ConfigResponse`` as
+    ``POST /device/register`` minus the manifest declaration — reusing the identical
+    signature auth and config builder. Current firmware ignores ``config_url`` and
+    uses ``register_url`` (POST), so this route only serves legacy devices.
+    """
+    if not x_device_id:
+        raise HTTPException(status_code=422, detail="X-Device-ID header is required")
+    missing_auth = [
+        name
+        for name, value in [
+            ("X-Device-Nonce", x_device_nonce),
+            ("X-Device-Timestamp", x_device_timestamp),
+            ("X-Device-Signature", x_device_signature),
+        ]
+        if not value
+    ]
+    if missing_auth:
+        raise HTTPException(
+            status_code=422,
+            detail=f"missing device auth headers: {', '.join(missing_auth)}",
+        )
+    # Signed GET: signature covers method + path + query with an empty body. No
+    # capability manifest (legacy firmware does not declare one).
+    return await _esp32_response(
+        request=request,
+        room_name=room_name,
+        device_id=x_device_id,
+        agent_mode=agent_mode,
+        interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
+        session_intent=_normalize_session_intent(x_device_session_intent),
+        auth_headers=DeviceAuthHeaders(
+            device_id=x_device_id,
+            nonce=x_device_nonce or "",
+            timestamp=x_device_timestamp or "",
+            public_key=x_device_public_key,
+            signature=x_device_signature or "",
+        ),
+        method="GET",
+        body=b"",
     )
 
 

@@ -822,6 +822,62 @@ def test_device_register_forwards_capabilities_and_returns_config(client: TestCl
     assert dm.get("dev-reg").kind == "esp-box-3"
 
 
+def test_device_register_stamps_avatar_when_requested(client: TestClient):
+    """?avatar=1 lands in the voice token's participant_metadata so channel runs
+    the avatar worker — the device-path mirror of the web-body avatar flag."""
+    import json
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-av", key)
+    body_bytes = json.dumps(
+        {"device": {"name": "Mobile", "kind": "mobile"}, "capabilities": []}
+    ).encode("utf-8")
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-av", "jwt"),
+    ) as gen:
+        r = client.post(
+            "/api/device/register?avatar=1",
+            headers=_signed_post_headers(
+                device_id="dev-av",
+                body=body_bytes,
+                path_query="/api/device/register?avatar=1",
+                nonce="nonce-av",
+                key=key,
+            ),
+            content=body_bytes,
+        )
+    assert r.status_code == 200, r.text
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["kind"] == "device"
+    assert voice_meta["avatar"] is True
+
+
+def test_device_register_avatar_defaults_false(client: TestClient):
+    """No avatar query → audio-only (unchanged for firmware that never sends it)."""
+    import json
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-noav", key)
+    body_bytes = json.dumps(
+        {"device": {"name": "Mobile", "kind": "mobile"}, "capabilities": []}
+    ).encode("utf-8")
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-noav", "jwt"),
+    ) as gen:
+        r = client.post(
+            "/api/device/register",
+            headers=_signed_post_headers(
+                device_id="dev-noav", body=body_bytes, nonce="nonce-noav", key=key
+            ),
+            content=body_bytes,
+        )
+    assert r.status_code == 200, r.text
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["avatar"] is False
+
+
 def test_unowned_device_capability_is_not_written_to_an_owner_blackboard(client: TestClient):
     import json
 
