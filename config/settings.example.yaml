@@ -47,6 +47,16 @@ control_bridge:
   livekit_url: ""
   identity_prefix: eidolon-hub-control
 
+ambient_event_bus:
+  # Owner-scoped broadcast of short-lived, non-sensitive device events.
+  # Keep disabled until all receiving clients safely ignore unknown event types.
+  enabled: false
+  ttl_ms: 3000
+  max_event_bytes: 2048
+  recent_event_cache: 64
+  owner_rate_per_second: 5
+  owner_rate_burst: 10
+
 # Hub validates owner_id at /api/config time via this admin
 # URL. Hub does NOT sign device JWTs — channel does that under plan D
 # (LiveKit-standard: trust participant.identity, look up server-side).

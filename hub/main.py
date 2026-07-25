@@ -29,6 +29,7 @@ from hub.api.routers.system import (
 )
 from hub.config import AppConfig, load_config
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.ambient_event_bus import AmbientEventBus
 from hub.core.body_presence_dispatcher import BodyPresenceDispatcher
 from hub.core.control_bridge import LiveKitControlBridge
 from hub.core.device_manager import DeviceManager
@@ -93,6 +94,11 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             dispatcher=body_presence_dispatcher,
         )
         guard_fixture_subscriber = MissionControlFixtureSubscriber(guard_control_plane)
+        ambient_event_bus = AmbientEventBus(
+            app_config,
+            data_store=data_store,
+            runtime=admin_runtime,
+        )
         control_bridge = LiveKitControlBridge(
             app_config,
             admin_runtime,
@@ -101,6 +107,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             guard_runtime_reconciler=guard_runtime_reconciler,
             guard_owner_face_profile_reconciler=guard_owner_face_profile_reconciler,
             guard_body_delivery=guard_body_delivery,
+            ambient_event_bus=ambient_event_bus,
         )
         admin_runtime.set_control_bridge(control_bridge)
         discovery_state = MdnsDiscoveryState()
@@ -129,6 +136,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         app.state.guard_owner_face_profile_reconciler = guard_owner_face_profile_reconciler
         app.state.guard_body_delivery = guard_body_delivery
         app.state.guard_fixture_subscriber = guard_fixture_subscriber
+        app.state.ambient_event_bus = ambient_event_bus
         app.state.control_bridge = control_bridge
         app.state.discovery_state = discovery_state
         app.state.config = app_config

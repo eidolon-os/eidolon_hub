@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from eidolon_sdk.biz.contracts import (
     CONTROL_TOPIC,
+    EVENT_TOPIC,
     LIVEKIT_AGENT_SESSION_TOPIC,
     LIVEKIT_TRANSCRIPTION_TOPIC,
 )
@@ -258,6 +259,40 @@ async def test_control_bridge_ignores_non_ack_control_packet():
 
     stored = await runtime.get_command(command["command_id"])
     assert stored["status"] == "sent"
+
+
+@pytest.mark.asyncio
+async def test_control_bridge_routes_event_topic_to_ambient_event_bus():
+    class EventBus:
+        def __init__(self):
+            self.calls = []
+
+        async def handle_packet(self, **kwargs):
+            self.calls.append(kwargs)
+
+    cfg = AppConfig()
+    runtime = LiveKitAdminRuntime(cfg)
+    event_bus = EventBus()
+    bridge = LiveKitControlBridge(
+        cfg,
+        runtime,
+        ambient_event_bus=event_bus,  # type: ignore[arg-type]
+    )
+    packet = SimpleNamespace(
+        topic=EVENT_TOPIC,
+        data=b'{"kind":"event"}',
+        participant=SimpleNamespace(identity="box3-1"),
+    )
+
+    await bridge._handle_packet(packet)
+
+    assert event_bus.calls == [
+        {
+            "topic": EVENT_TOPIC,
+            "data": b'{"kind":"event"}',
+            "sender_identity": "box3-1",
+        }
+    ]
 
 
 @pytest.mark.asyncio

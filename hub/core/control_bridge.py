@@ -11,6 +11,7 @@ from eidolon_sdk.biz.contracts import (
     CONTROL_OP_PLAYBACK_STOP,
     CONTROL_OP_PTT_TURN_STATUS,
     CONTROL_TOPIC,
+    EVENT_TOPIC,
     LIVEKIT_AGENT_SESSION_TOPIC,
     LIVEKIT_TRANSCRIPTION_TOPIC,
 )
@@ -18,6 +19,7 @@ from eidolon_sdk.integrations.livekit import build_livekit_token
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
+from hub.core.ambient_event_bus import AmbientEventBus, AmbientEventBusError
 from hub.core.guard_ingress import GuardIngress
 from hub.core.guard_policy import GuardControlPlane, GuardPolicyError
 
@@ -64,6 +66,7 @@ class LiveKitControlBridge:
         guard_runtime_reconciler: Any | None = None,
         guard_owner_face_profile_reconciler: Any | None = None,
         guard_body_delivery: Any | None = None,
+        ambient_event_bus: AmbientEventBus | None = None,
     ):
         self._config = config
         self._runtime = runtime
@@ -73,6 +76,7 @@ class LiveKitControlBridge:
         self._guard_runtime_reconciler = guard_runtime_reconciler
         self._guard_owner_face_profile_reconciler = guard_owner_face_profile_reconciler
         self._guard_body_delivery = guard_body_delivery
+        self._ambient_event_bus = ambient_event_bus
         self._rooms: dict[str, Any] = {}
         self._lock = asyncio.Lock()
         self._started = False
@@ -208,7 +212,27 @@ class LiveKitControlBridge:
             )
 
     async def _handle_packet(self, packet: Any) -> None:
-        if getattr(packet, "topic", None) != CONTROL_TOPIC:
+        topic = getattr(packet, "topic", None)
+        if topic == EVENT_TOPIC:
+            if self._ambient_event_bus is None:
+                return
+            data = getattr(packet, "data", b"") or b""
+            raw = data.encode("utf-8") if isinstance(data, str) else bytes(data)
+            participant = getattr(packet, "participant", None)
+            sender_identity = getattr(participant, "identity", "") or ""
+            try:
+                await self._ambient_event_bus.handle_packet(
+                    topic=EVENT_TOPIC,
+                    data=raw,
+                    sender_identity=sender_identity,
+                )
+            except (AmbientEventBusError, ValueError):
+                logger.warning(
+                    "LiveKit control bridge rejected ambient event sender=%s",
+                    sender_identity,
+                )
+            return
+        if topic != CONTROL_TOPIC:
             return
         data = getattr(packet, "data", b"") or b""
         if isinstance(data, str):

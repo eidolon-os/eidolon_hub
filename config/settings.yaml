@@ -42,6 +42,14 @@ control_bridge:
   livekit_url: ""
   identity_prefix: eidolon-hub-control
 
+ambient_event_bus:
+  enabled: true
+  ttl_ms: 3000
+  max_event_bytes: 2048
+  recent_event_cache: 64
+  owner_rate_per_second: 5
+  owner_rate_burst: 10
+
 # Hub validates owner_id at /api/config time via this admin
 # URL (LiveKit-standard pattern: trust participant.identity, look up
 # the rest server-side). Hub does NOT sign device JWTs — channel does

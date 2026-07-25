@@ -10,6 +10,7 @@ from typing import Any
 
 import yaml
 from eidolon_sdk.biz.body import DEVICE_BLACKBOARD_BUCKET
+from eidolon_sdk.biz.events import EVENT_DEFAULT_TTL_MS, EVENT_MAX_BYTES
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
@@ -135,6 +136,16 @@ class ControlBridgeConfig:
     enabled: bool = False
     livekit_url: str = ""
     identity_prefix: str = "eidolon-hub-control"
+
+
+@dataclass
+class AmbientEventBusConfig:
+    enabled: bool = False
+    ttl_ms: int = EVENT_DEFAULT_TTL_MS
+    max_event_bytes: int = EVENT_MAX_BYTES
+    recent_event_cache: int = 64
+    owner_rate_per_second: int = 5
+    owner_rate_burst: int = 10
 
 
 @dataclass
@@ -371,6 +382,37 @@ def _control_bridge_from_yaml(y: dict[str, Any]) -> ControlBridgeConfig:
     )
 
 
+def _ambient_event_bus_from_yaml(y: dict[str, Any]) -> AmbientEventBusConfig:
+    sec = _section(y, "ambient_event_bus")
+    default = AmbientEventBusConfig()
+    return AmbientEventBusConfig(
+        enabled=bool(sec.get("enabled", default.enabled)),
+        ttl_ms=min(
+            EVENT_DEFAULT_TTL_MS,
+            max(100, int(sec.get("ttl_ms", default.ttl_ms))),
+        ),
+        max_event_bytes=min(
+            EVENT_MAX_BYTES,
+            max(256, int(sec.get("max_event_bytes", default.max_event_bytes))),
+        ),
+        recent_event_cache=min(
+            4_096,
+            max(16, int(sec.get("recent_event_cache", default.recent_event_cache))),
+        ),
+        owner_rate_per_second=min(
+            100,
+            max(1, int(sec.get("owner_rate_per_second", default.owner_rate_per_second))),
+        ),
+        owner_rate_burst=min(
+            1_000,
+            max(
+                1,
+                int(sec.get("owner_rate_burst", default.owner_rate_burst)),
+            ),
+        ),
+    )
+
+
 def _proactive_wake_from_yaml(y: dict[str, Any]) -> ProactiveWakeConfig:
     sec = _section(y, "proactive_wake")
     default = ProactiveWakeConfig()
@@ -393,6 +435,7 @@ class AppConfig:
     discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
     admin: AdminConfig = field(default_factory=AdminConfig)
     control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
+    ambient_event_bus: AmbientEventBusConfig = field(default_factory=AmbientEventBusConfig)
     runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
     device_blackboard: DeviceBlackboardConfig = field(
         default_factory=DeviceBlackboardConfig
@@ -411,6 +454,7 @@ class AppConfig:
             discovery=_discovery_from_yaml(y),
             admin=_admin_from_yaml(y),
             control_bridge=_control_bridge_from_yaml(y),
+            ambient_event_bus=_ambient_event_bus_from_yaml(y),
             runtime_admin=_runtime_admin_from_yaml_and_env(y),
             device_blackboard=_device_blackboard_from_yaml(y),
             proactive_wake=_proactive_wake_from_yaml(y),
