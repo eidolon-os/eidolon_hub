@@ -18,7 +18,11 @@ import json
 import logging
 from typing import Any
 
-from eidolon_sdk.biz.contracts import CONTROL_OP_ROOM_JOIN, SESSION_INTENT_PROACTIVE
+from eidolon_sdk.biz.contracts import (
+    CONTROL_OP_ROOM_JOIN,
+    SESSION_INTENT_FIELD,
+    SESSION_INTENT_PROACTIVE,
+)
 
 from hub.config import AppConfig
 from hub.core.admin_runtime import LiveKitAdminRuntime
@@ -107,7 +111,7 @@ class ProactiveWakeOrchestrator:
 
         text = str(payload.get("text") or "")
         command_payload = {
-            "session_intent": SESSION_INTENT_PROACTIVE,
+            SESSION_INTENT_FIELD: SESSION_INTENT_PROACTIVE,
             "text": text,
             "instance_id": payload.get("instance_id"),
             "style_hint": payload.get("style_hint"),

@@ -25,9 +25,10 @@ from eidolon_sdk.biz.body import (
 )
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
+    SESSION_INTENT_FIELD,
     SESSION_INTENT_USER_INITIATED,
     VALID_INTERACTION_MODES,
-    VALID_SESSION_INTENTS,
+    normalize_session_intent,
 )
 from eidolon_sdk.biz.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
 from eidolon_sdk.biz.guard import GuardRuntimeConfig
@@ -61,22 +62,6 @@ PENDING_ROOM_NAME = "eidolon-pending"
 # ``X-Device-Interaction-Mode`` / ``X-Device-Session-Intent`` headers; hub stamps
 # the resolved values into the voice token's ``participant_metadata`` and channel
 # reads them once per session.
-
-
-def _normalize_session_intent(
-    raw: str | None, *, default: str = SESSION_INTENT_USER_INITIATED
-) -> str:
-    """Map the (untrusted, unsigned) intent header to a known value.
-
-    Same defense default as interaction_mode: anything missing or unrecognized
-    degrades to ``user_initiated`` (a normal session — welcome plays). The header
-    is not part of the device signature, so a bad value can only ever produce a
-    *less* surprising session, never a spoofed proactive one without a real wake.
-    """
-    candidate = (raw or "").strip().lower()
-    if candidate in VALID_SESSION_INTENTS:
-        return candidate
-    return default
 
 
 def _normalize_interaction_mode(raw: str | None) -> str | None:
@@ -359,7 +344,7 @@ def _active_esp32_response(
                 # Phase 3: why this session exists. proactive_initiated (an
                 # orchestrator wake) makes channel suppress the welcome + run the
                 # short proactive window; user_initiated is a normal JOIN.
-                "session_intent": session_intent,
+                SESSION_INTENT_FIELD: session_intent,
                 "registration_id": registration_id or "",
                 # Digital-human video request (default off → audio-only). Channel's
                 # resolve_avatar_requested reads this to run the avatar worker;
@@ -918,7 +903,7 @@ async def _web_body_response(
                 "owner_id": owner_id,
                 "companion_id": resolved.companion_id,
                 "interaction_mode": interaction_mode,
-                "session_intent": SESSION_INTENT_USER_INITIATED,
+                SESSION_INTENT_FIELD: SESSION_INTENT_USER_INITIATED,
                 "avatar": avatar,
             },
         )
@@ -999,7 +984,7 @@ async def register_device(
         device_id=x_device_id,
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
-        session_intent=_normalize_session_intent(x_device_session_intent),
+        session_intent=normalize_session_intent(x_device_session_intent),
         auth_headers=DeviceAuthHeaders(
             device_id=x_device_id,
             nonce=x_device_nonce or "",
@@ -1071,7 +1056,7 @@ async def get_device_config_legacy(
         device_id=x_device_id,
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
-        session_intent=_normalize_session_intent(x_device_session_intent),
+        session_intent=normalize_session_intent(x_device_session_intent),
         auth_headers=DeviceAuthHeaders(
             device_id=x_device_id,
             nonce=x_device_nonce or "",
@@ -1293,7 +1278,7 @@ async def get_config(
             device_id=x_device_id,
             agent_mode=agent_mode,
             interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
-            session_intent=_normalize_session_intent(x_device_session_intent),
+            session_intent=normalize_session_intent(x_device_session_intent),
             auth_headers=DeviceAuthHeaders(
                 device_id=x_device_id,
                 nonce=x_device_nonce or "",
