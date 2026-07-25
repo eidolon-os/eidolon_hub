@@ -25,7 +25,6 @@ from eidolon_sdk.biz.body import (
 )
 from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
-    INTERACTION_MODE_HALF_DUPLEX,
     SESSION_INTENT_USER_INITIATED,
     VALID_INTERACTION_MODES,
     VALID_SESSION_INTENTS,
@@ -486,7 +485,37 @@ async def _authenticate_signed_device(
             body=body,
         )
     except DeviceAuthError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        mobile_reenrollment = (
+            str(exc) == "device public key mismatch"
+            and existing is not None
+            and existing.kind == "mobile"
+            and device_id.startswith("mobile-android-")
+            and method.upper() == "POST"
+            and auth_headers.public_key is not None
+        )
+        if not mobile_reenrollment:
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        # Verify possession of the replacement private key before changing any
+        # registry state. Trust is not inherited: the manager clears approval,
+        # and an operator must explicitly approve this same device row again.
+        try:
+            fingerprint = verify_device_signature(
+                headers=auth_headers,
+                stored_public_key=None,
+                path_query=path_query,
+                method=method,
+                body=body,
+            )
+        except DeviceAuthError as replacement_exc:
+            raise HTTPException(
+                status_code=401, detail=str(replacement_exc)
+            ) from replacement_exc
+        await device_manager.rotate_public_key_for_reenrollment(
+            device_id=device_id,
+            public_key=auth_headers.public_key,
+            fingerprint=fingerprint,
+        )
+        stored_public_key = auth_headers.public_key
 
     public_key = auth_headers.public_key or stored_public_key
     if not public_key:

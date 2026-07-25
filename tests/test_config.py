@@ -607,6 +607,56 @@ def test_config_esp32_rejects_public_key_change(client: TestClient):
     assert r2.status_code == 401
 
 
+def test_mobile_reinstall_reuses_device_id_and_requires_key_reapproval(
+    client: TestClient,
+):
+    import json
+
+    device_id = "mobile-android-0123456789abcdef0123456789abcdef"
+    key1 = ec.generate_private_key(ec.SECP256R1())
+    key2 = ec.generate_private_key(ec.SECP256R1())
+    manifest = {
+        "device": {"name": "Android Pad", "kind": "mobile"},
+        "capabilities": [],
+    }
+    body = json.dumps(manifest).encode("utf-8")
+    dm = client.app.state.device_manager
+
+    first = client.post(
+        "/api/device/register",
+        headers=_signed_post_headers(
+            device_id=device_id,
+            body=body,
+            nonce="mobile-key-1",
+            key=key1,
+        ),
+        content=body,
+    )
+    assert first.status_code == 200
+    asyncio.run(dm.approve(device_id))
+    original = dm.get(device_id)
+    original_fingerprint = original.metadata["fingerprint"]
+
+    reinstalled = client.post(
+        "/api/device/register",
+        headers=_signed_post_headers(
+            device_id=device_id,
+            body=body,
+            nonce="mobile-key-2",
+            key=key2,
+        ),
+        content=body,
+    )
+
+    assert reinstalled.status_code == 200
+    assert reinstalled.json()["status"] == "pending_approval"
+    assert len([item for item in dm.list_all() if item.device_id == device_id]) == 1
+    current = dm.get(device_id)
+    assert current.approved is False
+    assert current.metadata["fingerprint"] != original_fingerprint
+    assert original_fingerprint in current.metadata["previous_fingerprints"]
+
+
 def test_config_web_missing_room(client: TestClient):
     """Web path requires both ``room_name`` and ``owner_id``."""
     r = client.get(

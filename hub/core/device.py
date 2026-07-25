@@ -52,6 +52,11 @@ class Device(BaseModel):
         self.approved = True
         self.approved_at = datetime.now(timezone.utc)
 
+    def mark_unapproved(self) -> None:
+        """Require an operator to approve this device identity again."""
+        self.approved = False
+        self.approved_at = None
+
     def to_storage_dict(self) -> dict:
         """Serialize to a plain storage dict."""
         return {

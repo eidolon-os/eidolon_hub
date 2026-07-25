@@ -195,6 +195,40 @@ class DeviceManager:
             logger.info("Approved device: %s", device_id)
         return device
 
+    async def rotate_public_key_for_reenrollment(
+        self,
+        *,
+        device_id: str,
+        public_key: str,
+        fingerprint: str,
+    ) -> Device:
+        """Rotate a reinstallable client's key without creating a new device.
+
+        Android removes app-owned Keystore keys on uninstall. A clean reinstall
+        therefore presents a new key for the same deterministic device ID. The
+        registry row and owner/binding references stay intact, but approval is
+        cleared so key rotation can never silently inherit operator trust.
+        """
+        async with self._lock:
+            device = self.get_or_raise(device_id)
+            metadata = device.metadata
+            previous = str(metadata.get("fingerprint") or "")
+            history = metadata.setdefault("previous_fingerprints", [])
+            if previous and previous not in history:
+                history.append(previous)
+                del history[:-8]
+            metadata["public_key"] = public_key
+            metadata["fingerprint"] = fingerprint
+            metadata["recent_nonces"] = []
+            device.mark_unapproved()
+            device.touch()
+            await self._repository.put(_record_from_device(device))
+        logger.warning(
+            "Rotated device public key; operator reapproval required: %s",
+            device_id,
+        )
+        return device
+
     def list_all(self) -> list[Device]:
         return list(self._devices.values())
 
