@@ -341,9 +341,10 @@ def _active_esp32_response(
                 "kind": "device",
                 "device_id": device_id,
                 "interaction_mode": interaction_mode,
-                # Phase 3: why this session exists. proactive_initiated (an
-                # orchestrator wake) makes channel suppress the welcome + run the
-                # short proactive window; user_initiated is a normal JOIN.
+                # Why this session exists. Presence wakes keep a welcome but
+                # use a bounded no-response window; proactive report sessions
+                # suppress the canned welcome because their content opens the
+                # conversation. user_initiated is an explicit normal JOIN.
                 SESSION_INTENT_FIELD: session_intent,
                 "registration_id": registration_id or "",
                 # Digital-human video request (default off → audio-only). Channel's

@@ -391,6 +391,34 @@ def test_config_esp32_stamps_proactive_session_intent_from_header(client: TestCl
     assert voice_meta["session_intent"] == "proactive_initiated"
 
 
+def test_config_esp32_stamps_presence_session_intent_from_header(client: TestClient):
+    """A verified owner-presence wake remains distinct from a proactive report,
+    allowing Channel to play a welcome while using a bounded idle window."""
+    key = ec.generate_private_key(ec.SECP256R1())
+    _approve_and_resolve(client, "dev-presence-intent", key)
+    with patch(
+        "hub.api.routers.system.config.generate_token",
+        return_value=("dev-presence-intent", "jwt"),
+    ) as gen:
+        r = client.get(
+            "/api/config",
+            params=[("client_type", "esp32")],
+            headers={
+                **_signed_device_headers(
+                    device_id="dev-presence-intent",
+                    path_query="/api/config?client_type=esp32",
+                    nonce="nonce-presence-intent",
+                    key=key,
+                    include_public_key=False,
+                ),
+                "X-Device-Session-Intent": "presence_initiated",
+            },
+        )
+    assert r.status_code == 200
+    voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
+    assert voice_meta["session_intent"] == "presence_initiated"
+
+
 def test_config_esp32_session_intent_defaults_user_initiated(client: TestClient):
     """Absent / unrecognized intent header degrades to user_initiated (welcome
     plays) — a bad value can never spoof a proactive session."""
