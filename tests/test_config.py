@@ -393,7 +393,7 @@ def test_config_esp32_stamps_proactive_session_intent_from_header(client: TestCl
 
 def test_config_esp32_stamps_presence_session_intent_from_header(client: TestClient):
     """A verified owner-presence wake remains distinct from a proactive report,
-    allowing Channel to play a welcome while using a bounded idle window."""
+    and preserves the distributed flow correlation into Channel."""
     key = ec.generate_private_key(ec.SECP256R1())
     _approve_and_resolve(client, "dev-presence-intent", key)
     with patch(
@@ -412,11 +412,13 @@ def test_config_esp32_stamps_presence_session_intent_from_header(client: TestCli
                     include_public_key=False,
                 ),
                 "X-Device-Session-Intent": "presence_initiated",
+                "X-Device-Session-Flow-Id": "flow-presence-123",
             },
         )
     assert r.status_code == 200
     voice_meta = gen.call_args_list[0].kwargs["participant_metadata"]
     assert voice_meta["session_intent"] == "presence_initiated"
+    assert voice_meta["session_flow_id"] == "flow-presence-123"
 
 
 def test_config_esp32_session_intent_defaults_user_initiated(client: TestClient):

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import pytest
 from eidolon_sdk.biz.contracts import EVENT_TOPIC
 from eidolon_sdk.biz.events import (
-    AMBIENT_PRESENCE_CHANGED_TYPE,
+    AMBIENT_PRESENCE_STATE_TYPE,
     EVENT_MAX_BYTES,
 )
 
@@ -62,6 +62,15 @@ class _Runtime:
         ]
 
 
+class _Events:
+    def __init__(self) -> None:
+        self.rows = []
+
+    async def record_event(self, **kwargs):
+        self.rows.append(kwargs)
+        return SimpleNamespace(**kwargs)
+
+
 class _RoomService:
     def __init__(self) -> None:
         self.sent = []
@@ -88,14 +97,17 @@ def _event(**patch: object) -> dict[str, object]:
         "event_id": "evt-radar-1",
         "flow_id": "flow-radar-1",
         "causation_id": "",
-        "type": AMBIENT_PRESENCE_CHANGED_TYPE,
+        "type": AMBIENT_PRESENCE_STATE_TYPE,
         "source": {"device_id": "spoofed-device", "component": "radar"},
         "occurred_at_ms": now_ms,
         "expires_at_ms": now_ms + 3_000,
         "payload": {
             "state": "present",
             "modality": "mmwave",
-            "edge": "vacant_to_present",
+            "presence_epoch": 1,
+            "sequence": 1,
+            "lease_ms": 15_000,
+            "observation": "edge",
         },
     }
     event.update(patch)
@@ -116,12 +128,14 @@ def _bus(
         owner_rate_burst=owner_rate_burst,
     )
     livekit = _LiveKit()
+    events = _Events()
+    livekit.recorded_events = events.rows
     kwargs = {}
     if monotonic_clock is not None:
         kwargs["monotonic_clock"] = monotonic_clock
     bus = AmbientEventBus(
         config,
-        data_store=SimpleNamespace(devices=_Devices()),
+        data_store=SimpleNamespace(devices=_Devices(), events=events),
         runtime=_Runtime(),
         livekit_api_factory=lambda: livekit,
         **kwargs,
@@ -170,6 +184,13 @@ async def test_broadcasts_to_every_online_device_in_owner_scope_and_rewrites_sou
         payload["source"] == {"device_id": "box3-1", "component": "radar"} for payload in payloads
     )
     assert livekit.closed is True
+    assert [row["event_type"] for row in livekit.recorded_events] == [
+        "ambient.presence.state",
+        "hub.device_flow.broadcasted",
+    ]
+    assert all(
+        row["trace_id"] == "flow-radar-1" for row in livekit.recorded_events
+    )
 
 
 @pytest.mark.asyncio

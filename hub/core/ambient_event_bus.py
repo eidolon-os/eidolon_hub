@@ -7,6 +7,7 @@ import json
 import logging
 from collections import OrderedDict, defaultdict
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from time import monotonic, time
 from typing import Any, Callable
 
@@ -124,6 +125,19 @@ class AmbientEventBus:
                 device_id for device_ids in recipients_by_room.values() for device_id in device_ids
             )
         )
+        # Persist only after the latency-sensitive fan-out. Source occurred_at
+        # is retained, so Mission Control still reconstructs the true timeline.
+        await self._record_device_event(
+            event=event,
+            owner_id=owner_id,
+            sender_identity=sender_identity,
+        )
+        await self._record_broadcast(
+            event=event,
+            owner_id=owner_id,
+            sender_identity=sender_identity,
+            recipient_ids=recipient_ids,
+        )
         logger.info(
             "Ambient event broadcast type=%s flow_id=%s source=%s recipients=%d",
             event.type,
@@ -132,6 +146,84 @@ class AmbientEventBus:
             len(recipient_ids),
         )
         return AmbientEventFanout(event, owner_id, recipient_ids)
+
+    async def _record_device_event(
+        self,
+        *,
+        event: DeviceEvent,
+        owner_id: str,
+        sender_identity: str,
+    ) -> None:
+        payload = event.payload.model_dump(mode="json")
+        try:
+            await self._data_store.events.record_event(
+                event_type=event.type,
+                event_id=event.event_id,
+                owner_id=owner_id,
+                subject_type="device",
+                subject_id=sender_identity,
+                actor_type="device",
+                actor_id=sender_identity,
+                source="hub",
+                trace_id=event.flow_id,
+                outcome="deferred"
+                if str(payload.get("status") or "") == "running"
+                else "success",
+                payload_json={
+                    **payload,
+                    "device_id": sender_identity,
+                    "source_component": event.source.component,
+                    "causation_id": event.causation_id,
+                    "device_event_type": event.type,
+                },
+                occurred_at=datetime.fromtimestamp(
+                    event.occurred_at_ms / 1000.0, tz=UTC
+                ),
+                strict=False,
+            )
+        except Exception:  # observability must never break device orchestration
+            logger.exception(
+                "Ambient event ledger write failed type=%s flow_id=%s",
+                event.type,
+                event.flow_id,
+            )
+
+    async def _record_broadcast(
+        self,
+        *,
+        event: DeviceEvent,
+        owner_id: str,
+        sender_identity: str,
+        recipient_ids: tuple[str, ...],
+    ) -> None:
+        try:
+            await self._data_store.events.record_event(
+                event_type="hub.device_flow.broadcasted",
+                owner_id=owner_id,
+                subject_type="device",
+                subject_id=sender_identity,
+                actor_type="service",
+                actor_id="eidolon-hub",
+                source="hub",
+                trace_id=event.flow_id,
+                outcome="success",
+                reason="owner_scoped_fanout",
+                payload_json={
+                    "device_id": sender_identity,
+                    "device_event_type": event.type,
+                    "source_event_id": event.event_id,
+                    "recipient_device_ids": list(recipient_ids),
+                    "recipient_count": len(recipient_ids),
+                    "status": "completed",
+                },
+                strict=False,
+            )
+        except Exception:
+            logger.exception(
+                "Ambient broadcast ledger write failed type=%s flow_id=%s",
+                event.type,
+                event.flow_id,
+            )
 
     async def _online_recipients(self, owner_id: str) -> dict[str, list[str]]:
         owner_devices = await self._data_store.devices.list_devices_for_owner(owner_id)

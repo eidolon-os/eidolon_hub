@@ -153,6 +153,13 @@ async def mdns_lifespan(
     def _register_url(ip: str) -> str:
         return f"http://{ip}:{port}/api/device/register"
 
+    def _config_url(ip: str) -> str:
+        # Backward-compat for pre-"signed registration manifest" (bf200c8) firmware
+        # that discovers the Hub via the legacy `config_url` TXT key and does a signed
+        # GET to fetch its runtime config. Points at /api/device/config (GET shim);
+        # current firmware ignores this and uses register_url (POST).
+        return f"http://{ip}:{port}/api/device/config"
+
     def _service_info(ip: str) -> ServiceInfo:
         return ServiceInfo(
             type_=service_type,
@@ -164,6 +171,7 @@ async def mdns_lifespan(
                 "version": version,
                 "api": api_version,
                 "register_url": _register_url(ip),
+                "config_url": _config_url(ip),
             },
             server=f"{hostname}.local.",
         )

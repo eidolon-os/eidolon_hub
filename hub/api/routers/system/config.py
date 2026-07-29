@@ -27,8 +27,10 @@ from eidolon_sdk.biz.contracts import (
     INTERACTION_MODE_FULL_DUPLEX,
     SESSION_INTENT_FIELD,
     SESSION_INTENT_USER_INITIATED,
+    SESSION_FLOW_ID_FIELD,
     VALID_INTERACTION_MODES,
     normalize_session_intent,
+    normalize_session_flow_id,
 )
 from eidolon_sdk.biz.devices import DeviceAuthError, DeviceAuthHeaders, verify_device_signature
 from eidolon_sdk.biz.guard import GuardRuntimeConfig
@@ -322,6 +324,7 @@ def _active_esp32_response(
     agent_mode: AgentMode,
     interaction_mode: str | None,
     session_intent: str,
+    session_flow_id: str | None,
     bound: bool,
     registration_id: str | None = None,
     fingerprint: str = "",
@@ -341,11 +344,12 @@ def _active_esp32_response(
                 "kind": "device",
                 "device_id": device_id,
                 "interaction_mode": interaction_mode,
-                # Why this session exists. Presence wakes keep a welcome but
-                # use a bounded no-response window; proactive report sessions
+                # Why this session exists. Presence wakes keep a welcome and
+                # use the device owner lease; proactive report sessions
                 # suppress the canned welcome because their content opens the
                 # conversation. user_initiated is an explicit normal JOIN.
                 SESSION_INTENT_FIELD: session_intent,
+                SESSION_FLOW_ID_FIELD: session_flow_id or "",
                 "registration_id": registration_id or "",
                 # Digital-human video request (default off → audio-only). Channel's
                 # resolve_avatar_requested reads this to run the avatar worker;
@@ -597,6 +601,7 @@ async def _esp32_response(
     agent_mode: AgentMode,
     interaction_mode: str | None,
     session_intent: str = SESSION_INTENT_USER_INITIATED,
+    session_flow_id: str | None = None,
     auth_headers: DeviceAuthHeaders,
     capability_manifest: CapabilityManifest | None = None,
     guard_manifest: dict | None = None,
@@ -727,18 +732,49 @@ async def _esp32_response(
     # An explicit ?room_name= override (web / tests) is honored verbatim; the
     # default device path gets a fresh per-session voice room each call.
     resolved_room = room_name or _session_voice_room_name(device_id)
-    return _active_esp32_response(
+    response = _active_esp32_response(
         request=request,
         resolved_room=resolved_room,
         device_id=device_id,
         agent_mode=agent_mode,
         interaction_mode=interaction_mode,
         session_intent=session_intent,
+        session_flow_id=session_flow_id,
         bound=True,
         registration_id=registration_id,
         fingerprint=fingerprint,
         avatar=avatar,
     )
+    if session_flow_id:
+        store = getattr(request.app.state, "data_store", None)
+        if store is not None and resolved.owner_id:
+            try:
+                await store.events.record_event(
+                    event_type="hub.voice_session.authorized",
+                    owner_id=str(resolved.owner_id),
+                    companion_id=str(resolved.companion_id),
+                    subject_type="device",
+                    subject_id=device_id,
+                    actor_type="service",
+                    actor_id="eidolon-hub",
+                    source="hub",
+                    trace_id=session_flow_id,
+                    outcome="success",
+                    reason="verified_owner_presence",
+                    payload_json={
+                        "device_id": device_id,
+                        "room_name": resolved_room,
+                        "status": "completed",
+                        "stage": "hub.voice_authorize",
+                    },
+                    strict=False,
+                )
+            except Exception:
+                _log.exception(
+                    "voice session authorization ledger write failed flow_id=%s",
+                    session_flow_id,
+                )
+    return response
 
 
 async def _validate_owner_against_admin(
@@ -951,6 +987,9 @@ async def register_device(
     x_device_session_intent: str | None = Header(
         default=None, alias="X-Device-Session-Intent"
     ),
+    x_device_session_flow_id: str | None = Header(
+        default=None, alias="X-Device-Session-Flow-Id"
+    ),
 ) -> ESP32ConfigResponse:
     """The mDNS-advertised registration endpoint (``register_url`` TXT).
 
@@ -986,6 +1025,7 @@ async def register_device(
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
         session_intent=normalize_session_intent(x_device_session_intent),
+        session_flow_id=normalize_session_flow_id(x_device_session_flow_id),
         auth_headers=DeviceAuthHeaders(
             device_id=x_device_id,
             nonce=x_device_nonce or "",
@@ -1023,6 +1063,9 @@ async def get_device_config_legacy(
     x_device_session_intent: str | None = Header(
         default=None, alias="X-Device-Session-Intent"
     ),
+    x_device_session_flow_id: str | None = Header(
+        default=None, alias="X-Device-Session-Flow-Id"
+    ),
 ) -> ESP32ConfigResponse:
     """Backward-compat for firmware predating the signed registration manifest.
 
@@ -1058,6 +1101,7 @@ async def get_device_config_legacy(
         agent_mode=agent_mode,
         interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
         session_intent=normalize_session_intent(x_device_session_intent),
+        session_flow_id=normalize_session_flow_id(x_device_session_flow_id),
         auth_headers=DeviceAuthHeaders(
             device_id=x_device_id,
             nonce=x_device_nonce or "",
@@ -1252,6 +1296,9 @@ async def get_config(
     x_device_session_intent: str | None = Header(
         default=None, alias="X-Device-Session-Intent"
     ),
+    x_device_session_flow_id: str | None = Header(
+        default=None, alias="X-Device-Session-Flow-Id"
+    ),
 ):
     if client_type == ClientType.ESP32:
         if not x_device_id:
@@ -1280,6 +1327,7 @@ async def get_config(
             agent_mode=agent_mode,
             interaction_mode=_normalize_interaction_mode(x_device_interaction_mode),
             session_intent=normalize_session_intent(x_device_session_intent),
+            session_flow_id=normalize_session_flow_id(x_device_session_flow_id),
             auth_headers=DeviceAuthHeaders(
                 device_id=x_device_id,
                 nonce=x_device_nonce or "",
