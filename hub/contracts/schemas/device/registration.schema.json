@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/registration.schema.json",
+  "title": "DeviceRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "request_id", "identity", "manifest", "display_name", "device_kind"],
+  "properties": {
+    "operation": {"const": "device.registration"},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+    "identity": {"$ref": "../common/identity.schema.json"},
+    "manifest": {"$ref": "manifest.schema.json"},
+    "display_name": {"type": "string", "maxLength": 128, "default": ""},
+    "device_kind": {"type": "string", "minLength": 1, "maxLength": 96, "default": "unknown"}
+  }
+}

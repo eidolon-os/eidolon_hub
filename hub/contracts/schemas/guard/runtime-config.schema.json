@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/guard/runtime-config.schema.json",
+  "title": "Guard Runtime Config",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schema_v": { "const": 1, "default": 1 },
+    "sample_interval_ms": { "type": "integer", "minimum": 200, "maximum": 60000, "default": 200 },
+    "preview_interval_ms": { "type": "integer", "minimum": 200, "maximum": 60000, "default": 1000 },
+    "motion_threshold": { "type": "integer", "minimum": 0, "maximum": 255, "default": 18 },
+    "motion_clear_threshold": { "type": "integer", "minimum": 0, "maximum": 255, "default": 9 },
+    "candidate_debounce_ms": { "type": "integer", "minimum": 200, "maximum": 600000, "default": 1000 },
+    "absence_timeout_ms": { "type": "integer", "minimum": 400, "maximum": 3600000, "default": 180000 },
+    "consecutive_capture_failures": { "type": "integer", "minimum": 1, "maximum": 100, "default": 5 },
+    "owner_face_interval_ms": { "type": "integer", "minimum": 500, "maximum": 60000, "default": 500 },
+    "owner_presence_enter_ms": { "type": "integer", "minimum": 500, "maximum": 60000, "default": 600 },
+    "owner_presence_exit_ms": { "type": "integer", "minimum": 1000, "maximum": 600000, "default": 12000 },
+    "owner_presence_heartbeat_ms": { "type": "integer", "minimum": 1000, "maximum": 300000, "default": 10000 },
+    "owner_presence_lease_ms": { "type": "integer", "minimum": 5000, "maximum": 600000, "default": 30000 }
+  }
+}

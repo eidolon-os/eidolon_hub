@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/common/identity.schema.json",
+  "title": "DeviceIdentity",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["device_id", "public_key_fingerprint", "tenant_id"],
+  "properties": {
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "public_key_fingerprint": {"type": "string", "minLength": 1, "maxLength": 160},
+    "tenant_id": {"type": "string", "minLength": 1, "maxLength": 64, "default": "local"}
+  }
+}

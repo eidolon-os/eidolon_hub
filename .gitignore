@@ -33,6 +33,7 @@ coverage/
 .DS_Store
 logs/
 *.log
+var/
 app/SQLlite/SQLGen.db
 
 data/
@@ -53,7 +54,6 @@ reports/e2e_*/
 
 .cursor
 .claude/
-uv.lock
 
 **/.env.local
 

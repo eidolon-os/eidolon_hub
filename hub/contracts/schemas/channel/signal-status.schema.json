@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/channel/signal-status.schema.json",
+  "title": "Channel Signal HTTP Status",
+  "oneOf": [
+    { "$ref": "#/$defs/delivery" }, { "$ref": "#/$defs/accepted" }
+  ],
+  "$defs": {
+    "delivery": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation"],
+      "properties": {
+        "operation": { "const": "channel.signal-delivery" }, "payload_json": { "type": ["string", "null"], "maxLength": 131072 }
+      }
+    },
+    "accepted": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "request_id", "accepted"],
+      "properties": {
+        "operation": { "const": "channel.signal-accepted" }, "request_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "accepted": { "const": true }
+      }
+    }
+  }
+}

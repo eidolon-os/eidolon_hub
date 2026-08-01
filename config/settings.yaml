@@ -7,68 +7,55 @@ api:
 logging:
   level: DEBUG
 
-livekit:
-  api_url: http://127.0.0.1:7880
-  api_key: LIVEKIT_API_KEY
-  api_secret: LIVEKIT_API_SECRET
+observability:
+  enabled: true
+  service_name: eidolon-hub
+  # Prefer the standard OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
+  otlp_endpoint: ""
 
-esp32:
-  livekit_url: ""
-  livekit_ip: auto
-  livekit_port: 7880
-  livekit_scheme: ws
+connection_plane:
+  hub_id: eidolon-hub-local
+  hub_instance_id: eidolon-hub-local-1
+  public_base_url: https://eidolon-hub.local:8082
+  lease_seconds: 45
+  heartbeat_after_ms: 15000
+  unicast_dns_sd_service: ""
+  explicit_descriptor_uris: []
+  mqtt:
+    enabled: false
+    connector_id: mqtt-cloud
+    hostname: ""
+    port: 8883
+    username: ""
+    password_env: EIDOLON_HUB_MQTT_PASSWORD
+    priority: 100
+
+channel_control:
+  management_profile: management-data
+  provider_token_env: EIDOLON_HUB_PROVIDER_TOKEN
+  profiles:
+    management-data:
+      required_kinds: [reliable-data]
+      provisioner_ref: channel-provisioner/default-data
+    realtime-media:
+      required_kinds: [realtime-data, audio, video]
+      provisioner_ref: channel-provisioner/realtime
+  provider_endpoints:
+    channel-provisioner/default-data: http://127.0.0.1:8090
+    channel-provisioner/realtime: http://127.0.0.1:8090
 
 mdns:
+  enabled: true
   service_type: _eidolon-hub._tcp.local.
   service_name: Eidolon Hub._eidolon-hub._tcp.local.
   hostname: eidolon-hub
-  txt_version: "1"
-  api_version: v1
-  config_path: /api/config
 
-admin_probe:
-  enabled: true
-  interval_seconds: 10
-  degraded_after_missed_probes: 2
-  offline_after_missed_probes: 3
-  command_timeout_seconds: 30
-
-# Admin control commands need a lightweight LiveKit participant to receive
-# ESP32 ack/result envelopes. Without this bridge, commands can execute on the
-# device but Hub will still mark them timeout because server API SendData is
-# one-way.
-control_bridge:
-  enabled: true
-  livekit_url: ""
-  identity_prefix: eidolon-hub-control
-
-ambient_event_bus:
-  enabled: true
-  ttl_ms: 3000
-  max_event_bytes: 2048
-  recent_event_cache: 64
-  owner_rate_per_second: 5
-  owner_rate_burst: 10
-
-# Hub validates owner_id at /api/config time via this admin
-# URL (LiveKit-standard pattern: trust participant.identity, look up
-# the rest server-side). Hub does NOT sign device JWTs — channel does
-# that under plan D. Admin lookup is unconditional.
-runtime_admin:
-  admin_api_url: http://127.0.0.1:9000
-
-device_blackboard:
-  nats_url: nats://127.0.0.1:4222
-  bucket: EIDOLON_RUNTIME_DEVICES
-  lease_seconds: 45
-
-# Phase 3: subscribe to the agent's proactive-trigger events on NATS and wake the
-# target device via a room.join control command (pure router — device_id + full
-# payload come in the event). Needs a running NATS at nats_url. The subject must
-# match the agent's publish subject (agent.proactive.triggered.<instance_id>);
-# NATS_URL env overrides nats_url when set.
-proactive_wake:
-  enabled: true
-  nats_url: nats://127.0.0.1:4222
-  wake_subject: agent.proactive.triggered.*
-  command_ttl_ms: 30000
+persistence:
+  adapter: sqlite
+  sqlite_path: var/eidolon-hub.sqlite3
+  postgresql_dsn_env: EIDOLON_HUB_POSTGRES_DSN
+  init_schema: true
+  pool_size: 10
+  max_overflow: 20
+  directory_cache_enabled: true
+  reconciliation_seconds: 5

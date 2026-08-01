@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/connection/registration.schema.json",
+  "title": "ConnectionRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "connection_id", "lease_token", "registration"],
+  "properties": {
+    "operation": {"const": "connection.registration"},
+    "connection_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "lease_token": {"type": "string", "minLength": 16, "maxLength": 512},
+    "registration": {"$ref": "../device/registration.schema.json"}
+  }
+}

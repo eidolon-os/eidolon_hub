@@ -1,0 +1,38 @@
+[importlinter]
+root_package = hub
+
+[importlinter:contract:domain-independence]
+name = Domain does not depend on outer Hub layers
+type = forbidden
+source_modules =
+    hub.domain
+forbidden_modules =
+    hub.application
+    hub.ports
+    hub.contracts
+    hub.adapters
+    hub.interfaces
+    hub.composition
+
+[importlinter:contract:ports-independence]
+name = Ports expose domain types but no implementation
+type = forbidden
+source_modules =
+    hub.ports
+forbidden_modules =
+    hub.application
+    hub.contracts
+    hub.adapters
+    hub.interfaces
+    hub.composition
+
+[importlinter:contract:application-independence]
+name = Application does not depend on implementations
+type = forbidden
+source_modules =
+    hub.application
+forbidden_modules =
+    hub.contracts
+    hub.adapters
+    hub.interfaces
+    hub.composition

@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/channel/provision-status.schema.json",
+  "title": "Channel Provision Status",
+  "type": "object", "additionalProperties": false,
+  "required": ["operation", "request_id", "channel_id", "profile_name", "lease_expires_at", "grant_delivery"],
+  "properties": {
+    "operation": { "const": "channel.provision-status" }, "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+    "channel_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "profile_name": { "type": "string", "minLength": 1, "maxLength": 96 },
+    "lease_expires_at": { "type": "string", "format": "date-time" }, "grant_delivery": { "const": "connection-signaling" }
+  }
+}

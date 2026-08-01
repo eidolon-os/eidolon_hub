@@ -1,0 +1,1 @@
+"""Hub application use cases."""

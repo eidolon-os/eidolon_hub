@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/device/status.schema.json",
+  "title": "Device Status",
+  "oneOf": [
+    { "$ref": "#/$defs/registrationStatus" },
+    { "$ref": "#/$defs/lifecycleStatus" },
+    { "$ref": "#/$defs/commandStatus" }
+  ],
+  "$defs": {
+    "registrationStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "device_id", "manifest_revision", "approved"],
+      "properties": {
+        "operation": { "const": "device.registration-status" }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "manifest_revision": { "type": "string", "minLength": 1, "maxLength": 128 }, "approved": { "type": "boolean" }
+      }
+    },
+    "lifecycleStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "device_id", "approved", "revoked"],
+      "properties": {
+        "operation": { "const": "device.lifecycle-status" }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "owner_id": { "type": ["string", "null"], "maxLength": 64 }, "approved": { "type": "boolean" }, "revoked": { "type": "boolean" }
+      }
+    },
+    "commandStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["operation", "command_id", "device_id", "command_name", "state", "created_at", "updated_at", "expires_at", "error"],
+      "properties": {
+        "operation": { "const": "device.command-status" }, "command_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "command_name": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "state": { "enum": ["queued", "sent", "accepted", "running", "succeeded", "failed", "rejected", "expired"] },
+        "created_at": { "type": "string", "format": "date-time" }, "updated_at": { "type": "string", "format": "date-time" }, "expires_at": { "type": "string", "format": "date-time" },
+        "error": { "type": "string", "maxLength": 4096 }, "result_json": { "type": ["string", "null"], "maxLength": 262144 }
+      }
+    }
+  }
+}

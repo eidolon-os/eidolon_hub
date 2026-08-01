@@ -1,0 +1,1 @@
+{"operation":"channel.grant","request_id":"channel-1","channel_id":"data-1","profile_name":"management-data","lease_expires_at_ms":1800000000000,"opaque_binding":"encrypted-provider-binding"}

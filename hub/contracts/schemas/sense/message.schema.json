@@ -1,0 +1,95 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/sense/message.schema.json",
+  "title": "Sense Message",
+  "oneOf": [
+    { "$ref": "#/$defs/attention" },
+    { "$ref": "#/$defs/session" },
+    { "$ref": "#/$defs/fatigue" },
+    { "$ref": "#/$defs/event" }
+  ],
+  "$defs": {
+    "baseProperties": {
+      "type": "object",
+      "properties": {
+        "schema_v": { "const": 1 },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "epoch": { "type": "integer", "minimum": 0 },
+        "ts_ms": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "signals": {
+      "type": "object",
+      "maxProperties": 16,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_.]{0,63}$" },
+      "additionalProperties": { "type": ["number", "integer", "boolean"] }
+    },
+    "attention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_v", "type", "owner_id", "device_id", "correlation_id", "epoch", "ts_ms", "state", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "sense.attention" },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["focused", "relaxed", "away_from_screen"] },
+        "signals": { "$ref": "#/$defs/signals" }, "raw_retention": { "const": "none" }
+      }
+    },
+    "session": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_v", "type", "owner_id", "device_id", "correlation_id", "epoch", "ts_ms", "state", "duration_ms", "interruptions", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "sense.session" },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["started", "ended"] },
+        "duration_ms": { "type": "integer", "minimum": 0, "maximum": 86400000 },
+        "interruptions": { "type": "integer", "minimum": 0, "maximum": 100000 },
+        "raw_retention": { "const": "none" }
+      },
+      "allOf": [{ "if": { "properties": { "state": { "const": "started" } } }, "then": { "properties": { "duration_ms": { "const": 0 }, "interruptions": { "const": 0 } } } }]
+    },
+    "fatigue": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_v", "type", "owner_id", "device_id", "correlation_id", "epoch", "ts_ms", "hint", "model_id", "model_version", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "sense.fatigue" },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "hint": { "enum": ["yawn", "drowsy", "slump"] },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "model_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "model_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "signals": { "$ref": "#/$defs/signals" }, "raw_retention": { "const": "none" }
+      }
+    },
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_v", "type", "owner_id", "device_id", "correlation_id", "epoch", "ts_ms", "event", "model_id", "model_version", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "sense.event" },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "event": { "enum": ["person", "cat", "dog", "package"] },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "model_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "model_version": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "raw_retention": { "const": "none" }
+      }
+    }
+  }
+}

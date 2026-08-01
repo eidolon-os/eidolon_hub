@@ -1,0 +1,1 @@
+{"operation":"device.registration","request_id":"register-1","identity":{"device_id":"device-1","public_key_fingerprint":"p256:fingerprint","tenant_id":"local"},"manifest":{"schema_version":1,"title":"Generic Device","properties":[],"actions":[],"events":[],"media":[]},"display_name":"Generic Device","device_kind":"generic"}

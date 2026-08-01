@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/guard/message.schema.json",
+  "title": "Guard Message",
+  "oneOf": [
+    { "$ref": "#/$defs/candidate" }, { "$ref": "#/$defs/verified" },
+    { "$ref": "#/$defs/absent" }, { "$ref": "#/$defs/ownerPresence" },
+    { "$ref": "#/$defs/action" }, { "$ref": "#/$defs/actionAck" }
+  ],
+  "$defs": {
+    "signals": {
+      "type": "object", "maxProperties": 16,
+      "propertyNames": { "pattern": "^[a-z][a-z0-9_.]{0,63}$" },
+      "additionalProperties": { "type": ["number", "integer", "boolean"] }
+    },
+    "base": {
+      "type": "object",
+      "properties": {
+        "schema_v": { "const": 1 },
+        "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "guard_epoch": { "type": "integer", "minimum": 0 },
+        "ts_ms": { "type": "integer", "minimum": 0 }, "raw_retention": { "const": "none" }
+      }
+    },
+    "camera": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "frame_hash": { "type": ["string", "null"], "minLength": 8, "maxLength": 128 },
+        "motion_score": { "type": ["number", "null"], "minimum": 0 }
+      }
+    },
+    "candidate": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "signals", "raw_retention", "debounce_ms"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.presence.candidate" },
+        "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "signals": { "$ref": "#/$defs/signals" }, "camera": { "anyOf": [{ "$ref": "#/$defs/camera" }, { "type": "null" }] },
+        "raw_retention": { "const": "none" }, "debounce_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }
+      }
+    },
+    "verified": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "verifier", "verdict", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.presence.verified" }, "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "verifier": { "const": "fixture" }, "verdict": { "enum": ["present", "unknown", "rejected"] }, "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }, "raw_retention": { "const": "none" }
+      }
+    },
+    "absent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "reason", "absent_for_ms", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.presence.absent" }, "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "reason": { "enum": ["timeout", "clear", "policy"] }, "absent_for_ms": { "type": "integer", "minimum": 0 }, "raw_retention": { "const": "none" }
+      }
+    },
+    "ownerPresence": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "state", "profile_revision", "sequence", "lease_ms", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.owner_presence" }, "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "state": { "enum": ["present", "absent"] }, "profile_revision": { "type": "integer", "minimum": 1 }, "sequence": { "type": "integer", "minimum": 1 }, "lease_ms": { "type": "integer", "minimum": 0, "maximum": 600000 }, "raw_retention": { "const": "none" }
+      },
+      "allOf": [
+        { "if": { "properties": { "state": { "const": "present" } } }, "then": { "properties": { "lease_ms": { "minimum": 5000 } } } },
+        { "if": { "properties": { "state": { "const": "absent" } } }, "then": { "properties": { "lease_ms": { "const": 0 } } } }
+      ]
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "action_id", "policy_id", "action", "subscriber", "payload", "raw_retention"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.policy.action" }, "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "action_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "policy_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "action": { "enum": ["mission_control.annotate", "mission_control.clear", "body.presence.set"] }, "subscriber": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "payload": { "type": "object", "additionalProperties": { "type": ["string", "integer", "number", "boolean", "null"] } }, "raw_retention": { "const": "none" }
+      }
+    },
+    "actionAck": {
+      "type": "object", "additionalProperties": false,
+      "required": ["schema_v", "type", "guard_companion_id", "device_id", "correlation_id", "guard_epoch", "ts_ms", "action_id", "subscriber", "status", "message"],
+      "properties": {
+        "schema_v": { "const": 1 }, "type": { "const": "guard.policy.action_ack" }, "guard_companion_id": { "type": "string", "minLength": 1, "maxLength": 64 }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "correlation_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "guard_epoch": { "type": "integer", "minimum": 0 }, "ts_ms": { "type": "integer", "minimum": 0 },
+        "action_id": { "type": "string", "minLength": 1, "maxLength": 96 }, "subscriber": { "type": "string", "minLength": 1, "maxLength": 128 }, "status": { "enum": ["accepted", "completed", "failed"] }, "message": { "type": "string", "maxLength": 256 }
+      }
+    }
+  }
+}

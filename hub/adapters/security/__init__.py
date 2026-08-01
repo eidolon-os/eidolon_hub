@@ -1,0 +1,1 @@
+"""Device-authentication adapters."""

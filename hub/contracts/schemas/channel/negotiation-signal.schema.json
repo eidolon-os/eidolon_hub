@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/channel/negotiation-signal.schema.json",
+  "title": "ChannelNegotiationSignal",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "request_id", "device_id", "connection_id", "lease_token"],
+  "properties": {
+    "operation": {"enum": ["channel.offer", "channel.accept", "channel.close"]},
+    "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "connection_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "lease_token": {"type": "string", "minLength": 16, "maxLength": 512},
+    "channel_id": {"type": ["string", "null"], "maxLength": 128},
+    "reason": {"type": "string", "maxLength": 256, "default": ""}
+  }
+}

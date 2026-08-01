@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/messages.schema.json",
+  "title": "DeviceMessage",
+  "oneOf": [
+    {"$ref": "#/$defs/reportedState"},
+    {"$ref": "#/$defs/deviceEvent"}
+  ],
+  "$defs": {
+    "reportedState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "device_id", "revision", "observed_at_ms", "values"],
+      "properties": {
+        "operation": {"const": "device.reported-state"},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "revision": {"type": "integer", "minimum": 1},
+        "observed_at_ms": {"type": "integer", "minimum": 0},
+        "values": {"type": "object", "maxProperties": 128}
+      }
+    },
+    "deviceEvent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "event_id", "device_id", "name", "occurred_at_ms", "payload"],
+      "properties": {
+        "operation": {"const": "device.event"},
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "occurred_at_ms": {"type": "integer", "minimum": 0},
+        "payload": {"type": "object", "maxProperties": 128}
+      }
+    }
+  }
+}

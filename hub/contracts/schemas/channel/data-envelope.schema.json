@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/channel/data-envelope.schema.json",
+  "title": "DataEnvelope",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "envelope_id", "channel_id", "device_id", "kind", "sequence", "occurred_at_ms", "payload_json"],
+  "properties": {
+    "operation": {"const": "channel.data"},
+    "envelope_id": {"type": "string", "minLength": 1, "maxLength": 96},
+    "channel_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "kind": {"enum": ["command", "ack", "result", "state", "event"]},
+    "sequence": {"type": "integer", "minimum": 1},
+    "occurred_at_ms": {"type": "integer", "minimum": 0},
+    "payload_json": {"type": "string", "minLength": 2, "maxLength": 262144}
+  }
+}

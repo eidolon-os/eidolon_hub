@@ -1,51 +1,39 @@
-"""Hub unified config — structured settings in YAML, secrets in config/.env."""
+"""Production configuration for the protocol-neutral Hub control plane."""
 
 from __future__ import annotations
 
 import os
-import socket
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
-from eidolon_sdk.biz.body import DEVICE_BLACKBOARD_BUCKET
-from eidolon_sdk.biz.events import EVENT_DEFAULT_TTL_MS, EVENT_MAX_BYTES
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
-_LEGACY_ENV = _REPO_ROOT / ".env"
 _DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
+_ROOT_ENV = _REPO_ROOT / ".env"
 
 
 def _resolve_settings_yaml() -> Path:
     explicit = os.environ.get("EIDOLON_HUB_SETTINGS_YAML", "").strip()
-    if explicit:
-        p = Path(explicit).expanduser()
-        if not p.is_file():
-            raise FileNotFoundError(f"EIDOLON_HUB_SETTINGS_YAML missing: {p}")
-        return p.resolve()
-    if _DEFAULT_YAML.is_file():
-        return _DEFAULT_YAML.resolve()
-    raise FileNotFoundError(
-        f"hub settings not found: {_DEFAULT_YAML}. Run ./scripts/init-config.sh"
-    )
+    path = Path(explicit).expanduser() if explicit else _DEFAULT_YAML
+    if not path.is_file():
+        raise FileNotFoundError(f"Hub settings file is missing: {path}")
+    return path.resolve()
 
 
 def _resolve_env_file() -> Path:
     explicit = os.environ.get("EIDOLON_HUB_ENV_FILE", "").strip()
     if explicit:
-        p = Path(explicit).expanduser()
-        if not p.is_file():
-            raise FileNotFoundError(f"EIDOLON_HUB_ENV_FILE missing: {p}")
-        return p.resolve()
-    if _DEFAULT_ENV.is_file():
-        return _DEFAULT_ENV.resolve()
-    if _LEGACY_ENV.is_file():
-        return _LEGACY_ENV.resolve()
-    raise FileNotFoundError(
-        f"hub env not found: {_DEFAULT_ENV}. Run ./scripts/init-config.sh"
-    )
+        path = Path(explicit).expanduser()
+    elif _DEFAULT_ENV.is_file():
+        path = _DEFAULT_ENV
+    else:
+        path = _ROOT_ENV
+    if not path.is_file():
+        raise FileNotFoundError(f"Hub environment file is missing: {path}")
+    return path.resolve()
 
 
 def _bootstrap_dotenv() -> None:
@@ -55,411 +43,281 @@ def _bootstrap_dotenv() -> None:
 
 
 def _load_yaml() -> dict[str, Any]:
-    data = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
-        raise ValueError("hub settings.yaml must be a mapping")
-    return data
+    value = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
+    if not isinstance(value, dict):
+        raise ValueError("Hub settings must be a YAML object")
+    return value
 
 
-def _yaml_secret_value(section: dict[str, Any], field: str, env_var: str) -> str:
-    """Read secret from env; yaml may use ``env_var`` as placeholder."""
-    val = str(section.get(field) or "").strip()
-    if not val or val == env_var:
-        return os.environ.get(env_var, "").strip()
-    raise ValueError(
-        f"livekit.{field} must be empty or the placeholder {env_var}; "
-        f"set {env_var} in config/.env"
-    )
+def _section(value: dict[str, Any], key: str) -> dict[str, Any]:
+    section = value.get(key) or {}
+    if not isinstance(section, dict):
+        raise ValueError(f"{key} must be a YAML object")
+    return section
 
 
-def _section(data: dict[str, Any], key: str) -> dict[str, Any]:
-    sec = data.get(key) or {}
-    return sec if isinstance(sec, dict) else {}
-
-
-@dataclass
+@dataclass(frozen=True, slots=True)
 class ApiConfig:
     host: str = "0.0.0.0"
     port: int = 8082
 
 
-@dataclass
+@dataclass(frozen=True, slots=True)
 class LoggingConfig:
     level: str = "INFO"
 
 
-@dataclass
-class LiveKitConfig:
-    """Hub's server-side LiveKit API role: room management + data injection.
-
-    Channel uses the same server/key/secret via its own worker config fields.
-    This project deliberately has no shared LiveKitProfile abstraction yet.
-    """
-
-    api_url: str = ""
-    api_key: str = ""
-    api_secret: str = ""
+@dataclass(frozen=True, slots=True)
+class ObservabilityConfig:
+    enabled: bool = True
+    service_name: str = "eidolon-hub"
+    otlp_endpoint: str = ""
 
 
-@dataclass
-class Esp32Config:
-    livekit_url: str = ""
-    livekit_ip: str = "auto"
-    livekit_port: int = 7880
-    livekit_scheme: str = "ws"
-
-
-@dataclass
-class DiscoveryConfig:
+@dataclass(frozen=True, slots=True)
+class MdnsConfig:
+    enabled: bool = True
     service_type: str = "_eidolon-hub._tcp.local."
     service_name: str = ""
     hostname: str = "eidolon-hub"
-    txt_version: str = "1"
-    api_version: str = "v1"
-    config_path: str = "/api/config"
 
 
-@dataclass
-class AdminConfig:
-    probe_enabled: bool = True
-    # Backstop cadence for presence probing + guard body-action delivery. The
-    # reflex path is kicked immediately on each guard fact (see control_bridge),
-    # so this only bounds worst-case latency for missed kicks / presence.
-    probe_interval_seconds: int = 3
-    offline_after_missed_probes: int = 3
-    degraded_after_missed_probes: int = 2
-    command_timeout_seconds: int = 30
+@dataclass(frozen=True, slots=True)
+class PersistenceConfig:
+    adapter: str = "sqlite"
+    sqlite_path: str = "var/eidolon-hub.sqlite3"
+    postgresql_dsn_env: str = "EIDOLON_HUB_POSTGRES_DSN"
+    init_schema: bool = True
+    pool_size: int = 10
+    max_overflow: int = 20
+    directory_cache_enabled: bool = True
+    reconciliation_seconds: float = 5.0
 
 
-@dataclass
-class ControlBridgeConfig:
+@dataclass(frozen=True, slots=True)
+class MqttConnectorConfig:
     enabled: bool = False
-    livekit_url: str = ""
-    identity_prefix: str = "eidolon-hub-control"
+    connector_id: str = "mqtt-cloud"
+    hostname: str = ""
+    port: int = 8883
+    username: str = ""
+    password_env: str = "EIDOLON_HUB_MQTT_PASSWORD"
+    priority: int = 100
 
 
-@dataclass
-class AmbientEventBusConfig:
-    enabled: bool = False
-    ttl_ms: int = EVENT_DEFAULT_TTL_MS
-    max_event_bytes: int = EVENT_MAX_BYTES
-    recent_event_cache: int = 64
-    owner_rate_per_second: int = 5
-    owner_rate_burst: int = 10
-
-
-@dataclass
-class RuntimeAdminConfig:
-    """Hub queries admin to validate ``owner_id`` at
-    ``/api/config`` time. We follow LiveKit's "trust participant.identity,
-    look up the rest server-side" pattern — hub mints the LK token but
-    does NOT sign any device JWT here. channel does the runtime token
-    signing under plan D, using the PAIRING_JWT_SECRET it shares with
-    eidolon-agent.
-
-    Admin lookup is unconditional; hub-side bypasses would mint LiveKit tokens
-    that channel rejects at admin /api/resolve.
-
-    Hub consumes Admin's resolved business context; it does not store device
-    bindings or own agent metadata.
-    """
-
-    admin_api_url: str = "http://127.0.0.1:9000"
-
-
-@dataclass
-class DeviceBlackboardConfig:
-    nats_url: str = "nats://127.0.0.1:4222"
-    creds_path: str = ""
-    bucket: str = DEVICE_BLACKBOARD_BUCKET
+@dataclass(frozen=True, slots=True)
+class ConnectionPlaneConfig:
+    hub_id: str = "eidolon-hub-local"
+    hub_instance_id: str = "eidolon-hub-local-1"
+    public_base_url: str = "https://eidolon-hub.local:8082"
     lease_seconds: int = 45
+    heartbeat_after_ms: int = 15_000
+    mqtt: MqttConnectorConfig = field(default_factory=MqttConnectorConfig)
+    unicast_dns_sd_service: str = ""
+    explicit_descriptor_uris: tuple[str, ...] = ()
 
 
-@dataclass
-class ProactiveWakeConfig:
-    """Phase 3: hub subscribes to the agent's proactive-trigger events on NATS
-    and wakes the target device via a room.join control command. Pure router —
-    the publisher (agent) stamps device_id + full payload into the event; hub
-    does no instance->device mapping. Opt-in (needs a running NATS)."""
-
-    enabled: bool = False
-    nats_url: str = "nats://127.0.0.1:4222"
-    wake_subject: str = "agent.proactive.triggered.*"
-    command_ttl_ms: int = 30_000
+@dataclass(frozen=True, slots=True)
+class ChannelProfileConfig:
+    required_kinds: tuple[str, ...]
+    provisioner_ref: str
 
 
-def _outbound_ipv4() -> str:
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    try:
-        s.connect(("8.8.8.8", 80))
-        return s.getsockname()[0]
-    except OSError:
-        return "127.0.0.1"
-    finally:
-        s.close()
-
-
-def _is_loopback_request_host(host: str) -> bool:
-    h = (host or "").strip().lower()
-    if not h:
-        return True
-    if h == "localhost":
-        return True
-    if h in {"127.0.0.1", "::1"}:
-        return True
-    if h.startswith("127."):
-        return True
-    return False
-
-
-def _ws_scheme_from_config_and_request(
-    configured: str,
-    hub_request_scheme: str,
-    *,
-    explicit_host: bool,
-) -> str:
-    if configured in ("ws", "wss"):
-        return configured
-    if explicit_host:
-        return "ws"
-    return "wss" if hub_request_scheme == "https" else "ws"
-
-
-def resolve_eidolon_livekit_client_url(
-    esp32: Esp32Config,
-    *,
-    request_host: str,
-    request_scheme: str,
-) -> str:
-    if esp32.livekit_url:
-        return esp32.livekit_url
-
-    host_part = esp32.livekit_ip.strip()
-    if host_part and host_part.lower() != "auto":
-        scheme = _ws_scheme_from_config_and_request(
-            esp32.livekit_scheme,
-            request_scheme,
-            explicit_host=True,
-        )
-        return f"{scheme}://{host_part}:{esp32.livekit_port}"
-
-    hub_host = (request_host or "").strip()
-    if _is_loopback_request_host(hub_host):
-        lan = _outbound_ipv4()
-        if lan == "127.0.0.1":
-            raise ValueError(
-                "Cannot resolve a LAN-reachable LiveKit URL: outbound IPv4 is "
-                "127.0.0.1. Set esp32.livekit_url or esp32.livekit_ip in settings.yaml."
-            )
-        hub_host = lan
-
-    scheme = _ws_scheme_from_config_and_request(
-        esp32.livekit_scheme,
-        request_scheme,
-        explicit_host=False,
-    )
-    return f"{scheme}://{hub_host}:{esp32.livekit_port}"
-
-
-def _api_from_yaml(y: dict[str, Any]) -> ApiConfig:
-    sec = _section(y, "api")
-    return ApiConfig(
-        host=str(sec.get("host", "0.0.0.0")),
-        port=int(sec.get("port", 8082)),
-    )
-
-
-def _logging_from_yaml(y: dict[str, Any]) -> LoggingConfig:
-    sec = _section(y, "logging")
-    return LoggingConfig(level=str(sec.get("level", "INFO")))
-
-
-def _livekit_from_yaml_and_env(y: dict[str, Any]) -> LiveKitConfig:
-    sec = _section(y, "livekit")
-    yaml_key = str(sec.get("api_key") or "").strip()
-    yaml_secret = str(sec.get("api_secret") or "").strip()
-    for val, field_name, env_var in (
-        (yaml_key, "api_key", "LIVEKIT_API_KEY"),
-        (yaml_secret, "api_secret", "LIVEKIT_API_SECRET"),
-    ):
-        if val and val != env_var:
-            raise ValueError(
-                f"livekit.{field_name} must be empty or the placeholder {env_var}; "
-                f"set {env_var} in config/.env"
-            )
-    return LiveKitConfig(
-        api_url=str(sec.get("api_url") or "").strip(),
-        api_key=_yaml_secret_value(sec, "api_key", "LIVEKIT_API_KEY"),
-        api_secret=_yaml_secret_value(sec, "api_secret", "LIVEKIT_API_SECRET"),
-    )
-
-
-def _esp32_from_yaml(y: dict[str, Any]) -> Esp32Config:
-    sec = _section(y, "esp32")
-    return Esp32Config(
-        livekit_url=str(sec.get("livekit_url") or "").strip(),
-        livekit_ip=str(sec.get("livekit_ip", "auto")).strip(),
-        livekit_port=int(sec.get("livekit_port", 7880)),
-        livekit_scheme=str(sec.get("livekit_scheme", "ws")).strip().lower(),
-    )
-
-
-def _discovery_from_yaml(y: dict[str, Any]) -> DiscoveryConfig:
-    sec = _section(y, "mdns")
-    if not sec:
-        sec = _section(y, "discovery")
-    return DiscoveryConfig(
-        service_type=str(sec.get("service_type", "_eidolon-hub._tcp.local.")),
-        service_name=str(sec.get("service_name") or ""),
-        hostname=str(sec.get("hostname", "eidolon-hub")),
-        txt_version=str(sec.get("txt_version", "1")),
-        api_version=str(sec.get("api_version", "v1")),
-        config_path=str(sec.get("config_path", "/api/config")),
-    )
-
-
-def _runtime_admin_from_yaml_and_env(y: dict[str, Any]) -> RuntimeAdminConfig:
-    """Load ``runtime_admin`` section.
-
-    ``admin_api_url`` may be a literal URL or an env var name (matching
-    hub's livekit/secret-placeholder convention) — if no scheme, treat
-    it as an env var to look up.
-    """
-    sec = _section(y, "runtime_admin")
-
-    yaml_url = str(sec.get("admin_api_url") or "").strip()
-    if yaml_url and not yaml_url.startswith(("http://", "https://")):
-        yaml_url = os.environ.get(yaml_url, "").strip()
-    admin_url = yaml_url or os.environ.get(
-        "EIDOLON_ADMIN_API_URL", "http://127.0.0.1:9000"
-    )
-
-    return RuntimeAdminConfig(admin_api_url=admin_url)
-
-
-def _device_blackboard_from_yaml(y: dict[str, Any]) -> DeviceBlackboardConfig:
-    sec = _section(y, "device_blackboard")
-    default = DeviceBlackboardConfig()
-    return DeviceBlackboardConfig(
-        nats_url=(os.getenv("NATS_URL") or str(sec.get("nats_url") or "")).strip()
-        or default.nats_url,
-        creds_path=(
-            os.getenv("NATS_CREDS") or str(sec.get("creds_path") or "")
-        ).strip(),
-        bucket=str(sec.get("bucket") or default.bucket).strip() or default.bucket,
-        lease_seconds=max(15, int(sec.get("lease_seconds", default.lease_seconds))),
-    )
-
-
-def _admin_from_yaml(y: dict[str, Any]) -> AdminConfig:
-    sec = _section(y, "admin_probe")
-    if not sec:
-        sec = _section(y, "admin")
-    return AdminConfig(
-        probe_enabled=bool(sec.get("enabled", sec.get("probe_enabled", True))),
-        probe_interval_seconds=int(
-            sec.get("interval_seconds", sec.get("probe_interval_seconds", 3))
-        ),
-        offline_after_missed_probes=int(
-            sec.get("offline_after_missed_probes", 3)
-        ),
-        degraded_after_missed_probes=int(
-            sec.get("degraded_after_missed_probes", 2)
-        ),
-        command_timeout_seconds=int(
-            sec.get("command_timeout_seconds", 30)
-        ),
-    )
-
-
-def _control_bridge_from_yaml(y: dict[str, Any]) -> ControlBridgeConfig:
-    sec = _section(y, "control_bridge")
-    return ControlBridgeConfig(
-        enabled=bool(sec.get("enabled", False)),
-        livekit_url=str(sec.get("livekit_url") or "").strip(),
-        identity_prefix=str(sec.get("identity_prefix", "eidolon-hub-control")).strip()
-        or "eidolon-hub-control",
-    )
-
-
-def _ambient_event_bus_from_yaml(y: dict[str, Any]) -> AmbientEventBusConfig:
-    sec = _section(y, "ambient_event_bus")
-    default = AmbientEventBusConfig()
-    return AmbientEventBusConfig(
-        enabled=bool(sec.get("enabled", default.enabled)),
-        ttl_ms=min(
-            EVENT_DEFAULT_TTL_MS,
-            max(100, int(sec.get("ttl_ms", default.ttl_ms))),
-        ),
-        max_event_bytes=min(
-            EVENT_MAX_BYTES,
-            max(256, int(sec.get("max_event_bytes", default.max_event_bytes))),
-        ),
-        recent_event_cache=min(
-            4_096,
-            max(16, int(sec.get("recent_event_cache", default.recent_event_cache))),
-        ),
-        owner_rate_per_second=min(
-            100,
-            max(1, int(sec.get("owner_rate_per_second", default.owner_rate_per_second))),
-        ),
-        owner_rate_burst=min(
-            1_000,
-            max(
-                1,
-                int(sec.get("owner_rate_burst", default.owner_rate_burst)),
+@dataclass(frozen=True, slots=True)
+class ChannelControlConfig:
+    profiles: dict[str, ChannelProfileConfig] = field(
+        default_factory=lambda: {
+            "management-data": ChannelProfileConfig(
+                required_kinds=("reliable-data",),
+                provisioner_ref="channel-provisioner/default-data",
             ),
-        ),
+            "realtime-media": ChannelProfileConfig(
+                required_kinds=("realtime-data", "audio", "video"),
+                provisioner_ref="channel-provisioner/realtime",
+            ),
+        }
     )
-
-
-def _proactive_wake_from_yaml(y: dict[str, Any]) -> ProactiveWakeConfig:
-    sec = _section(y, "proactive_wake")
-    default = ProactiveWakeConfig()
-    nats_url = (os.getenv("NATS_URL") or str(sec.get("nats_url") or "")).strip()
-    return ProactiveWakeConfig(
-        enabled=bool(sec.get("enabled", default.enabled)),
-        nats_url=nats_url or default.nats_url,
-        wake_subject=str(sec.get("wake_subject") or default.wake_subject).strip()
-        or default.wake_subject,
-        command_ttl_ms=int(sec.get("command_ttl_ms", default.command_ttl_ms)),
+    provider_endpoints: dict[str, str] = field(
+        default_factory=lambda: {
+            "channel-provisioner/default-data": "http://127.0.0.1:8090",
+            "channel-provisioner/realtime": "http://127.0.0.1:8090",
+        }
     )
+    provider_token_env: str = "EIDOLON_HUB_PROVIDER_TOKEN"
+    management_profile: str = "management-data"
 
 
-@dataclass
-class AppConfig:
+@dataclass(frozen=True, slots=True)
+class HubConfig:
+    """Only deployment settings understood by the production Hub."""
+
     api: ApiConfig = field(default_factory=ApiConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
-    livekit: LiveKitConfig = field(default_factory=LiveKitConfig)
-    esp32: Esp32Config = field(default_factory=Esp32Config)
-    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
-    admin: AdminConfig = field(default_factory=AdminConfig)
-    control_bridge: ControlBridgeConfig = field(default_factory=ControlBridgeConfig)
-    ambient_event_bus: AmbientEventBusConfig = field(default_factory=AmbientEventBusConfig)
-    runtime_admin: RuntimeAdminConfig = field(default_factory=RuntimeAdminConfig)
-    device_blackboard: DeviceBlackboardConfig = field(
-        default_factory=DeviceBlackboardConfig
-    )
-    proactive_wake: ProactiveWakeConfig = field(default_factory=ProactiveWakeConfig)
+    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
+    mdns: MdnsConfig = field(default_factory=MdnsConfig)
+    persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
+    connection_plane: ConnectionPlaneConfig = field(default_factory=ConnectionPlaneConfig)
+    channel_control: ChannelControlConfig = field(default_factory=ChannelControlConfig)
 
     @classmethod
-    def load(cls) -> "AppConfig":
+    def load(cls) -> HubConfig:
         _bootstrap_dotenv()
-        y = _load_yaml()
-        return cls(
-            api=_api_from_yaml(y),
-            logging=_logging_from_yaml(y),
-            livekit=_livekit_from_yaml_and_env(y),
-            esp32=_esp32_from_yaml(y),
-            discovery=_discovery_from_yaml(y),
-            admin=_admin_from_yaml(y),
-            control_bridge=_control_bridge_from_yaml(y),
-            ambient_event_bus=_ambient_event_bus_from_yaml(y),
-            runtime_admin=_runtime_admin_from_yaml_and_env(y),
-            device_blackboard=_device_blackboard_from_yaml(y),
-            proactive_wake=_proactive_wake_from_yaml(y),
+        source = _load_yaml()
+        config = cls(
+            api=_api_from_yaml(source),
+            logging=_logging_from_yaml(source),
+            observability=_observability_from_yaml(source),
+            mdns=_mdns_from_yaml(source),
+            persistence=_persistence_from_yaml(source),
+            connection_plane=_connection_plane_from_yaml(source),
+            channel_control=_channel_control_from_yaml(source),
         )
+        validate_hub_config(config)
+        return config
 
 
-def load_config() -> AppConfig:
-    return AppConfig.load()
+def _api_from_yaml(value: dict[str, Any]) -> ApiConfig:
+    section = _section(value, "api")
+    return ApiConfig(
+        host=str(section.get("host") or "0.0.0.0"), port=int(section.get("port", 8082))
+    )
+
+
+def _logging_from_yaml(value: dict[str, Any]) -> LoggingConfig:
+    section = _section(value, "logging")
+    return LoggingConfig(level=str(section.get("level") or "INFO").upper())
+
+
+def _observability_from_yaml(value: dict[str, Any]) -> ObservabilityConfig:
+    section = _section(value, "observability")
+    endpoint = (
+        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or str(section.get("otlp_endpoint") or "")
+    ).strip()
+    return ObservabilityConfig(
+        enabled=bool(section.get("enabled", True)),
+        service_name=str(section.get("service_name") or "eidolon-hub").strip(),
+        otlp_endpoint=endpoint,
+    )
+
+
+def _mdns_from_yaml(value: dict[str, Any]) -> MdnsConfig:
+    section = _section(value, "mdns")
+    return MdnsConfig(
+        enabled=bool(section.get("enabled", True)),
+        service_type=str(section.get("service_type") or "_eidolon-hub._tcp.local."),
+        service_name=str(section.get("service_name") or ""),
+        hostname=str(section.get("hostname") or "eidolon-hub"),
+    )
+
+
+def _persistence_from_yaml(value: dict[str, Any]) -> PersistenceConfig:
+    section = _section(value, "persistence")
+    return PersistenceConfig(
+        adapter=str(section.get("adapter") or "sqlite").strip().lower(),
+        sqlite_path=str(section.get("sqlite_path") or "var/eidolon-hub.sqlite3").strip(),
+        postgresql_dsn_env=str(
+            section.get("postgresql_dsn_env") or "EIDOLON_HUB_POSTGRES_DSN"
+        ).strip(),
+        init_schema=bool(section.get("init_schema", True)),
+        pool_size=int(section.get("pool_size", 10)),
+        max_overflow=int(section.get("max_overflow", 20)),
+        directory_cache_enabled=bool(section.get("directory_cache_enabled", True)),
+        reconciliation_seconds=float(section.get("reconciliation_seconds", 5.0)),
+    )
+
+
+def _connection_plane_from_yaml(value: dict[str, Any]) -> ConnectionPlaneConfig:
+    section = _section(value, "connection_plane")
+    mqtt = _section(section, "mqtt")
+    explicit = section.get("explicit_descriptor_uris") or []
+    if not isinstance(explicit, list):
+        raise ValueError("connection_plane.explicit_descriptor_uris must be a list")
+    return ConnectionPlaneConfig(
+        hub_id=str(section.get("hub_id") or "eidolon-hub-local"),
+        hub_instance_id=str(section.get("hub_instance_id") or "eidolon-hub-local-1"),
+        public_base_url=str(
+            section.get("public_base_url") or "https://eidolon-hub.local:8082"
+        ).rstrip("/"),
+        lease_seconds=int(section.get("lease_seconds", 45)),
+        heartbeat_after_ms=int(section.get("heartbeat_after_ms", 15_000)),
+        mqtt=MqttConnectorConfig(
+            enabled=bool(mqtt.get("enabled", False)),
+            connector_id=str(mqtt.get("connector_id") or "mqtt-cloud"),
+            hostname=str(mqtt.get("hostname") or ""),
+            port=int(mqtt.get("port", 8883)),
+            username=str(mqtt.get("username") or ""),
+            password_env=str(mqtt.get("password_env") or "EIDOLON_HUB_MQTT_PASSWORD"),
+            priority=int(mqtt.get("priority", 100)),
+        ),
+        unicast_dns_sd_service=str(section.get("unicast_dns_sd_service") or ""),
+        explicit_descriptor_uris=tuple(str(item) for item in explicit),
+    )
+
+
+def _channel_control_from_yaml(value: dict[str, Any]) -> ChannelControlConfig:
+    section = _section(value, "channel_control")
+    raw_profiles = _section(section, "profiles")
+    profiles: dict[str, ChannelProfileConfig] = {}
+    for name, item in raw_profiles.items():
+        if not isinstance(item, dict):
+            raise ValueError(f"channel_control.profiles.{name} must be an object")
+        raw_kinds = item.get("required_kinds") or []
+        if not isinstance(raw_kinds, list):
+            raise ValueError(f"channel_control.profiles.{name}.required_kinds must be a list")
+        profiles[str(name)] = ChannelProfileConfig(
+            required_kinds=tuple(str(kind) for kind in raw_kinds),
+            provisioner_ref=str(item.get("provisioner_ref") or ""),
+        )
+    raw_endpoints = _section(section, "provider_endpoints")
+    return ChannelControlConfig(
+        profiles=profiles,
+        provider_endpoints={str(key): str(item).rstrip("/") for key, item in raw_endpoints.items()},
+        provider_token_env=str(section.get("provider_token_env") or "EIDOLON_HUB_PROVIDER_TOKEN"),
+        management_profile=str(section.get("management_profile") or "management-data"),
+    )
+
+
+def validate_hub_config(config: HubConfig) -> None:
+    if not 1 <= config.api.port <= 65_535:
+        raise ValueError("api.port must be between 1 and 65535")
+    if not config.connection_plane.public_base_url.startswith("https://"):
+        raise ValueError("connection_plane.public_base_url must use HTTPS")
+    if config.connection_plane.lease_seconds < 15:
+        raise ValueError("connection_plane.lease_seconds must be at least 15")
+    if not 1_000 <= config.connection_plane.heartbeat_after_ms <= 300_000:
+        raise ValueError("connection_plane.heartbeat_after_ms is out of range")
+    mqtt = config.connection_plane.mqtt
+    if mqtt.enabled and not mqtt.hostname:
+        raise ValueError("enabled MQTT connector requires hostname")
+    if not 1 <= mqtt.port <= 65_535:
+        raise ValueError("MQTT port must be between 1 and 65535")
+    persistence = config.persistence
+    if persistence.adapter not in {"sqlite", "postgresql"}:
+        raise ValueError("persistence.adapter must be sqlite or postgresql")
+    if persistence.adapter == "sqlite" and not persistence.sqlite_path:
+        raise ValueError("SQLite persistence requires sqlite_path")
+    if persistence.adapter == "postgresql" and not persistence.postgresql_dsn_env:
+        raise ValueError("PostgreSQL persistence requires postgresql_dsn_env")
+    if persistence.pool_size < 1 or persistence.max_overflow < 0:
+        raise ValueError("invalid persistence pool sizing")
+    if persistence.reconciliation_seconds <= 0:
+        raise ValueError("persistence.reconciliation_seconds must be positive")
+    channels = config.channel_control
+    if not channels.profiles:
+        raise ValueError("at least one channel profile is required")
+    if channels.management_profile not in channels.profiles:
+        raise ValueError("channel_control.management_profile must name a configured profile")
+    for name, profile in channels.profiles.items():
+        if not profile.required_kinds:
+            raise ValueError(f"channel profile {name} has no required kinds")
+        if profile.provisioner_ref not in channels.provider_endpoints:
+            raise ValueError(f"channel profile {name} references an unknown provisioner")
+        endpoint = channels.provider_endpoints[profile.provisioner_ref]
+        if not endpoint.startswith(("http://", "https://")):
+            raise ValueError(f"channel profile {name} has an invalid Provider endpoint")
+    if not channels.provider_token_env.strip():
+        raise ValueError("channel_control.provider_token_env is required")
+
+
+def load_hub_config() -> HubConfig:
+    return HubConfig.load()

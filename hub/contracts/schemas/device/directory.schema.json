@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/device/directory.schema.json",
+  "title": "Device Directory Entry",
+  "type": "object", "additionalProperties": false,
+  "required": ["operation", "device_id", "owner_scope", "display_name", "device_kind", "manifest_json", "manifest_revision", "approved", "revoked", "online", "connections", "registered_at", "updated_at", "revision"],
+  "properties": {
+    "operation": { "const": "device.directory-entry" }, "device_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "owner_scope": { "type": "string", "minLength": 1, "maxLength": 64 }, "display_name": { "type": "string", "maxLength": 128 }, "device_kind": { "type": "string", "minLength": 1, "maxLength": 96 },
+    "manifest_json": { "type": "string", "minLength": 2, "maxLength": 262144 }, "manifest_revision": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "approved": { "type": "boolean" }, "revoked": { "type": "boolean" }, "online": { "type": "boolean" },
+    "connections": { "type": "array", "maxItems": 32, "items": { "$ref": "#/$defs/connection" } },
+    "registered_at": { "type": "string", "format": "date-time" }, "updated_at": { "type": "string", "format": "date-time" }, "revision": { "type": "integer", "minimum": 1 }
+  },
+  "$defs": {
+    "connection": {
+      "type": "object", "additionalProperties": false,
+      "required": ["connection_id", "connector_id", "connector_kind", "expires_at"],
+      "properties": {
+        "connection_id": { "type": "string", "minLength": 1, "maxLength": 128 }, "connector_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "connector_kind": { "type": "string", "minLength": 1, "maxLength": 64 }, "expires_at": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

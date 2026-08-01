@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/manifest.schema.json",
+  "title": "DeviceManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "title", "properties", "actions", "events", "media"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "title": {"type": "string", "minLength": 1, "maxLength": 128},
+    "properties": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/property"}},
+    "actions": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/action"}},
+    "events": {"type": "array", "maxItems": 64, "items": {"$ref": "#/$defs/event"}},
+    "media": {"type": "array", "maxItems": 16, "items": {"$ref": "#/$defs/media"}}
+  },
+  "$defs": {
+    "property": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "schema", "observable", "writable"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "schema": {"type": "object"}, "observable": {"type": "boolean"}, "writable": {"type": "boolean"}
+      }
+    },
+    "action": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "version", "input_schema", "output_schema", "idempotent"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1, "maxLength": 128},
+        "version": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "input_schema": {"type": "object"}, "output_schema": {"type": "object"},
+        "idempotent": {"type": "boolean"}
+      }
+    },
+    "event": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "data_schema"],
+      "properties": {"name": {"type": "string", "minLength": 1, "maxLength": 128}, "data_schema": {"type": "object"}}
+    },
+    "media": {
+      "type": "object", "additionalProperties": false,
+      "required": ["kind", "direction", "codecs"],
+      "properties": {
+        "kind": {"enum": ["audio", "video"]},
+        "direction": {"enum": ["publish", "subscribe", "bidirectional"]},
+        "codecs": {"type": "array", "maxItems": 32, "items": {"type": "string"}}
+      }
+    }
+  }
+}

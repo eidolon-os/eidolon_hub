@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.ai/contracts/device/management.schema.json",
+  "title": "Device Management Mutations",
+  "oneOf": [
+    { "$ref": "#/$defs/DeviceApprovalRequest" },
+    { "$ref": "#/$defs/DeviceRevocationRequest" }
+  ],
+  "$defs": {
+    "DeviceApprovalRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id", "owner_id"],
+      "properties": {
+        "operation": { "const": "device.approval" },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 }
+      }
+    },
+    "DeviceRevocationRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id"],
+      "properties": {
+        "operation": { "const": "device.revocation" },
+        "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "reason": { "type": "string", "minLength": 1, "maxLength": 256, "default": "operator-request" }
+      }
+    }
+  }
+}
