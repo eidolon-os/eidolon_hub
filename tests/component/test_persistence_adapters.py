@@ -7,7 +7,13 @@ import pytest
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.repositories import AuthorityLeaseHeld, SqlHubRepositories
-from hub.domain.channels.entities import ChannelLease
+from hub.domain.channels.entities import (
+    ChannelKind,
+    ChannelLease,
+    ChannelState,
+    ProviderSyncRecord,
+    ProviderSyncState,
+)
 from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.connections.entities import ConnectionLease, ConnectorKind
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
@@ -15,7 +21,6 @@ from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 from hub.ports.event_bus import DomainEvent
 from hub.ports.identity import EnrollmentChallenge
-from hub.ports.repositories import LedgerEvent
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -165,9 +170,12 @@ async def test_directory_channel_and_cursor_runtime_state_survives_reopen(databa
     channel = ChannelLease(
         channel_id="channel-1",
         device_id="device-1",
-        profile_name="management-data",
+        purpose="management",
+        kinds=frozenset({ChannelKind.RELIABLE_DATA}),
+        binding_format="application/eidolon-test+json",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=5),
+        state=ChannelState.ACTIVE,
     )
 
     first = await repositories.directory.upsert(directory)
@@ -187,11 +195,59 @@ async def test_directory_channel_and_cursor_runtime_state_survives_reopen(databa
     assert first.revision == 1 and second.revision == 2
     assert await repositories.directory.list(owner_scope="owner-1") == (second,)
     assert await repositories.channel_leases.active_for_device(
-        "device-1", now=NOW, profile_name="management-data"
+        "device-1", now=NOW, purpose="management"
     ) == (channel,)
 
 
-async def test_domain_events_and_audit_events_share_idempotent_hub_log(database) -> None:
+async def test_channel_provider_sync_claim_is_durable_and_fenced(database) -> None:
+    repository = SqlHubRepositories(database).channel_provider_sync
+    desired = ProviderSyncRecord(
+        device_id="device-1",
+        operation_id="channel-sync:sha256:desired",
+        desired_revision="sha256:desired",
+        state=ProviderSyncState.PENDING,
+        attempts=0,
+        updated_at=NOW,
+    )
+
+    first = await repository.try_claim(
+        desired,
+        owner_instance_id="hub-1",
+        now=NOW,
+        claim_ttl=timedelta(seconds=30),
+    )
+    competing = await repository.try_claim(
+        desired,
+        owner_instance_id="hub-2",
+        now=NOW + timedelta(seconds=1),
+        claim_ttl=timedelta(seconds=30),
+    )
+    takeover = await repository.try_claim(
+        desired,
+        owner_instance_id="hub-2",
+        now=NOW + timedelta(seconds=31),
+        claim_ttl=timedelta(seconds=30),
+    )
+    await repository.mark_succeeded(
+        device_id="device-1",
+        operation_id=desired.operation_id,
+        now=NOW + timedelta(seconds=32),
+    )
+    replay = await repository.try_claim(
+        desired,
+        owner_instance_id="hub-2",
+        now=NOW + timedelta(seconds=33),
+        claim_ttl=timedelta(seconds=30),
+    )
+
+    assert first is not None and first.attempts == 1
+    assert competing is None
+    assert takeover is not None and takeover.attempts == 2
+    assert replay is not None and replay.attempts == 3
+    assert replay.state is ProviderSyncState.SYNCHRONIZING
+
+
+async def test_domain_event_stream_is_owner_scoped_and_idempotent(database) -> None:
     repositories = SqlHubRepositories(database)
     await repositories.devices.upsert(replace(_device(), owner_id="owner-1"))
     domain_event = DomainEvent(
@@ -208,21 +264,10 @@ async def test_domain_events_and_audit_events_share_idempotent_hub_log(database)
         event_type="eidolon.device.transferred",
         data_json='{"owner":"owner-2"}',
     )
-    ledger_event = LedgerEvent(
-        event_id="event-audit",
-        event_type="hub.test.event",
-        owner_id="owner-1",
-        subject_type="device",
-        subject_id="device-1",
-        occurred_at=NOW,
-        payload_json='{"audited":true}',
-    )
-
     await repositories.events.publish(domain_event)
     await repositories.events.publish(domain_event)
     await repositories.devices.upsert(replace(_device(), owner_id="owner-2"))
     await repositories.events.publish(transferred_event)
-    await repositories.event_ledger.append(ledger_event)
 
     stream = await repositories.events.list_after(
         owner_scope="owner-1", stream_position=0, limit=100
@@ -235,6 +280,3 @@ async def test_domain_events_and_audit_events_share_idempotent_hub_log(database)
             owner_scope="owner-2", stream_position=0, limit=100
         )
     ] == [transferred_event]
-    assert await repositories.event_ledger.list_for_subject(
-        subject_type="device", subject_id="device-1"
-    ) == (ledger_event,)

@@ -4,12 +4,18 @@
   "title": "ChannelGrant",
   "type": "object",
   "additionalProperties": false,
-  "required": ["operation", "request_id", "channel_id", "profile_name", "lease_expires_at_ms", "opaque_binding"],
+  "required": ["operation", "operation_id", "channel_id", "purpose", "kinds", "binding_format", "issued_at_ms", "lease_expires_at_ms", "opaque_binding"],
   "properties": {
     "operation": {"const": "channel.grant"},
-    "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
     "channel_id": {"type": "string", "minLength": 1, "maxLength": 128},
-    "profile_name": {"type": "string", "minLength": 1, "maxLength": 96},
+    "purpose": {"type": "string", "minLength": 1, "maxLength": 96},
+    "kinds": {
+      "type": "array", "minItems": 1, "maxItems": 4, "uniqueItems": true,
+      "items": {"enum": ["reliable-data", "realtime-data", "audio", "video"]}
+    },
+    "binding_format": {"type": "string", "minLength": 1, "maxLength": 128},
+    "issued_at_ms": {"type": "integer", "minimum": 0},
     "lease_expires_at_ms": {"type": "integer", "minimum": 0},
     "opaque_binding": {"type": "string", "minLength": 1, "maxLength": 87384}
   }

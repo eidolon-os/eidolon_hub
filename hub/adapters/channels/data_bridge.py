@@ -14,6 +14,7 @@ from hub.application.use_cases.ingest_data_envelope import (
 )
 from hub.contracts.bindings.channel import CommandDataPayload, DataEnvelope
 from hub.contracts.mappers import data_envelope_to_domain
+from hub.domain.channels.entities import ChannelKind
 from hub.domain.commands.entities import DeviceCommand
 from hub.ports.identity import Clock
 from hub.ports.repositories import ChannelCursorRepository, ChannelLeaseRepository
@@ -64,21 +65,24 @@ class ProviderDataChannelBridge:
         cursors: ChannelCursorRepository,
         ingest: IngestDataEnvelope,
         clock: Clock,
-        management_profile: str = "management-data",
+        management_purpose: str = "management",
     ) -> None:
         self._sender = sender
         self._channels = channels
         self._cursors = cursors
         self._ingest = ingest
         self._clock = clock
-        self._management_profile = management_profile
+        self._management_purpose = management_purpose
 
     async def send_command(self, command: DeviceCommand) -> None:
         now = self._clock.now()
         channels = await self._channels.active_for_device(
             command.device_id,
             now=now,
-            profile_name=self._management_profile,
+            purpose=self._management_purpose,
+        )
+        channels = tuple(
+            channel for channel in channels if ChannelKind.RELIABLE_DATA in channel.kinds
         )
         if not channels:
             raise ConnectionError("device has no active reliable data channel")

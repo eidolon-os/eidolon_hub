@@ -104,9 +104,3 @@ class ConnectionRegistration(ContractModel):
 class ChannelSignalDelivery(ContractModel):
     operation: Literal["channel.signal-delivery"] = "channel.signal-delivery"
     payload_json: str | None = Field(default=None, max_length=131_072, repr=False)
-
-
-class ChannelSignalAccepted(ContractModel):
-    operation: Literal["channel.signal-accepted"] = "channel.signal-accepted"
-    request_id: str = Field(min_length=1, max_length=96)
-    accepted: Literal[True] = True

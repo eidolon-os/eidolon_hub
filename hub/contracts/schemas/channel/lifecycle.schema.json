@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/channel/lifecycle.schema.json",
+  "title": "ChannelLifecycleEvent",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "channel_id", "device_id", "state", "occurred_at_ms", "reason"],
+  "properties": {
+    "operation": {"const": "channel.lifecycle"},
+    "channel_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "state": {"enum": ["active", "closed", "failed"]},
+    "occurred_at_ms": {"type": "integer", "minimum": 0},
+    "reason": {"type": "string", "maxLength": 256}
+  }
+}

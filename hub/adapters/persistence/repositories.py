@@ -14,6 +14,7 @@ from hub.adapters.persistence.models import (
     ChallengeRow,
     ChannelCursorRow,
     ChannelLeaseRow,
+    ChannelProviderSyncRow,
     CommandRow,
     ConnectionRow,
     DeviceAuthorityRow,
@@ -21,7 +22,13 @@ from hub.adapters.persistence.models import (
     DirectoryRow,
     EventRow,
 )
-from hub.domain.channels.entities import ChannelLease
+from hub.domain.channels.entities import (
+    ChannelKind,
+    ChannelLease,
+    ChannelState,
+    ProviderSyncRecord,
+    ProviderSyncState,
+)
 from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.connections.entities import (
     ConnectionLease,
@@ -38,7 +45,6 @@ from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 from hub.ports.event_bus import DomainEvent, StoredDomainEvent
 from hub.ports.identity import EnrollmentChallenge
-from hub.ports.repositories import LedgerEvent
 
 
 class AuthorityLeaseHeld(PermissionError):
@@ -518,7 +524,11 @@ class SqlDeviceDirectoryRepository:
             prior = _decode_directory(row.payload_json)
             if entry.updated_at < prior.updated_at:
                 raise RuntimeError("stale Device Directory projection")
-            comparable = replace(entry, revision=prior.revision)
+            comparable = replace(
+                entry,
+                revision=prior.revision,
+                updated_at=prior.updated_at,
+            )
             if comparable == prior:
                 return prior
             candidate = replace(entry, revision=prior.revision + 1)
@@ -578,14 +588,15 @@ class SqlChannelLeaseRepository:
         device_id: str,
         *,
         now: datetime,
-        profile_name: str | None = None,
+        purpose: str | None = None,
     ) -> tuple[ChannelLease, ...]:
         query = select(ChannelLeaseRow).where(
             ChannelLeaseRow.device_id == device_id,
+            ChannelLeaseRow.state == ChannelState.ACTIVE.value,
             ChannelLeaseRow.expires_at > now,
         )
-        if profile_name is not None:
-            query = query.where(ChannelLeaseRow.profile_name == profile_name)
+        if purpose is not None:
+            query = query.where(ChannelLeaseRow.purpose == purpose)
         async with self._database.sessions() as session:
             rows = (await session.scalars(query)).all()
         return tuple(sorted((self._decode(row) for row in rows), key=lambda item: item.channel_id))
@@ -606,10 +617,13 @@ class SqlChannelLeaseRepository:
         return {
             "channel_id": lease.channel_id,
             "device_id": lease.device_id,
-            "profile_name": lease.profile_name,
+            "purpose": lease.purpose,
+            "kinds": json.dumps(sorted(kind.value for kind in lease.kinds)),
+            "binding_format": lease.binding_format,
             "issued_at": lease.issued_at,
             "expires_at": lease.expires_at,
-            "renew_after": lease.renew_after,
+            "state": lease.state.value,
+            "updated_at": lease.updated_at,
         }
 
     @staticmethod
@@ -617,10 +631,138 @@ class SqlChannelLeaseRepository:
         return ChannelLease(
             channel_id=row.channel_id,
             device_id=row.device_id,
-            profile_name=row.profile_name,
+            purpose=row.purpose,
+            kinds=frozenset(ChannelKind(value) for value in json.loads(row.kinds)),
+            binding_format=row.binding_format,
             issued_at=_aware(row.issued_at),
             expires_at=_aware(row.expires_at),
-            renew_after=_aware(row.renew_after) if row.renew_after else None,
+            state=ChannelState(row.state),
+            updated_at=_aware(row.updated_at) if row.updated_at else None,
+        )
+
+
+class SqlChannelProviderSyncRepository:
+    def __init__(self, database: HubDatabase) -> None:
+        self._database = database
+
+    async def get(self, device_id: str) -> ProviderSyncRecord | None:
+        async with self._database.sessions() as session:
+            row = await session.get(ChannelProviderSyncRow, device_id)
+            return None if row is None else self._decode(row)
+
+    async def try_claim(
+        self,
+        desired: ProviderSyncRecord,
+        *,
+        owner_instance_id: str,
+        now: datetime,
+        claim_ttl: timedelta,
+    ) -> ProviderSyncRecord | None:
+        if not owner_instance_id or claim_ttl <= timedelta(0):
+            raise ValueError("owner_instance_id and a positive claim_ttl are required")
+        for _ in range(8):
+            try:
+                async with self._database.sessions.begin() as session:
+                    row = await session.scalar(
+                        select(ChannelProviderSyncRow)
+                        .where(ChannelProviderSyncRow.device_id == desired.device_id)
+                        .with_for_update()
+                    )
+                    if row is not None:
+                        if (
+                            row.state == ProviderSyncState.SYNCHRONIZING.value
+                            and row.claim_expires_at is not None
+                            and _aware(row.claim_expires_at) > now
+                        ):
+                            return None
+                        same_operation = row.operation_id == desired.operation_id
+                        row.operation_id = desired.operation_id
+                        row.desired_revision = desired.desired_revision
+                        row.state = ProviderSyncState.SYNCHRONIZING.value
+                        row.attempts = row.attempts + 1 if same_operation else 1
+                        row.updated_at = now
+                        row.owner_instance_id = owner_instance_id
+                        row.claim_expires_at = now + claim_ttl
+                        row.last_error = ""
+                        row.version += 1
+                    else:
+                        row = ChannelProviderSyncRow(
+                            device_id=desired.device_id,
+                            operation_id=desired.operation_id,
+                            desired_revision=desired.desired_revision,
+                            state=ProviderSyncState.SYNCHRONIZING.value,
+                            attempts=1,
+                            updated_at=now,
+                            owner_instance_id=owner_instance_id,
+                            claim_expires_at=now + claim_ttl,
+                            last_error="",
+                            version=1,
+                        )
+                        session.add(row)
+                    await session.flush()
+                    return self._decode(row)
+            except IntegrityError:
+                continue
+        raise RuntimeError("Channel Provider sync claim retry budget exhausted")
+
+    async def mark_succeeded(self, *, device_id: str, operation_id: str, now: datetime) -> None:
+        await self._finish(
+            device_id=device_id,
+            operation_id=operation_id,
+            now=now,
+            state=ProviderSyncState.SUCCEEDED,
+            error="",
+        )
+
+    async def mark_failed(
+        self, *, device_id: str, operation_id: str, now: datetime, error: str
+    ) -> None:
+        if not error or len(error) > 128:
+            raise ValueError("a bounded Provider failure class is required")
+        await self._finish(
+            device_id=device_id,
+            operation_id=operation_id,
+            now=now,
+            state=ProviderSyncState.FAILED,
+            error=error,
+        )
+
+    async def _finish(
+        self,
+        *,
+        device_id: str,
+        operation_id: str,
+        now: datetime,
+        state: ProviderSyncState,
+        error: str,
+    ) -> None:
+        async with self._database.sessions.begin() as session:
+            row = await session.scalar(
+                select(ChannelProviderSyncRow)
+                .where(ChannelProviderSyncRow.device_id == device_id)
+                .with_for_update()
+            )
+            if row is None or row.operation_id != operation_id:
+                raise RuntimeError("stale Channel Provider sync completion")
+            row.state = state.value
+            row.updated_at = now
+            row.owner_instance_id = ""
+            row.claim_expires_at = None
+            row.last_error = error
+            row.version += 1
+
+    @staticmethod
+    def _decode(row: ChannelProviderSyncRow) -> ProviderSyncRecord:
+        return ProviderSyncRecord(
+            device_id=row.device_id,
+            operation_id=row.operation_id,
+            desired_revision=row.desired_revision,
+            state=ProviderSyncState(row.state),
+            attempts=row.attempts,
+            updated_at=_aware(row.updated_at),
+            owner_instance_id=row.owner_instance_id,
+            claim_expires_at=_aware(row.claim_expires_at) if row.claim_expires_at else None,
+            last_error=row.last_error,
         )
 
 
@@ -719,7 +861,6 @@ class SqlEventBus:
                     source=event.source,
                     subject=event.subject,
                     owner_id=(device.owner_id if device and device.owner_id else "unclaimed"),
-                    subject_id=event.subject,
                     occurred_at=event.occurred_at,
                     data_json=event.data_json,
                 )
@@ -739,7 +880,6 @@ class SqlEventBus:
                     .where(
                         EventRow.stream_position > stream_position,
                         EventRow.owner_id == owner_scope,
-                        EventRow.subject_type == "",
                     )
                     .order_by(EventRow.stream_position)
                     .limit(limit)
@@ -761,59 +901,6 @@ class SqlEventBus:
         )
 
 
-class SqlEventLedger:
-    def __init__(self, database: HubDatabase) -> None:
-        self._database = database
-
-    async def append(self, event: LedgerEvent) -> None:
-        async with self._database.sessions.begin() as session:
-            current = await session.scalar(
-                select(EventRow).where(EventRow.event_id == event.event_id)
-            )
-            if current is not None:
-                return
-            session.add(
-                EventRow(
-                    event_id=event.event_id,
-                    event_type=event.event_type,
-                    source="eidolon-hub",
-                    subject=f"{event.subject_type}/{event.subject_id}",
-                    owner_id=event.owner_id,
-                    subject_type=event.subject_type,
-                    subject_id=event.subject_id,
-                    occurred_at=event.occurred_at,
-                    data_json=event.payload_json,
-                )
-            )
-
-    async def list_for_subject(
-        self, *, subject_type: str, subject_id: str
-    ) -> tuple[LedgerEvent, ...]:
-        async with self._database.sessions() as session:
-            rows = (
-                await session.scalars(
-                    select(EventRow)
-                    .where(
-                        EventRow.subject_type == subject_type,
-                        EventRow.subject_id == subject_id,
-                    )
-                    .order_by(EventRow.occurred_at, EventRow.event_id)
-                )
-            ).all()
-        return tuple(
-            LedgerEvent(
-                event_id=row.event_id,
-                event_type=row.event_type,
-                owner_id=row.owner_id,
-                subject_type=row.subject_type,
-                subject_id=row.subject_id,
-                occurred_at=_aware(row.occurred_at),
-                payload_json=row.data_json,
-            )
-            for row in rows
-        )
-
-
 class SqlHubRepositories:
     """Composition-only bundle; callers receive individual repository ports."""
 
@@ -825,6 +912,6 @@ class SqlHubRepositories:
         self.challenges = SqlChallengeRepository(database)
         self.directory = SqlDeviceDirectoryRepository(database)
         self.channel_leases = SqlChannelLeaseRepository(database)
+        self.channel_provider_sync = SqlChannelProviderSyncRepository(database)
         self.channel_cursors = SqlChannelCursorRepository(database)
         self.events = SqlEventBus(database)
-        self.event_ledger = SqlEventLedger(database)

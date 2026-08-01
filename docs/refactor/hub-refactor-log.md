@@ -54,13 +54,13 @@
 - 风险：Broker ACL 必须由部署同步配置，Hub allow-list 不能替代 Broker authorization。
 - Commit SHA：`N/A (working tree)`。
 
-## 2026-08-01 — Provider-neutral Channel 与 DataEnvelope
+## 2026-08-01 — Provider-neutral Channel 与 DataEnvelope（已被 ADR 0010 的 desired-state 模型取代）
 
 - 目标：LiveKit 退出 Connection/online；Provider 动态产生 Channel Binding。
 - 首先失败：opaque-binding 测试在旧 repr/响应中观察到 URL/token；provider mismatch 和 signaling failure tests 留下了孤儿 Channel Lease。
 - 代码变化：Channel Profile/Catalog、Provision/Renew/Revoke Use Cases、NATS Provisioner Request/Reply、HTTP mailbox/MQTT Grant signaling、Channel lifecycle signals。
 - 秘密策略：Hub 只验证 opaque bytes 长度并立即 relay；不解析、不持久化、不放入管理响应、不记录。
-- Data Plane：外部 WSS/LiveKit Provider 通过标准 DataEnvelope NATS Bridge 接入；durable cursor 去重，Core 再校验 channel/device/TTL。MQTT Connector 没有 command/state/event send API。
+- Data Plane：外部 Provider 通过有方向、经认证的 HTTP DataEnvelope Bridge 接入；durable cursor 去重，Core 再校验 channel/device/TTL。MQTT Connector 没有 command/state/event send API。
 - 功能验证：WSS-only provider command→Ack→Result；WAN MQTT registration contract→opaque realtime grant；普通与实时 Provider 共享 Orchestrator，不共享 Connection 判定。
 - 反思：在 Hub 内做 MQTT↔LiveKit 协议转换会让 rendezvous transport 变成 data plane；标准 Provider Bridge 保持 Core 观察到一致 Envelope。
 - Commit SHA：`N/A (working tree)`。
@@ -70,10 +70,22 @@
 - 目标：durable 公共黑板与明确的生产 artifact。
 - 首先失败：Owner transfer 测试显示旧 scope key 可残留；JWT tests 显示只验证 role 不能阻止跨 owner；生产配置检查发现旧 LiveKit/ESP32 字段仍在主模块。
 - 代码变化：owner-scoped Directory CAS、atomic owner visibility transfer、management JWT、OTLP batch exporters 与秘密安全 HTTP middleware。
-- 配置变化：生产 `hub/config.py` 仅含 Connection/Directory/logical Channel/OTLP；Provider URL/Room/Token/TURN/Codec 不存在。所有 config 在资源打开前校验。
+- 配置变化：生产 `hub/config.py` 仅含 Connection/Directory/logical Channel/OTLP；Hub 只知道 Provider control endpoint，不知道设备侧 URL/Room/Token/TURN/Codec。所有 config 在资源打开前校验。
 - 删除：Characterization 阶段结束后，旧 register/token、LiveKit 在线判定、发送路径和 snapshot blackboard runtime 与对应旧测试依赖从 Hub 源码、dev dependency 和 wheel 中移除。
 - 测试：production config invariants、package boundary AST tests、telemetry endpoint/redaction tests。
 - 风险：现有兄弟项目 consumer 必须迁移到版本化 Schema 和 Provider binding；Hub 不提供旧合同兼容桥。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-01 — 配置契约收敛
+
+- 目标：让文件布局、Setting Model 与 Composition 的真实读取完全一致，删除旧 LiveKit 和静默无效字段。
+- 代码核查：`logging.level`、`unicast_dns_sd_service`、`explicit_descriptor_uris` 无生产消费者；旧根 `.env` 与 `config/.env` 只含 LiveKit/旧 mDNS/Admin 字段，当前 Composition 不读取。
+- 结构变化：mDNS 移入 `connection_plane.mdns`，但类型命名为 `MdnsDiscoveryConfig`，只发布 Descriptor URI、不产生 `ConnectionLease`；MQTT 仍是实际 WAN Connection Connector。
+- 删除：重复 `settings.example.yaml`、根 `.env.example`、未使用 logging helper 与 `pydantic-settings`；本地旧 `.env` 文件已删除，统一从 `config/.env` 加载。
+- 防回归：YAML root 与每个固定 section 使用 unknown-key fail-closed；旧 top-level `mdns`、`logging` 和显式 URI Hub 配置会直接拒绝，不再静默忽略。
+- Channel 边界：没有具体媒体 Setting；后续 ADR 0010 进一步删除了 Hub-owned Profile，只保留 Provider contract URL。
+- 安全收敛：布尔 Setting 只接受原生 YAML boolean；示例密钥为空并令启动 fail-closed，避免公共占位符被当作有效凭据。
+- 当前结果：`134 passed`（含严格布尔与废旧配置防回归用例）。
 - Commit SHA：`N/A (working tree)`。
 
 ## 2026-08-01 — 当前验收闭环
@@ -102,4 +114,35 @@
 - 当前结果：`128 passed`；Application branch coverage `100%`；Ruff、Import Linter、wheel build 与 deterministic contract generation 均通过。
 - 反思：memory-first + async DB write 会在崩溃时丢失审批/命令/租约，且 Cloud 多实例无法把单机内存当权威源。因此只缓存可容许短暂陈旧的公开 Directory projection。
 - 风险：兄弟项目尚未实现新的 Provider HTTP 与 Hub API consumer；尤其 Agent 旧 NATS KV reader 必须独立迁移，不能把 Hub NATS 删除误写成整栈 E2E 已完成。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-01 — Channel Provider 契约透传、稳定性闭环与死代码删除
+
+- 目标：Hub 不配置 Profile/Provider 路由，只配置一个契约基址；设备事实持久化后异步把 typed context 交给 Provider，由 Provider 返回 generic Assignment + opaque binding。
+- 首先失败：新 Provider reconcile/contract tests 在 collection 时缺少 Application/Adapter；lifecycle tests 暴露旧 Mapper；黑盒 E2E 因 ambient HTTP proxy 把 localhost Provider 调用导向 `127.0.0.1:7890` 而得到 502。
+- 第二轮反思失败：Unit Fake 可在 30 秒后重新 claim pending Grant，但真实 SQL Repository 把相同 succeeded desired revision 直接拒绝；新增 Component test 首先失败。临近过期 active/pending lease 也没有新 issuance generation，且过期 Provider 响应可通过验证；三个新测试首先失败后推动修复。
+- Contract：新增 Provider sync 与 lifecycle JSON Schema/DTO，固定 `/device-channels/sync`、`/data/envelopes`、Hub lifecycle/data ingress；Channel Grant 只含 purpose/kinds/binding format/lease/opaque binding。
+- Application：desired revision 表示设备事实；失败重试和仍可用 pending 补投复用 operation；终态或进入 30 秒刷新窗口时，根据通用 lease generation 产生新 operation。SQL claim 只负责进行中互斥。
+- 安全：Provider egress 使用 `httpx.AsyncClient(trust_env=False)`；opaque binding 只在 Adapter 做 base64 编解码和中继，不进入 SQL、Directory、Event Bus 或日志。
+- 删除：Profile/Provision/Renew/Revoke/设备 Channel negotiation、旧 Provisioner client 与对应 Schema/tests；同时按生产 import、Composition 和所有权删除无消费者 Admin/SSE/旧 signature/access/assets/owner-context/capability/logging/空 Messaging/EventLedger 实现。Guard/Sense 发布契约保留。
+- Directory 反思：Cache 周期 reload 只会复制持久化投影，无法让没有 Disconnect 的自然过期 Connection 变为 offline。新增 Application `execute_all` projection 与独立调度 Adapter；SQL 忽略纯投影时间变化，避免无变化时 revision churn。
+- Cloud 解阻：直连 `18.4 (Postgres.app)`，创建隔离 `eidolon_hub_test`；Homebrew Mosquitto 使用 `127.0.0.1:1883`。新增两个独立 engine/pool 的真实并发 Channel claim 测试。
+- 测试：Unit `90 passed`；Contract `25 passed`；Component `14 passed`；Local Functional `6 passed`；Cloud Infrastructure `3 passed`；Deployment parity `2 passed`；真实 TCP Local Contract E2E `1 passed`；Architecture `15 passed`；注入本机基础设施后全量 `156 passed`。Domain/Application branch coverage `95%`，全 Hub `77%`。
+- 未执行：生产 MQTT TLS/ACL、PostgreSQL/Broker/Provider restart、网络分区与 rolling restart；本机明文 Mosquitto 通过不等于生产 Cloud E2E。
+- 发布反思：首次 wheel 因复用历史 `build/lib` 仍包含已删文件；将精确生成目录移到 `/private/tmp` 后，最新 clean rebuild 得到 `135` entries，owner contract 与 remote HTTPS guard 已打包，旧实现文件和 NATS/Data/SDK/LiveKit dependency matches 均为 0。
+- 风险：外部 `eidolon_channel`/Device/Agent 尚未实现新契约；真实 Broker ACL/TLS、PostgreSQL 多实例、Provider/Broker/DB restart、VLAN/DNS 和 rolling restart 仍需部署环境门禁。
+- 证据：`docs/testing/reports/`、`architecture-findings.md`、`code-inventory.md`。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-01 — Composition Root 瘦身与 Runtime Adapter 归属修正
+
+- 目标：让 `hub/application` 继续只表达业务编排；让 `hub/composition` 只负责选择、组装和生命周期，不持有 Clock/ID 基础设施实现，也不以单个 395 行函数承载全部子系统 wiring。
+- 修改前行为：`composition/app.py` 同时创建数据库、缓存、HTTP Client、Connection Connector、Channel Bridge、管理服务和全部 Use Case；`SystemClock`、`SecureIdGenerator` 位于 Composition。业务行为已有测试，但模块所有权和失败清理边界不够清楚。
+- 刻画与首先失败：修改前先执行 Composition/Deployment/E2E 测试，`6 passed`；拆分后相同测试仍为 `6 passed`。第一个失败门禁是 Ruff `I001` 导入顺序，不是业务回归，修正后通过。
+- 代码变化：Clock/ID 移到 `hub/adapters/runtime.py`；新增 resources、connection plane、channel control、device management 四个显式装配模块；唯一 `create_composed_app` 入口由 395 行降至 138 行。`ApplicationHttpRuntime` 更名为准确的 `ComposedHttpRuntime`。
+- 生命周期修正：单一 `AsyncExitStack` 现在覆盖完整装配过程；任一工厂、Connector 或 Worker 启动失败都会关闭已打开的数据库、Directory cache、HTTP Client、telemetry 和已启动组件，不再只处理资源打开或 Supervisor 启动两个局部阶段。
+- 边界复核：Application/Domain/Ports 没有新增 Adapter、Interface 或第三方 import；Channel Provider 契约、opaque binding 中继、注册和 Directory 语义没有改变。
+- 测试：Runtime Adapter Unit `2 passed`；Unit `92 passed`；Architecture `15 passed`；Import Linter `108 files / 179 dependencies / 3 contracts kept`；原 Composition/Deployment/E2E `6 passed`；本机 PostgreSQL 18/Mosquitto Cloud Infrastructure `3 passed`；注入基础设施的全量回归 `158 passed in 10.77s`、无 skip；全 Hub branch coverage `78%`。
+- 架构反思：把装配逻辑拆成工厂并不会创建多个 Composition Root；具体实现仍只在 `create_composed_app` 所有的生命周期内被选择一次。后续不应为了减少文件行数继续抽象，只有子系统依赖图或测试边界发生变化时才增加新的装配结构。
+- 风险：本次没有扩大生产基础设施证据；MQTT TLS/ACL、Broker/DB/Provider restart、网络分区和 rolling restart 仍是部署环境门禁。
 - Commit SHA：`N/A (working tree)`。

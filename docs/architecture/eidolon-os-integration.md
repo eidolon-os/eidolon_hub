@@ -18,7 +18,7 @@ flowchart TB
     Admin["eidolon_admin<br/>gateway + deployment"]
 
     Clients --> Hub
-    Hub -->|"logical ProvisionChannel"| Provider
+    Hub -->|"device channel desired state"| Provider
     Clients -. "Data/Audio/Video" .-> Provider
     Provider --> Agent
     Agent <--> Memory
@@ -33,7 +33,7 @@ flowchart TB
 | 项目 | 当前事实 | Hub 重构后的正确关系 |
 |---|---|---|
 | `eidolon_data` | 数据主权层，拥有 owner/companion/events/storage 等现有 schema；直接依赖 SDK | 不再是 Hub 的运行时或持久化依赖。跨域数据只能以后通过显式版本化 API 同步，不能重新注入 DataStore |
-| `eidolon_channel` | 独立 LiveKit voice worker，包含 Agent worker、STT/TTS/VAD/EOT，当前仍依赖 SDK/Data | 作为外部 Channel Provider：实现 HTTP provision/renew/revoke 和 DataEnvelope 接口；继续独占设备 URL/Room/Token/TURN/Codec |
+| `eidolon_channel` | 独立 LiveKit voice worker，包含 Agent worker、STT/TTS/VAD/EOT，当前仍依赖 SDK/Data | 作为外部 Channel Provider：实现 desired-state sync、lifecycle callback 和 DataEnvelope 接口；继续独占设备 URL/Room/Token/TURN/Codec 与内部路由策略 |
 | `eidolon_agent` | 被 LiveKit voice pipeline 通过 gRPC 调用的 Brain，不是 LiveKit client；当前使用 NATS/Memory/Data，且旧 blackboard KV 读取与新 Directory 不兼容 | 不成为 Connector。迁移为调用 Hub Device Management/API 或接收 Provider 标准控制事件，不解析 mDNS/MQTT/opaque binding；不得要求 Hub 保留 NATS |
 | `eidolon_memory` | 外部长期记忆服务，MCP read、NATS write、supervisor/discovery | 不进入设备在线或 Channel 编排；Agent 是主要业务消费者 |
 | `eidolon_vision` | host visual cortex，图像内存处理后只向 Hub 发 bounded `sense.*` facts；当前合同来自 SDK | 改为消费 Hub 发布的 Sense JSON Schema/generated artifact；像素永不经过 Hub |
@@ -43,13 +43,9 @@ flowchart TB
 
 ## 外部 Provider 必须实现的最小接口
 
-Provider 的 `POST /v1/channels/operations` 接受：
+Provider 实现 `POST {contract_url}/device-channels/sync`，接收稳定 operation ID、Hub ID，以及最小的设备身份、Manifest revision、审批/撤销和 connected desired state。它返回零个或多个通用 Assignment 与 base64 opaque binding；不可达/撤销设备返回空集合，活跃设备至少返回可靠管理数据通道。重复 operation 必须幂等。
 
-- `channel.provision`：request/device/profile/required kinds/expiry；
-- `channel.renew`：channel/device/profile；
-- `channel.revoke`：channel/reason。
-
-响应只返回通用 Lease 和 base64 opaque binding。Hub 向 Provider 的 `POST /v1/data/envelopes` 发送命令，Provider 把 WSS/LiveKit 设备 Ack/Result/State/Event 转换后提交到 Hub 的 `POST /api/provider/v1/data/inbound`。音视频 track 保持 Provider 内部，不进入 Envelope 或 Hub。
+Hub 向 Provider 的 `POST {contract_url}/data/envelopes` 发送命令；Provider 通过 Hub 的 `/channels/lifecycle` 报告 active/closed/failed，并把设备 Ack/Result/State/Event 提交到 `/data/inbound`。音视频 track 保持 Provider 内部，不进入 Envelope 或 Hub。
 
 Hub wheel 包含 `hub/contracts/schemas`、`bindings/asyncapi.yaml` 和 golden examples，非 Python 终端可直接生成自己的 DTO；不要通过导入 Hub Domain Entity 共享运行时对象。
 
@@ -57,11 +53,12 @@ Hub wheel 包含 `hub/contracts/schemas`、`bindings/asyncapi.yaml` 和 golden e
 
 当前 Admin registry、Channel、Vision、Mobile 和 Web README 都记录了旧接口或 SDK 合同。这些仓库未在本次 Hub-only workspace 中修改，因此真实整栈切换必须作为独立、可回滚的 consumer migration：
 
-1. 先给 `eidolon_channel` 增加 HTTP Provider binding，并通过 Hub conformance suite。
-2. 更新一类设备实现 URI + Connection + opaque grant；保留 Local/Cloud 独立配置。
-3. 更新 Admin proxy/页面及 JWT credential issuer。
-4. 将 Agent 的旧 NATS KV blackboard reader 切到 Hub Directory/API；旧 key/value 与新模型并不兼容，不能假设已有桥接。
-5. 将 Vision/Sense consumer 指向 Hub 版本化 Schema。
-6. 再切换 Mobile/Web/其他终端；旧 Hub runtime 已删除，不以双写或 NATS 桥接维持旧合同。
+1. 先完成 Hub Unit、Contract、Local/Cloud Functional、Deployment Mode 和独立 Contract E2E 门禁；真实基础设施缺失必须保留明确的未通过状态。
+2. 再给 `eidolon_channel` 增加 HTTP Provider binding，并通过 Hub conformance suite。
+3. 更新一类设备实现 URI + Connection + opaque grant；保留 Local/Cloud 独立配置。
+4. 更新 Admin proxy/页面及 JWT credential issuer。
+5. 将 Agent 的旧 NATS KV blackboard reader 切到 Hub Directory/API；旧 key/value 与新模型并不兼容，不能假设已有桥接。
+6. 将 Vision/Sense consumer 指向 Hub 版本化 Schema。
+7. 再切换 Mobile/Web/其他终端；旧 Hub runtime 已删除，不以双写或 NATS 桥接维持旧合同。
 
-在 consumer 完成前，不能声称现有 Eidolon OS dev stack 已对新生产入口做过真实端到端验收；Hub 内的 Fake Provider 功能测试只证明契约和补偿逻辑。
+在 consumer 完成前，不能声称现有 Eidolon OS dev stack 已对新生产入口做过真实端到端验收。Hub 的 Reference Provider 黑盒 E2E 只证明 Hub 发布契约，不证明兄弟项目已经兼容。

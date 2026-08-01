@@ -149,6 +149,48 @@ def test_production_config_contains_no_provider_or_hardware_details() -> None:
     assert {value for value in forbidden if value in settings_source} == set()
 
 
+def test_configuration_has_one_canonical_yaml_and_current_env_contract() -> None:
+    assert (ROOT / "config" / "settings.yaml").is_file()
+    assert not (ROOT / "config" / "settings.example.yaml").exists()
+    assert not (ROOT / ".env.example").exists()
+
+    environment_source = (ROOT / "config" / ".env.example").read_text(encoding="utf-8")
+    required = {
+        "EIDOLON_HUB_LEASE_SECRET",
+        "EIDOLON_HUB_MANAGEMENT_JWT_SECRET",
+        "EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN",
+    }
+    retired = {"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_API_URL", "MDNS_CONFIG_PATH"}
+
+    assert all(f"{name}=" in environment_source for name in required)
+    assert all(name not in environment_source for name in retired)
+
+
+def test_hub_has_no_legacy_channel_profile_or_device_negotiation_source() -> None:
+    retired = {
+        "ChannelProfile",
+        "provisioner_ref",
+        "profile_name",
+        "channel.offer",
+        "channel.accept",
+    }
+    violations = []
+    for path in (ROOT / "hub").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        found = sorted(value for value in retired if value in source)
+        if found:
+            violations.append(f"{path.relative_to(ROOT)}: {found}")
+    assert violations == []
+
+
+def test_opaque_channel_bindings_cannot_be_persisted() -> None:
+    persistence_sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "hub" / "adapters" / "persistence").rglob("*.py")
+    )
+    assert "opaque_binding" not in persistence_sources
+
+
 def test_legacy_runtime_has_been_removed() -> None:
     assert not any((ROOT / "hub" / "legacy").rglob("*.py"))
 

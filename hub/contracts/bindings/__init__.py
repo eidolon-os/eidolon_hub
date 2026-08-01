@@ -2,9 +2,10 @@
 
 from hub.contracts.bindings.channel import (
     ChannelGrant,
-    ChannelNegotiationSignal,
-    ChannelRequest,
+    ChannelLifecycleEvent,
     DataEnvelope,
+    ProviderChannelSyncRequest,
+    ProviderChannelSyncResponse,
 )
 from hub.contracts.bindings.common import DeviceIdentity
 from hub.contracts.bindings.connection import (
@@ -21,8 +22,7 @@ from hub.contracts.bindings.device import DeviceManifest, DeviceRegistration
 
 __all__ = [
     "ChannelGrant",
-    "ChannelNegotiationSignal",
-    "ChannelRequest",
+    "ChannelLifecycleEvent",
     "ConnectionAccepted",
     "ConnectionChallenge",
     "ConnectionClosed",
@@ -35,4 +35,6 @@ __all__ = [
     "DeviceManifest",
     "DeviceRegistration",
     "HubDescriptor",
+    "ProviderChannelSyncRequest",
+    "ProviderChannelSyncResponse",
 ]

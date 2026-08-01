@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, field_validator
 
 from hub.contracts.bindings.common import ContractModel
+from hub.contracts.bindings.device import DeviceManifest
 
 ChannelKind = Literal["reliable-data", "realtime-data", "audio", "video"]
 
@@ -74,54 +74,86 @@ class DeviceEventPayload(ContractModel):
         return _json_text(value, require_object=True)
 
 
-class ChannelNegotiationSignal(ContractModel):
-    operation: Literal["channel.offer", "channel.accept", "channel.close"]
-    request_id: str = Field(min_length=1, max_length=96)
+class ProviderChannelDevice(ContractModel):
     device_id: str = Field(min_length=1, max_length=128)
-    connection_id: str = Field(min_length=1, max_length=128)
-    lease_token: str = Field(min_length=16, max_length=512, repr=False)
-    channel_id: str | None = Field(default=None, max_length=128)
-    reason: str = Field(default="", max_length=256)
+    public_key_fingerprint: str = Field(min_length=1, max_length=512, repr=False)
+    tenant_id: str = Field(min_length=1, max_length=128)
+    owner_id: str | None = Field(min_length=1, max_length=128)
+    display_name: str = Field(default="", max_length=256)
+    device_kind: str = Field(min_length=1, max_length=96)
+    manifest: DeviceManifest
+    manifest_revision: str = Field(min_length=1, max_length=96)
+    approved: bool
+    revoked: bool
+    connected: bool
 
 
-class ChannelRequest(ContractModel):
-    operation: Literal["channel.request"] = "channel.request"
-    request_id: str = Field(min_length=1, max_length=96)
-    device_id: str = Field(min_length=1, max_length=128)
-    profile_name: str = Field(min_length=1, max_length=96)
-    required_kinds: tuple[ChannelKind, ...] = Field(min_length=1, max_length=4)
+class ProviderChannelSyncRequest(ContractModel):
+    operation: Literal["channel.sync-device"] = "channel.sync-device"
+    operation_id: str = Field(min_length=1, max_length=128)
+    hub_id: str = Field(min_length=1, max_length=128)
+    device: ProviderChannelDevice
+
+
+class ProviderChannelAssignment(ContractModel):
+    channel_id: str = Field(min_length=1, max_length=128)
+    purpose: str = Field(min_length=1, max_length=96)
+    kinds: tuple[ChannelKind, ...] = Field(min_length=1, max_length=4)
+    binding_format: str = Field(min_length=1, max_length=128)
+    issued_at_ms: int = Field(ge=0)
     expires_at_ms: int = Field(ge=0)
+    opaque_binding: str = Field(min_length=1, max_length=87_384, repr=False)
 
-    @field_validator("required_kinds", mode="before")
+    @field_validator("kinds", mode="before")
     @classmethod
     def _kind_arrays(cls, value):
+        return tuple(value) if isinstance(value, list) else value
+
+    @field_validator("kinds")
+    @classmethod
+    def _unique_kinds(cls, value: tuple[ChannelKind, ...]) -> tuple[ChannelKind, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("channel kinds must be unique")
+        return value
+
+
+class ProviderChannelSyncResponse(ContractModel):
+    operation: Literal["channel.assignments"] = "channel.assignments"
+    operation_id: str = Field(min_length=1, max_length=128)
+    device_id: str = Field(min_length=1, max_length=128)
+    manifest_revision: str = Field(min_length=1, max_length=96)
+    channels: tuple[ProviderChannelAssignment, ...] = Field(default=(), max_length=16)
+
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _channel_arrays(cls, value):
         return tuple(value) if isinstance(value, list) else value
 
 
 class ChannelGrant(ContractModel):
     operation: Literal["channel.grant"] = "channel.grant"
-    request_id: str = Field(min_length=1, max_length=96)
+    operation_id: str = Field(min_length=1, max_length=128)
     channel_id: str = Field(min_length=1, max_length=128)
-    profile_name: str = Field(min_length=1, max_length=96)
+    purpose: str = Field(min_length=1, max_length=96)
+    kinds: tuple[ChannelKind, ...] = Field(min_length=1, max_length=4)
+    binding_format: str = Field(min_length=1, max_length=128)
+    issued_at_ms: int = Field(ge=0)
     lease_expires_at_ms: int = Field(ge=0)
     opaque_binding: str = Field(min_length=1, max_length=87_384, repr=False)
+
+    @field_validator("kinds", mode="before")
+    @classmethod
+    def _kind_arrays(cls, value):
+        return tuple(value) if isinstance(value, list) else value
 
 
 class ChannelLifecycleEvent(ContractModel):
     operation: Literal["channel.lifecycle"] = "channel.lifecycle"
     channel_id: str = Field(min_length=1, max_length=128)
-    state: Literal["accepted", "active", "renewing", "closed", "failed"]
+    device_id: str = Field(min_length=1, max_length=128)
+    state: Literal["active", "closed", "failed"]
     occurred_at_ms: int = Field(ge=0)
     reason: str = Field(default="", max_length=256)
-
-
-class ChannelProvisionStatus(ContractModel):
-    operation: Literal["channel.provision-status"] = "channel.provision-status"
-    request_id: str = Field(min_length=1, max_length=96)
-    channel_id: str = Field(min_length=1, max_length=128)
-    profile_name: str = Field(min_length=1, max_length=96)
-    lease_expires_at: datetime
-    grant_delivery: Literal["connection-signaling"] = "connection-signaling"
 
 
 class DataEnvelope(ContractModel):

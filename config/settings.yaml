@@ -1,11 +1,8 @@
-# Hub structured settings — 密钥占位符 = 环境变量名，值由 config/.env 注入
+# Hub structured non-secret settings; credentials are loaded from config/.env.
 
 api:
   host: 0.0.0.0
   port: 8082
-
-logging:
-  level: DEBUG
 
 observability:
   enabled: true
@@ -19,8 +16,13 @@ connection_plane:
   public_base_url: https://eidolon-hub.local:8082
   lease_seconds: 45
   heartbeat_after_ms: 15000
-  unicast_dns_sd_service: ""
-  explicit_descriptor_uris: []
+  # Discovery publisher: advertises Descriptor URI but never creates a
+  # ConnectionLease. It is grouped here as part of Connection Plane ingress.
+  mdns:
+    enabled: true
+    service_type: _eidolon-hub._tcp.local.
+    service_name: Eidolon Hub._eidolon-hub._tcp.local.
+    hostname: eidolon-hub
   mqtt:
     enabled: false
     connector_id: mqtt-cloud
@@ -30,25 +32,10 @@ connection_plane:
     password_env: EIDOLON_HUB_MQTT_PASSWORD
     priority: 100
 
-channel_control:
-  management_profile: management-data
-  provider_token_env: EIDOLON_HUB_PROVIDER_TOKEN
-  profiles:
-    management-data:
-      required_kinds: [reliable-data]
-      provisioner_ref: channel-provisioner/default-data
-    realtime-media:
-      required_kinds: [realtime-data, audio, video]
-      provisioner_ref: channel-provisioner/realtime
-  provider_endpoints:
-    channel-provisioner/default-data: http://127.0.0.1:8090
-    channel-provisioner/realtime: http://127.0.0.1:8090
-
-mdns:
-  enabled: true
-  service_type: _eidolon-hub._tcp.local.
-  service_name: Eidolon Hub._eidolon-hub._tcp.local.
-  hostname: eidolon-hub
+# Hub knows only this versioned contract base. Transport/media policy and
+# dynamic credentials are wholly owned by the external Channel Provider.
+channel_provider:
+  contract_url: http://127.0.0.1:8090/v1
 
 persistence:
   adapter: sqlite

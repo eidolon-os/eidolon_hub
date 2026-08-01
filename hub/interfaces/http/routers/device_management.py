@@ -1,4 +1,4 @@
-"""HTTP interface for provider-neutral device directory and channel requests."""
+"""HTTP interface for the provider-neutral device bus."""
 
 from __future__ import annotations
 
@@ -10,13 +10,8 @@ from fastapi import APIRouter, Header, HTTPException
 
 from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.get_command import GetCommand
-from hub.application.use_cases.provision_channel import (
-    DeviceUnavailable,
-    ProvisionChannel,
-)
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.application.use_cases.send_command import SendCommand
-from hub.contracts.bindings.channel import ChannelProvisionStatus
 from hub.contracts.bindings.device import (
     DeviceApprovalRequest,
     DeviceBusEventPage,
@@ -27,13 +22,11 @@ from hub.contracts.bindings.device import (
     DeviceRevocationRequest,
 )
 from hub.contracts.mappers import (
-    channel_status_to_wire,
     command_status_to_wire,
     directory_entry_to_wire,
     lifecycle_status_to_wire,
     stored_event_to_wire,
 )
-from hub.domain.channels.selection import ChannelProfileUnavailable
 from hub.ports.event_bus import EventStreamReader
 from hub.ports.identity import ManagementAuthorizer
 from hub.ports.repositories import DeviceDirectoryRepository
@@ -42,7 +35,6 @@ from hub.ports.repositories import DeviceDirectoryRepository
 @dataclass(frozen=True, slots=True)
 class DeviceManagementHttpServices:
     directory: DeviceDirectoryRepository
-    provision_channel: ProvisionChannel
     send_command: SendCommand
     get_command: GetCommand
     approve_device: ApproveDevice
@@ -98,31 +90,6 @@ def create_device_management_router(
             next_stream_position=(stored[-1].stream_position if stored else after_stream_position),
             events=tuple(stored_event_to_wire(item) for item in stored),
         )
-
-    @router.post(
-        "/devices/{device_id}/channels/{profile_name}",
-        response_model=ChannelProvisionStatus,
-    )
-    async def request_channel(
-        device_id: str,
-        profile_name: str,
-        authorization: str = Header(alias="Authorization"),
-    ):
-        runtime = current()
-        try:
-            await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=None, device_id=device_id
-            )
-            grant = await runtime.provision_channel.execute(
-                device_id=device_id, profile_name=profile_name
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except (DeviceUnavailable, ChannelProfileUnavailable) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        # Returning only non-secret lifecycle metadata prevents the HTTP
-        # control client from becoming another channel-binding consumer.
-        return channel_status_to_wire(grant)
 
     @router.post("/devices/{device_id}/commands", response_model=DeviceCommandStatus)
     async def send_device_command(

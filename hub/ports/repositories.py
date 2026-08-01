@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from hub.domain.channels.entities import ChannelLease
+from hub.domain.channels.entities import ChannelLease, ProviderSyncRecord
 from hub.domain.commands.entities import DeviceCommand
 from hub.domain.connections.entities import ConnectionLease, DeviceAuthorityLease
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
@@ -76,42 +75,27 @@ class ChannelLeaseRepository(Protocol):
     async def upsert(self, lease: ChannelLease) -> ChannelLease: ...
     async def delete(self, channel_id: str) -> None: ...
     async def active_for_device(
-        self, device_id: str, *, now: datetime, profile_name: str | None = None
+        self, device_id: str, *, now: datetime, purpose: str | None = None
     ) -> tuple[ChannelLease, ...]: ...
     async def list_for_device(self, device_id: str) -> tuple[ChannelLease, ...]: ...
+
+
+class ChannelProviderSyncRepository(Protocol):
+    async def get(self, device_id: str) -> ProviderSyncRecord | None: ...
+    async def try_claim(
+        self,
+        desired: ProviderSyncRecord,
+        *,
+        owner_instance_id: str,
+        now: datetime,
+        claim_ttl: timedelta,
+    ) -> ProviderSyncRecord | None: ...
+    async def mark_succeeded(self, *, device_id: str, operation_id: str, now: datetime) -> None: ...
+    async def mark_failed(
+        self, *, device_id: str, operation_id: str, now: datetime, error: str
+    ) -> None: ...
 
 
 class ChannelCursorRepository(Protocol):
     async def next_outbound(self, channel_id: str) -> int: ...
     async def accept_inbound(self, *, channel_id: str, sequence: int, envelope_id: str) -> bool: ...
-
-
-@dataclass(frozen=True, slots=True)
-class GuardBindingContext:
-    binding_id: str
-    owner_id: str
-    device_id: str
-    guard_companion_id: str
-    policy_id: str
-    policy_config_json: str
-    runtime_config_json: str
-    config_revision: int
-
-
-class GuardRepository(Protocol):
-    async def active_binding_for_device(self, device_id: str) -> GuardBindingContext | None: ...
-
-
-@dataclass(frozen=True, slots=True)
-class LedgerEvent:
-    event_id: str
-    event_type: str
-    owner_id: str
-    subject_type: str
-    subject_id: str
-    occurred_at: datetime
-    payload_json: str
-
-
-class EventLedger(Protocol):
-    async def append(self, event: LedgerEvent) -> None: ...

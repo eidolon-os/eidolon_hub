@@ -58,3 +58,11 @@ class ProjectDeviceDirectory:
         # No signaling reference, credential, provider name, channel address or
         # opaque binding enters this durable projection.
         return await self._directory.upsert(entry)
+
+    async def execute_all(self) -> tuple[DeviceDirectoryEntry, ...]:
+        """Recompute time-dependent online facts from durable authorities."""
+
+        projected: list[DeviceDirectoryEntry] = []
+        for device in await self._devices.list_all():
+            projected.append(await self.execute(device.identity.device_id))
+        return tuple(projected)

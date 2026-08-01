@@ -11,7 +11,9 @@ from hub.application.use_cases.ingest_data_envelope import (
 )
 from hub.domain.channels.entities import (
     ChannelDataEnvelope,
+    ChannelKind,
     ChannelLease,
+    ChannelState,
     CommandAckData,
     CommandResultData,
     DeviceEventData,
@@ -33,9 +35,12 @@ class _Channels:
         self.lease = ChannelLease(
             channel_id="channel-1",
             device_id="device-1",
-            profile_name="management-data",
+            purpose="management",
+            kinds=frozenset({ChannelKind.RELIABLE_DATA}),
+            binding_format="application/eidolon-test+json",
             issued_at=NOW - timedelta(seconds=1),
             expires_at=NOW + timedelta(minutes=5),
+            state=ChannelState.ACTIVE,
         )
 
     async def get(self, channel_id):

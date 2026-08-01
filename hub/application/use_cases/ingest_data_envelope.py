@@ -40,7 +40,7 @@ class IngestDataEnvelope:
     async def execute(self, envelope: ChannelDataEnvelope) -> DeviceCommand | None:
         now = self._clock.now()
         lease = await self._channels.get(envelope.channel_id)
-        if lease is None or lease.device_id != envelope.device_id or lease.expires_at <= now:
+        if lease is None or lease.device_id != envelope.device_id or not lease.is_active(now):
             raise DataEnvelopeRejected("active channel lease required")
         if isinstance(envelope.payload, InboundCommandData):
             raise DataEnvelopeRejected("devices cannot send command envelopes")

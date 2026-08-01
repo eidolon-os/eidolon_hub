@@ -128,14 +128,6 @@ class _Events:
         self.values.append(event)
 
 
-class _Signals:
-    def __init__(self):
-        self.values = []
-
-    async def execute(self, signal):
-        self.values.append(signal)
-
-
 def _client():
     clock = _Clock()
     connections = _Connections()
@@ -176,7 +168,6 @@ def _client():
                 renew=renew,
                 mailbox=HttpSignalMailbox(),
                 authenticate_connection=authenticate_connection,
-                handle_channel_signal=_Signals(),
             )
         )
     )

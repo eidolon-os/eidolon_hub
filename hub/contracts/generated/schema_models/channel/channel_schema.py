@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,8 +14,14 @@ class ChannelGrant(BaseModel):
         frozen=True,
     )
     operation: Literal["channel.grant"]
-    request_id: Annotated[str, Field(max_length=96, min_length=1)]
+    operation_id: Annotated[str, Field(max_length=128, min_length=1)]
     channel_id: Annotated[str, Field(max_length=128, min_length=1)]
-    profile_name: Annotated[str, Field(max_length=96, min_length=1)]
+    purpose: Annotated[str, Field(max_length=96, min_length=1)]
+    kinds: Annotated[
+        List[Literal["reliable-data", "realtime-data", "audio", "video"]],
+        Field(max_length=4, min_length=1),
+    ]
+    binding_format: Annotated[str, Field(max_length=128, min_length=1)]
+    issued_at_ms: Annotated[int, Field(ge=0)]
     lease_expires_at_ms: Annotated[int, Field(ge=0)]
     opaque_binding: Annotated[str, Field(max_length=87384, min_length=1)]

@@ -65,7 +65,7 @@ def test_non_connection_topic_is_rejected() -> None:
         )
 
 
-def test_channel_signal_requires_connection_lease_credentials() -> None:
+def test_device_channel_negotiation_is_not_an_mqtt_inbound_operation() -> None:
     payload = json.dumps(
         {
             "operation": "channel.accept",
@@ -75,7 +75,7 @@ def test_channel_signal_requires_connection_lease_credentials() -> None:
         }
     ).encode()
 
-    with pytest.raises(MqttContractRejected, match="violates"):
+    with pytest.raises(MqttContractRejected, match="not allowed"):
         MqttConnectionCodec.decode(_topic(), payload)
 
 

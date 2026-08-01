@@ -10,7 +10,7 @@ from hypothesis import given, settings
 from hypothesis_jsonschema import from_schema
 from jsonschema import Draft202012Validator
 
-from hub.contracts.bindings.channel import ChannelGrant, ChannelProvisionStatus, DataEnvelope
+from hub.contracts.bindings.channel import ChannelGrant, ChannelLifecycleEvent, DataEnvelope
 from hub.contracts.bindings.connection import ConnectionHello, HubDescriptor
 from hub.contracts.bindings.device import (
     DeviceCommandStatus,
@@ -51,9 +51,12 @@ def test_generated_contract_shapes_are_current() -> None:
 
 def test_generated_channel_grant_matches_source_schema() -> None:
     grant = ChannelGrant(
-        request_id="request-1",
+        operation_id="channel-sync:sha256:desired",
         channel_id="channel-1",
-        profile_name="management-data",
+        purpose="management",
+        kinds=("reliable-data",),
+        binding_format="application/eidolon-channel+json",
+        issued_at_ms=1_799_999_000_000,
         lease_expires_at_ms=1_800_000_000_000,
         opaque_binding="encrypted-provider-binding",
     )
@@ -92,12 +95,12 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
             ),
         ),
         (
-            "channel/provision-status.schema.json",
-            ChannelProvisionStatus(
-                request_id="request-1",
+            "channel/lifecycle.schema.json",
+            ChannelLifecycleEvent(
                 channel_id="channel-1",
-                profile_name="management-data",
-                lease_expires_at=now,
+                device_id="device-1",
+                state="active",
+                occurred_at_ms=int(now.timestamp() * 1000),
             ),
         ),
         (

@@ -1,6 +1,6 @@
 asyncapi: 3.0.0
 info:
-  title: Eidolon Hub MQTT5 Connection and Channel Signaling
+  title: Eidolon Hub MQTT5 Connection and Grant Signaling
   version: 1.0.0
   description: MQTT is restricted to connection lifecycle and channel signaling.
 channels:
@@ -12,8 +12,6 @@ channels:
       heartbeat: { $ref: '#/components/messages/heartbeat' }
       registration: { $ref: '#/components/messages/registration' }
       closed: { $ref: '#/components/messages/closed' }
-      channelAccept: { $ref: '#/components/messages/channelAccept' }
-      channelClose: { $ref: '#/components/messages/channelClose' }
   connectionOutbound:
     address: eidolon/v1/devices/{deviceId}/connection/out
     messages:
@@ -36,6 +34,4 @@ components:
     accepted: { payload: { $ref: '../schemas/connection/lifecycle.schema.json#/$defs/accepted' } }
     registration: { payload: { $ref: '../schemas/connection/registration.schema.json' } }
     closed: { payload: { $ref: '../schemas/connection/lifecycle.schema.json#/$defs/closed' } }
-    channelAccept: { payload: { $ref: '../schemas/channel/negotiation-signal.schema.json' } }
-    channelClose: { payload: { $ref: '../schemas/channel/negotiation-signal.schema.json' } }
     channelGrant: { payload: { $ref: '../schemas/channel/channel.schema.json' } }

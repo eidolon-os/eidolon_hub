@@ -7,14 +7,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hub.adapters.channels.provisioner_client import ProvisionerClient
+from hub.adapters.channels.provider_client import ChannelProviderHttpClient
 from hub.adapters.connections.mqtt import Mqtt5Connector
 from hub.adapters.discovery.zeroconf import ZeroconfHubAdvertiser
-from hub.domain.channels.entities import (
-    ChannelKind,
-    ChannelProfile,
-    ChannelRequest,
-)
+from hub.domain.channels.entities import ProviderDeviceContext
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -22,7 +18,6 @@ NOW = datetime(2026, 8, 1, tzinfo=UTC)
 class _AsyncZeroconf:
     def __init__(self, *args, **kwargs):
         self.registered = []
-        self.closed = False
 
     async def async_register_service(self, info, **kwargs):
         self.registered.append(info)
@@ -31,7 +26,7 @@ class _AsyncZeroconf:
         self.registered.remove(info)
 
     async def async_close(self):
-        self.closed = True
+        pass
 
 
 def _mdns_connector(monkeypatch):
@@ -76,55 +71,51 @@ async def test_connection_connectors_share_idempotent_lifecycle_contract(
     await connector.stop()
 
 
-class _RequestReply:
-    def __init__(self):
-        self.operations = []
-
-    async def request(self, subject, payload, *, timeout):
-        message = json.loads(payload)
-        self.operations.append((subject, message["operation"], timeout))
-        if message["operation"] == "channel.revoke":
-            return b"{}"
+class _ProviderTransport:
+    async def request(self, route, payload, *, timeout):
+        request = json.loads(payload)
         return json.dumps(
             {
-                "request_id": message.get("request_id", "renew-request"),
-                "channel_id": message.get("channel_id", "channel-1"),
-                "device_id": message["device_id"],
-                "profile_name": message["profile_name"],
-                "issued_at": NOW.isoformat(),
-                "expires_at": (NOW + timedelta(minutes=5)).isoformat(),
-                "renew_after": (NOW + timedelta(minutes=4)).isoformat(),
-                "opaque_binding_b64": base64.b64encode(b"provider-owned").decode(),
+                "operation": "channel.assignments",
+                "operation_id": request["operation_id"],
+                "device_id": request["device"]["device_id"],
+                "manifest_revision": request["device"]["manifest_revision"],
+                "channels": [
+                    {
+                        "channel_id": "channel-1",
+                        "purpose": "management",
+                        "kinds": ["reliable-data"],
+                        "binding_format": "application/test+json",
+                        "issued_at_ms": int(NOW.timestamp() * 1000),
+                        "expires_at_ms": int((NOW + timedelta(minutes=5)).timestamp() * 1000),
+                        "opaque_binding": base64.b64encode(b"provider-owned").decode(),
+                    }
+                ],
             }
         ).encode()
 
 
-async def test_external_channel_provider_client_conforms_to_full_lifecycle_port() -> None:
-    transport = _RequestReply()
-    provisioner = ProvisionerClient(
-        transport,
-        route="https://provider.example/v1/channels/operations",
-        timeout_seconds=3,
+async def test_channel_provider_adapter_conforms_to_single_desired_state_port() -> None:
+    client = ChannelProviderHttpClient(
+        _ProviderTransport(), contract_url="https://provider.example/v1"
     )
-    request = ChannelRequest(
-        request_id="request-1",
+    context = ProviderDeviceContext(
+        operation_id="channel-sync:sha256:desired",
+        hub_id="hub-1",
         device_id="device-1",
-        profile=ChannelProfile(
-            name="management-data",
-            required_kinds=frozenset({ChannelKind.RELIABLE_DATA}),
-            provisioner_ref="provider/default",
-        ),
-        requested_at=NOW,
-        expires_at=NOW + timedelta(seconds=30),
+        public_key_fingerprint="p256:fingerprint",
+        tenant_id="default",
+        owner_id="owner-1",
+        display_name="Device",
+        device_kind="generic",
+        manifest_json='{"schema_version":1,"title":"Device"}',
+        manifest_revision="sha256:manifest",
+        approved=True,
+        revoked=False,
+        connected=True,
     )
 
-    grant = await provisioner.provision(request)
-    renewed = await provisioner.renew(grant.lease)
-    await provisioner.revoke(renewed.lease, reason="test-complete")
+    assignments = await client.sync_device(context)
 
-    assert [item[1] for item in transport.operations] == [
-        "channel.provision",
-        "channel.renew",
-        "channel.revoke",
-    ]
-    assert "provider-owned" not in repr(grant)
+    assert assignments.device_id == "device-1"
+    assert assignments.grants[0].opaque_binding.relay_bytes() == b"provider-owned"

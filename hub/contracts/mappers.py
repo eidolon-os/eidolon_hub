@@ -7,8 +7,7 @@ import json
 from datetime import UTC, datetime
 
 from hub.contracts.bindings.channel import (
-    ChannelNegotiationSignal,
-    ChannelProvisionStatus,
+    ChannelLifecycleEvent,
     CommandAckPayload,
     CommandResultPayload,
     DataEnvelope,
@@ -30,9 +29,8 @@ from hub.contracts.bindings.device import (
 )
 from hub.domain.channels.entities import (
     ChannelDataEnvelope,
-    ChannelGrant,
-    ChannelNegotiationIntent,
-    ChannelNegotiationOperation,
+    ChannelLifecycle,
+    ChannelState,
     CommandAckData,
     CommandResultData,
     DeviceEventData,
@@ -139,16 +137,13 @@ def data_envelope_to_domain(envelope: DataEnvelope) -> ChannelDataEnvelope:
     )
 
 
-def channel_signal_to_domain(
-    signal: ChannelNegotiationSignal,
-) -> ChannelNegotiationIntent:
-    return ChannelNegotiationIntent(
-        operation=ChannelNegotiationOperation(signal.operation),
-        request_id=signal.request_id,
-        device_id=signal.device_id,
-        connection_id=signal.connection_id,
-        channel_id=signal.channel_id,
-        reason=signal.reason,
+def channel_lifecycle_to_domain(event: ChannelLifecycleEvent) -> ChannelLifecycle:
+    return ChannelLifecycle(
+        channel_id=event.channel_id,
+        device_id=event.device_id,
+        state=ChannelState(event.state),
+        occurred_at=datetime.fromtimestamp(event.occurred_at_ms / 1_000, tz=UTC),
+        reason=event.reason,
     )
 
 
@@ -219,13 +214,4 @@ def stored_event_to_wire(stored: StoredDomainEvent) -> DeviceBusEvent:
         device_id=event.subject,
         occurred_at=event.occurred_at,
         data_json=event.data_json,
-    )
-
-
-def channel_status_to_wire(grant: ChannelGrant) -> ChannelProvisionStatus:
-    return ChannelProvisionStatus(
-        request_id=grant.request_id,
-        channel_id=grant.lease.channel_id,
-        profile_name=grant.lease.profile_name,
-        lease_expires_at=grant.lease.expires_at,
     )

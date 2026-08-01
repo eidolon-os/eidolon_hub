@@ -4,14 +4,17 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from hub.domain.channels.entities import ChannelGrant, ChannelLease, ChannelRequest
+from hub.domain.channels.entities import (
+    ChannelAssignmentSet,
+    ChannelGrant,
+    ChannelLifecycle,
+    ProviderDeviceContext,
+)
 from hub.domain.commands.entities import DeviceCommand
 
 
-class ChannelProvisioner(Protocol):
-    async def provision(self, request: ChannelRequest) -> ChannelGrant: ...
-    async def renew(self, lease: ChannelLease) -> ChannelGrant: ...
-    async def revoke(self, lease: ChannelLease, *, reason: str) -> None: ...
+class ChannelProviderControl(Protocol):
+    async def sync_device(self, context: ProviderDeviceContext) -> ChannelAssignmentSet: ...
 
 
 class ChannelGrantSender(Protocol):
@@ -26,5 +29,5 @@ class DataEnvelopeIngress(Protocol):
     async def ingest_raw(self, raw: bytes) -> bool: ...
 
 
-class DeviceChannelRevoker(Protocol):
-    async def execute(self, device_id: str, *, reason: str) -> None: ...
+class ChannelLifecycleIngress(Protocol):
+    async def execute(self, lifecycle: ChannelLifecycle) -> None: ...

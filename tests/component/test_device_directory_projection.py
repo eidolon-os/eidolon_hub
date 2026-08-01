@@ -40,6 +40,9 @@ class _Devices:
     async def get(self, device_id):
         return self.device if self.device.identity.device_id == device_id else None
 
+    async def list_all(self):
+        return (self.device,)
+
 
 class _Connections:
     def __init__(self, leases):
@@ -123,3 +126,79 @@ async def test_owner_transfer_atomically_removes_old_scope_visibility(database) 
     assert await repository.list(owner_scope="owner-1") == ()
     assert await repository.list(owner_scope="owner-2") == (transferred,)
     assert transferred.revision == 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_marks_naturally_expired_connection_offline(database) -> None:
+    now = _Clock.value
+    clock = _Clock()
+    device = ManagedDevice(
+        identity=DeviceIdentity("device-expiry", "p256:fingerprint"),
+        display_name="Device",
+        device_kind="generic",
+        manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),
+        registered_at=now,
+        updated_at=now,
+        owner_id="owner-1",
+        approved=True,
+    )
+    lease = ConnectionLease(
+        connection_id="https-expiring",
+        device_id="device-expiry",
+        connector_id="https-local",
+        connector_kind=ConnectorKind.HTTPS,
+        signaling_ref="http-mailbox:device-expiry",
+        opened_at=now,
+        renewed_at=now,
+        expires_at=now + timedelta(seconds=45),
+        lease_token="lease-token",
+        identity_fingerprint="p256:fingerprint",
+        hub_instance_id="hub-1",
+        fencing_token=1,
+    )
+    repository = SqlDeviceDirectoryRepository(database)
+    projector = ProjectDeviceDirectory(
+        devices=_Devices(device),
+        connections=_Connections((lease,)),
+        directory=repository,
+        clock=clock,
+    )
+    online = await projector.execute("device-expiry")
+    clock.value = now + timedelta(seconds=46)
+
+    projected = await projector.execute_all()
+
+    assert online.online is True
+    assert projected[0].online is False
+    assert projected[0].connections == ()
+    assert projected[0].revision == 2
+
+
+@pytest.mark.asyncio
+async def test_unchanged_reconcile_does_not_advance_directory_revision(database) -> None:
+    now = _Clock.value
+    clock = _Clock()
+    device = ManagedDevice(
+        identity=DeviceIdentity("device-stable", "p256:fingerprint"),
+        display_name="Stable Device",
+        device_kind="generic",
+        manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),
+        registered_at=now,
+        updated_at=now,
+        owner_id="owner-1",
+        approved=True,
+    )
+    repository = SqlDeviceDirectoryRepository(database)
+    projector = ProjectDeviceDirectory(
+        devices=_Devices(device),
+        connections=_Connections(()),
+        directory=repository,
+        clock=clock,
+    )
+    first = await projector.execute("device-stable")
+    clock.value = now + timedelta(minutes=1)
+
+    second = (await projector.execute_all())[0]
+
+    assert second == first
+    assert second.revision == 1

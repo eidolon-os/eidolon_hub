@@ -9,14 +9,12 @@ from hub.domain.channels.entities import (
     ChannelDataEnvelope,
     ChannelKind,
     ChannelLease,
-    ChannelNegotiationIntent,
-    ChannelNegotiationOperation,
-    ChannelProfile,
-    ChannelRequest,
+    ChannelLifecycle,
+    ChannelState,
     DeviceEventData,
     OpaqueChannelBinding,
+    ProviderDeviceContext,
 )
-from hub.domain.channels.selection import ChannelProfileCatalog, ChannelProfileUnavailable
 from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.connections.entities import (
     ConnectionLease,
@@ -24,7 +22,6 @@ from hub.domain.connections.entities import (
     DeviceAuthorityLease,
 )
 from hub.domain.connections.registry import ConnectionNotFound, ConnectionRegistry
-from hub.domain.devices.capabilities import BODY_OP_PRESENCE_SET
 from hub.domain.devices.entities import DeviceRegistrationIntent, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
@@ -32,19 +29,13 @@ from hub.domain.devices.manifest import DeviceManifestDocument
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
 
-def _profile() -> ChannelProfile:
-    return ChannelProfile(
-        "management-data",
-        frozenset({ChannelKind.RELIABLE_DATA}),
-        "provider/default",
-    )
-
-
 def _channel_lease() -> ChannelLease:
     return ChannelLease(
         channel_id="channel-1",
         device_id="device-1",
-        profile_name="management-data",
+        purpose="management",
+        kinds=frozenset({ChannelKind.RELIABLE_DATA}),
+        binding_format="application/eidolon-test+json",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=1),
     )
@@ -73,37 +64,7 @@ def _manifest() -> DeviceManifestDocument:
     return DeviceManifestDocument.from_mapping({"schema_version": 1, "title": "Device"})
 
 
-@pytest.mark.parametrize(
-    ("changes", "message"),
-    [
-        ({"name": " "}, "name"),
-        ({"required_kinds": frozenset()}, "at least one"),
-        ({"provisioner_ref": " "}, "provisioner_ref"),
-    ],
-)
-def test_channel_profile_invariants(changes, message) -> None:
-    values = {
-        "name": "management-data",
-        "required_kinds": frozenset({ChannelKind.RELIABLE_DATA}),
-        "provisioner_ref": "provider/default",
-    }
-    values.update(changes)
-
-    with pytest.raises(ValueError, match=message):
-        ChannelProfile(**values)
-
-
-def test_channel_request_and_binding_invariants() -> None:
-    base = ChannelRequest("request-1", "device-1", _profile(), NOW, NOW + timedelta(seconds=5))
-    assert base.request_id == "request-1"
-
-    for changes, message in (
-        ({"request_id": ""}, "required"),
-        ({"requested_at": NOW.replace(tzinfo=None)}, "timezone-aware"),
-        ({"expires_at": NOW}, "expire after"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            replace(base, **changes)
+def test_channel_binding_and_lease_invariants() -> None:
     with pytest.raises(ValueError, match="required"):
         OpaqueChannelBinding(b"")
     with pytest.raises(ValueError, match="64KiB"):
@@ -112,10 +73,12 @@ def test_channel_request_and_binding_invariants() -> None:
     assert binding.relay_bytes() == b"encrypted"
 
 
-def test_channel_lease_envelope_and_signal_invariants() -> None:
+def test_channel_lease_envelope_and_lifecycle_invariants() -> None:
     lease = _channel_lease()
     for changes, message in (
         ({"channel_id": ""}, "required"),
+        ({"kinds": frozenset()}, "at least one"),
+        ({"binding_format": ""}, "binding_format"),
         ({"issued_at": NOW.replace(tzinfo=None)}, "timezone-aware"),
         ({"expires_at": NOW}, "after issued_at"),
     ):
@@ -138,27 +101,34 @@ def test_channel_lease_envelope_and_signal_invariants() -> None:
         with pytest.raises(ValueError, match=message):
             replace(envelope, **changes)
 
-    offer = ChannelNegotiationIntent(
-        ChannelNegotiationOperation.OFFER,
-        "signal-1",
+    lifecycle = ChannelLifecycle("channel-1", "device-1", ChannelState.ACTIVE, NOW)
+    assert lease.transition(ChannelState.ACTIVE, occurred_at=NOW).state is ChannelState.ACTIVE
+    with pytest.raises(ValueError, match="before channel issuance"):
+        lease.transition(ChannelState.ACTIVE, occurred_at=NOW - timedelta(seconds=1))
+    with pytest.raises(ValueError, match="pending"):
+        replace(lifecycle, state=ChannelState.PENDING)
+    with pytest.raises(ValueError, match="timezone-aware"):
+        replace(lifecycle, occurred_at=NOW.replace(tzinfo=None))
+
+    context = ProviderDeviceContext(
+        "channel-sync:sha256:desired",
+        "hub-1",
         "device-1",
-        "connection-1",
+        "p256:fingerprint",
+        "default",
+        "owner-1",
+        "Device",
+        "generic",
+        '{"schema_version":1}',
+        "sha256:manifest",
+        True,
+        False,
+        True,
     )
-    assert offer.channel_id is None
     with pytest.raises(ValueError, match="identifiers"):
-        replace(offer, request_id="")
-    with pytest.raises(ValueError, match="channel_id"):
-        replace(offer, operation=ChannelNegotiationOperation.ACCEPT)
-
-
-def test_channel_profile_catalog_failure_paths() -> None:
-    with pytest.raises(ValueError, match="at least one"):
-        ChannelProfileCatalog(())
-    catalog = ChannelProfileCatalog((_profile(),))
-    with pytest.raises(ChannelProfileUnavailable):
-        catalog.get("missing")
-    with pytest.raises(ChannelProfileUnavailable):
-        catalog.select(frozenset({ChannelKind.AUDIO}))
+        replace(context, hub_id="")
+    with pytest.raises(ValueError, match="owner_id"):
+        replace(context, owner_id="")
 
 
 def test_authority_and_connection_invariants_and_renewal_guards() -> None:
@@ -286,7 +256,6 @@ def test_managed_device_registration_and_command_values() -> None:
     intent = DeviceRegistrationIntent("request-1", identity, "Device", "generic", manifest)
     assert intent.manifest_json == manifest.canonical_json
     assert intent.manifest_revision == manifest.revision
-    assert BODY_OP_PRESENCE_SET == "body.presence.set"
     with pytest.raises(ValueError, match="device_kind"):
         replace(device, device_kind="")
     with pytest.raises(ValueError, match="timezone-aware"):

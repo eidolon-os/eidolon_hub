@@ -1,13 +1,20 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from hub.adapters.channels.data_bridge import ProviderDataChannelBridge
 from hub.contracts.bindings.channel import DataEnvelope
-from hub.domain.channels.entities import ChannelDataEnvelope, ChannelLease, ReportedStateData
+from hub.domain.channels.entities import (
+    ChannelDataEnvelope,
+    ChannelKind,
+    ChannelLease,
+    ChannelState,
+    ReportedStateData,
+)
 from hub.domain.commands.entities import CommandState, DeviceCommand
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
@@ -31,13 +38,16 @@ class _Channels:
         self.lease = ChannelLease(
             channel_id="channel-1",
             device_id="device-1",
-            profile_name="management-data",
+            purpose="management",
+            kinds=frozenset({ChannelKind.RELIABLE_DATA}),
+            binding_format="application/eidolon-test+json",
             issued_at=NOW - timedelta(seconds=1),
             expires_at=NOW + timedelta(minutes=5),
+            state=ChannelState.ACTIVE,
         )
 
-    async def active_for_device(self, device_id, *, now, profile_name=None):
-        if device_id == "device-1" and profile_name == "management-data":
+    async def active_for_device(self, device_id, *, now, purpose=None):
+        if device_id == "device-1" and purpose == "management" and self.lease.is_active(now):
             return (self.lease,)
         return ()
 
@@ -138,3 +148,19 @@ async def test_command_requires_active_management_channel() -> None:
 
     with pytest.raises(ConnectionError, match="reliable data channel"):
         await bridge.send_command(_command(device_id="offline-device"))
+
+
+async def test_pending_channel_cannot_carry_inbound_or_outbound_data() -> None:
+    channels = _Channels()
+    channels.lease = replace(channels.lease, state=ChannelState.PENDING)
+    sender, cursors, ingest = _Sender(), _Cursors(), _Ingest()
+    bridge = ProviderDataChannelBridge(
+        sender=sender,
+        channels=channels,
+        cursors=cursors,
+        ingest=ingest,
+        clock=_Clock(),
+    )
+
+    with pytest.raises(ConnectionError, match="reliable data channel"):
+        await bridge.send_command(_command())

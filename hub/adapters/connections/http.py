@@ -10,12 +10,9 @@ from fastapi import APIRouter, HTTPException
 
 from hub.application.use_cases.authenticate_connection import AuthenticateConnection
 from hub.application.use_cases.enroll_device import EnrollDevice, EnrollmentHello
-from hub.application.use_cases.handle_channel_signal import HandleChannelSignal
 from hub.application.use_cases.register_device import RegisterDevice
 from hub.application.use_cases.renew_connection import RenewConnection
-from hub.contracts.bindings.channel import ChannelNegotiationSignal
 from hub.contracts.bindings.connection import (
-    ChannelSignalAccepted,
     ChannelSignalDelivery,
     ConnectionAccepted,
     ConnectionChallenge,
@@ -27,7 +24,6 @@ from hub.contracts.bindings.connection import (
 )
 from hub.contracts.bindings.device import DeviceRegistrationStatus
 from hub.contracts.mappers import (
-    channel_signal_to_domain,
     registration_status_to_wire,
     registration_to_domain,
 )
@@ -68,7 +64,6 @@ class HttpConnectionServices:
     renew: RenewConnection
     mailbox: HttpSignalMailbox
     authenticate_connection: AuthenticateConnection
-    handle_channel_signal: HandleChannelSignal
     heartbeat_after_ms: int = 15_000
     connector_id: str = "https-local"
 
@@ -183,19 +178,5 @@ def create_connection_router(
         timeout = min(max(timeout_seconds, 0.1), 30.0)
         payload = await runtime.mailbox.poll(device_id, timeout_seconds=timeout)
         return ChannelSignalDelivery(payload_json=payload.decode() if payload is not None else None)
-
-    @router.post("/signals", response_model=ChannelSignalAccepted)
-    async def submit_signal(payload: ChannelNegotiationSignal) -> ChannelSignalAccepted:
-        runtime = current()
-        try:
-            await runtime.authenticate_connection.execute(
-                connection_id=payload.connection_id,
-                device_id=payload.device_id,
-                lease_token=payload.lease_token,
-            )
-            await runtime.handle_channel_signal.execute(channel_signal_to_domain(payload))
-        except PermissionError as exc:
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
-        return ChannelSignalAccepted(request_id=payload.request_id)
 
     return router

@@ -11,22 +11,10 @@ from hub.application.use_cases.authenticate_connection import AuthenticateConnec
 from hub.application.use_cases.close_connection import CloseConnection
 from hub.application.use_cases.enroll_device import EnrollDevice, EnrollmentHello
 from hub.application.use_cases.get_command import GetCommand
-from hub.application.use_cases.provision_channel import DeviceUnavailable, ProvisionChannel
 from hub.application.use_cases.register_device import RegisterDevice
-from hub.application.use_cases.renew_channel import RenewChannel
 from hub.application.use_cases.renew_connection import RenewConnection
-from hub.application.use_cases.revoke_channel import RevokeChannel
 from hub.application.use_cases.revoke_device import RevokeDevice
-from hub.application.use_cases.revoke_device_channels import RevokeDeviceChannels
 from hub.application.use_cases.send_command import SendCommand
-from hub.domain.channels.entities import (
-    ChannelGrant,
-    ChannelKind,
-    ChannelLease,
-    ChannelProfile,
-    OpaqueChannelBinding,
-)
-from hub.domain.channels.selection import ChannelProfileCatalog
 from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.connections.entities import (
     ConnectionLease,
@@ -108,24 +96,6 @@ class _Connections:
         )
 
 
-class _Channels:
-    def __init__(self, *leases):
-        self.values = {lease.channel_id: lease for lease in leases}
-
-    async def get(self, key):
-        return self.values.get(key)
-
-    async def upsert(self, value):
-        self.values[value.channel_id] = value
-        return value
-
-    async def delete(self, key):
-        self.values.pop(key, None)
-
-    async def list_for_device(self, device_id):
-        return tuple(value for value in self.values.values() if value.device_id == device_id)
-
-
 class _Authority:
     def __init__(self):
         self.calls = []
@@ -180,21 +150,6 @@ class _Issuer:
         return "issued-lease-token"
 
 
-class _Provider:
-    def __init__(self, grant=None):
-        self.grant = grant
-        self.revoked = []
-
-    async def provision(self, request):
-        return self.grant or _grant(request_id=request.request_id, device_id=request.device_id)
-
-    async def renew(self, lease):
-        return self.grant or _grant(channel_id=lease.channel_id, device_id=lease.device_id)
-
-    async def revoke(self, lease, *, reason):
-        self.revoked.append((lease, reason))
-
-
 class _Sender:
     def __init__(self, error=None):
         self.error = error
@@ -242,41 +197,6 @@ def _connection(**changes) -> ConnectionLease:
     }
     values.update(changes)
     return ConnectionLease(**values)
-
-
-def _channel(**changes) -> ChannelLease:
-    values = {
-        "channel_id": "channel-1",
-        "device_id": "device-1",
-        "profile_name": "management-data",
-        "issued_at": NOW,
-        "expires_at": NOW + timedelta(minutes=5),
-    }
-    values.update(changes)
-    return ChannelLease(**values)
-
-
-def _profile() -> ChannelProfile:
-    return ChannelProfile(
-        "management-data",
-        frozenset({ChannelKind.RELIABLE_DATA}),
-        "provider/default",
-    )
-
-
-def _grant(**changes) -> ChannelGrant:
-    values = {
-        "request_id": "channel-request-1",
-        "lease": _channel(),
-        "opaque_binding": OpaqueChannelBinding(b"encrypted"),
-    }
-    if "channel_id" in changes or "device_id" in changes:
-        values["lease"] = _channel(
-            channel_id=changes.pop("channel_id", "channel-1"),
-            device_id=changes.pop("device_id", "device-1"),
-        )
-    values.update(changes)
-    return ChannelGrant(**values)
 
 
 def _command(**changes) -> DeviceCommand:
@@ -364,7 +284,6 @@ async def test_approval_and_close_reject_invalid_or_missing_devices_and_leases()
         connections=_Connections(),
         events=_Recorder(),
         clock=_Clock(),
-        channel_revoker=_Recorder(),
         directory_projector=_Recorder(),
     )
     with pytest.raises(KeyError):
@@ -438,66 +357,6 @@ async def test_enrollment_rejects_short_unknown_expired_and_mismatched_challenge
             )
 
 
-async def test_provision_channel_failure_paths_revoke_invalid_or_undeliverable_grants() -> None:
-    profile = _profile()
-    catalog = ChannelProfileCatalog((profile,))
-    for devices, connections in (
-        (_Devices(), _Connections(_connection())),
-        (_Devices(_device()), _Connections()),
-    ):
-        with pytest.raises(DeviceUnavailable):
-            await ProvisionChannel(
-                profiles=catalog,
-                provisioners={profile.provisioner_ref: _Provider()},
-                grant_sender=_Sender(),
-                devices=devices,
-                connections=connections,
-                channel_leases=_Channels(),
-                clock=_Clock(),
-                ids=_Ids(),
-            ).execute(device_id="device-1", profile_name=profile.name)
-    with pytest.raises(RuntimeError, match="not configured"):
-        await ProvisionChannel(
-            profiles=catalog,
-            provisioners={},
-            grant_sender=_Sender(),
-            devices=_Devices(_device()),
-            connections=_Connections(_connection()),
-            channel_leases=_Channels(),
-            clock=_Clock(),
-            ids=_Ids(),
-        ).execute(device_id="device-1", profile_name=profile.name)
-
-    invalid_provider = _Provider(_grant(request_id="other-request"))
-    with pytest.raises(RuntimeError, match="mismatched"):
-        await ProvisionChannel(
-            profiles=catalog,
-            provisioners={profile.provisioner_ref: invalid_provider},
-            grant_sender=_Sender(),
-            devices=_Devices(_device()),
-            connections=_Connections(_connection()),
-            channel_leases=_Channels(),
-            clock=_Clock(),
-            ids=_Ids(),
-        ).execute(device_id="device-1", profile_name=profile.name)
-    assert invalid_provider.revoked[0][1] == "invalid-provider-response"
-
-    provider, leases = _Provider(), _Channels()
-    with pytest.raises(ConnectionError, match="signaling"):
-        await ProvisionChannel(
-            profiles=catalog,
-            provisioners={profile.provisioner_ref: provider},
-            grant_sender=_Sender(ConnectionError("signaling failed")),
-            devices=_Devices(_device()),
-            connections=_Connections(_connection()),
-            channel_leases=leases,
-            clock=_Clock(),
-            ids=_Ids(),
-        ).execute(device_id="device-1", profile_name=profile.name)
-    assert leases.values == {}
-    assert provider.revoked[0][1] == "grant-delivery-failed"
-
-
 async def test_registration_authentication_identity_and_projection_boundaries() -> None:
     identity = DeviceIdentity("device-1", "p256:fingerprint")
     intent = DeviceRegistrationIntent(
@@ -543,35 +402,7 @@ async def test_registration_authentication_identity_and_projection_boundaries() 
     assert projector.values == ["device-1"]
 
 
-async def test_channel_and_connection_renewal_guards_and_idempotency() -> None:
-    profile = _profile()
-    catalog = ChannelProfileCatalog((profile,))
-    provider = _Provider()
-    for channels, connections, message in (
-        (_Channels(), _Connections(_connection()), "channel-1"),
-        (_Channels(_channel()), _Connections(), "active connection"),
-    ):
-        with pytest.raises((KeyError, ConnectionError), match=message):
-            await RenewChannel(
-                profiles=catalog,
-                provisioners={profile.provisioner_ref: provider},
-                leases=channels,
-                connections=connections,
-                grant_sender=_Sender(),
-                clock=_Clock(),
-            ).execute("channel-1")
-    mismatch_provider = _Provider(_grant(channel_id="another-channel"))
-    with pytest.raises(RuntimeError, match="mismatched"):
-        await RenewChannel(
-            profiles=catalog,
-            provisioners={profile.provisioner_ref: mismatch_provider},
-            leases=_Channels(_channel()),
-            connections=_Connections(_connection()),
-            grant_sender=_Sender(),
-            clock=_Clock(),
-        ).execute("channel-1")
-    assert mismatch_provider.revoked[0][1] == "invalid-renew-response"
-
+async def test_connection_renewal_guards_and_idempotency() -> None:
     authority, events, projector = _Authority(), _Recorder(), _Recorder()
     renew = RenewConnection(
         connections=_Connections(),
@@ -600,29 +431,11 @@ async def test_channel_and_connection_renewal_guards_and_idempotency() -> None:
     assert projector.values == ["device-1"]
 
 
-async def test_revoke_channel_device_channels_and_device_replay_semantics() -> None:
-    profile = _profile()
-    catalog = ChannelProfileCatalog((profile,))
-    provider = _Provider()
-    revoke_channel = RevokeChannel(
-        profiles=catalog,
-        provisioners={profile.provisioner_ref: provider},
-        leases=_Channels(),
-    )
-    await revoke_channel.execute("missing", reason="test")
-    channels = _Channels(_channel(), _channel(channel_id="channel-2"))
-    revoke_channel._leases = channels
-    await RevokeDeviceChannels(leases=channels, revoke_channel=revoke_channel).execute(
-        "device-1", reason="disconnect"
-    )
-    assert channels.values == {}
-    assert [reason for _lease, reason in provider.revoked] == ["disconnect", "disconnect"]
-
+async def test_revoke_device_replay_semantics() -> None:
     devices = _Devices()
     revoke = RevokeDevice(
         devices=devices,
         connections=_Connections(),
-        channel_revoker=_Recorder(),
         events=_Recorder(),
         clock=_Clock(),
         directory_projector=_Recorder(),

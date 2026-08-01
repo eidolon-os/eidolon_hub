@@ -12,13 +12,10 @@ from typing import Annotated, Awaitable, Callable
 import aiomqtt
 from pydantic import Field, TypeAdapter, ValidationError
 
-from hub.application.use_cases.authenticate_connection import AuthenticateConnection
 from hub.application.use_cases.close_connection import CloseConnection
 from hub.application.use_cases.enroll_device import EnrollDevice, EnrollmentHello
-from hub.application.use_cases.handle_channel_signal import HandleChannelSignal
 from hub.application.use_cases.register_device import RegisterDevice
 from hub.application.use_cases.renew_connection import RenewConnection
-from hub.contracts.bindings.channel import ChannelNegotiationSignal
 from hub.contracts.bindings.connection import (
     ConnectionClosed,
     ConnectionHeartbeat,
@@ -26,7 +23,7 @@ from hub.contracts.bindings.connection import (
     ConnectionProof,
     ConnectionRegistration,
 )
-from hub.contracts.mappers import channel_signal_to_domain, registration_to_domain
+from hub.contracts.mappers import registration_to_domain
 from hub.domain.connections.entities import ConnectorKind
 
 logger = logging.getLogger(__name__)
@@ -40,9 +37,6 @@ _ALLOWED_OPERATIONS = frozenset(
         "connection.registration",
         "connection.heartbeat",
         "connection.closed",
-        "channel.offer",
-        "channel.accept",
-        "channel.close",
     }
 )
 
@@ -51,8 +45,7 @@ MqttInboundContract = Annotated[
     | ConnectionProof
     | ConnectionRegistration
     | ConnectionHeartbeat
-    | ConnectionClosed
-    | ChannelNegotiationSignal,
+    | ConnectionClosed,
     Field(discriminator="operation"),
 ]
 _CONTRACT_ADAPTER = TypeAdapter(MqttInboundContract)
@@ -114,8 +107,6 @@ def create_mqtt_application_handler(
     register: RegisterDevice,
     renew: RenewConnection,
     close: CloseConnection,
-    authenticate_connection: AuthenticateConnection,
-    handle_channel_signal: HandleChannelSignal,
     expected_connector_id: str,
     heartbeat_after_ms: int = 15_000,
     connector_priority: int = 100,
@@ -196,13 +187,7 @@ def create_mqtt_application_handler(
                 lease_token=contract.lease_token,
             )
             return None
-        await authenticate_connection.execute(
-            connection_id=contract.connection_id,
-            device_id=contract.device_id,
-            lease_token=contract.lease_token,
-        )
-        await handle_channel_signal.execute(channel_signal_to_domain(contract))
-        return None
+        raise MqttContractRejected("MQTT operation is not allowed")
 
     return handle
 

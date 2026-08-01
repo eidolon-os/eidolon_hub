@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import base64
-import json
 from typing import Protocol
 
+from hub.contracts.bindings.channel import ChannelGrant as ChannelGrantWire
 from hub.domain.channels.entities import ChannelGrant
 
 
@@ -33,20 +33,20 @@ class GrantSignalingRouter:
             raise RuntimeError(f"no signaling transport for {prefix!r}") from exc
         # Encoding is a wire operation only; the provider-owned binding bytes
         # are never interpreted, logged or stored.
-        payload = json.dumps(
-            {
-                "operation": "channel.grant",
-                "request_id": grant.request_id,
-                "channel_id": grant.lease.channel_id,
-                "profile_name": grant.lease.profile_name,
-                "lease_expires_at_ms": int(grant.lease.expires_at.timestamp() * 1000),
-                "opaque_binding": base64.b64encode(grant.opaque_binding.relay_bytes()).decode(
-                    "ascii"
-                ),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
+        payload = (
+            ChannelGrantWire(
+                operation_id=grant.operation_id,
+                channel_id=grant.lease.channel_id,
+                purpose=grant.lease.purpose,
+                kinds=tuple(sorted(kind.value for kind in grant.lease.kinds)),
+                binding_format=grant.lease.binding_format,
+                issued_at_ms=int(grant.lease.issued_at.timestamp() * 1000),
+                lease_expires_at_ms=int(grant.lease.expires_at.timestamp() * 1000),
+                opaque_binding=base64.b64encode(grant.opaque_binding.relay_bytes()).decode("ascii"),
+            )
+            .model_dump_json()
+            .encode()
+        )
         await transport.send(signaling_ref=signaling_ref, payload=payload)
 
 

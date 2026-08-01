@@ -46,14 +46,6 @@ class _Connections:
         )
 
 
-class _Revoker:
-    def __init__(self):
-        self.calls = []
-
-    async def execute(self, device_id, *, reason):
-        self.calls.append((device_id, reason))
-
-
 class _Events:
     def __init__(self):
         self.items = []
@@ -68,22 +60,17 @@ class _Clock:
 
 
 def _use_case(*, alternative=False):
-    connections, revoker, events = (
-        _Connections(with_alternative=alternative),
-        _Revoker(),
-        _Events(),
-    )
+    connections, events = _Connections(with_alternative=alternative), _Events()
     use_case = CloseConnection(
         connections=connections,
         events=events,
         clock=_Clock(),
-        channel_revoker=revoker,
     )
-    return use_case, connections, revoker, events
+    return use_case, connections, events
 
 
-async def test_last_connection_close_revokes_device_channels() -> None:
-    use_case, connections, revoker, events = _use_case()
+async def test_connection_close_persists_only_hub_owned_connection_fact() -> None:
+    use_case, connections, events = _use_case()
 
     closed = await use_case.execute(
         connection_id="connection-1",
@@ -92,13 +79,12 @@ async def test_last_connection_close_revokes_device_channels() -> None:
     )
 
     assert closed.state is ConnectionState.CLOSED
-    assert revoker.calls == [("device-1", "connection-closed")]
     assert events.items[0].event_id == "connection-1:closed"
     assert connections.items["connection-1"] == closed
 
 
-async def test_close_preserves_channels_when_another_connector_is_active() -> None:
-    use_case, _connections, revoker, _events = _use_case(alternative=True)
+async def test_close_does_not_mutate_another_connector() -> None:
+    use_case, connections, _events = _use_case(alternative=True)
 
     await use_case.execute(
         connection_id="connection-1",
@@ -106,4 +92,4 @@ async def test_close_preserves_channels_when_another_connector_is_active() -> No
         lease_token="signed-lease-token-device-1",
     )
 
-    assert revoker.calls == []
+    assert connections.items["connection-2"].state is ConnectionState.ACTIVE

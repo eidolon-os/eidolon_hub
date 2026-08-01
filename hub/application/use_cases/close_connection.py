@@ -5,7 +5,6 @@ from __future__ import annotations
 import hmac
 
 from hub.domain.connections.entities import ConnectionLease, ConnectionState
-from hub.ports.channels import DeviceChannelRevoker
 from hub.ports.event_bus import DomainEvent, EventBus
 from hub.ports.identity import Clock
 from hub.ports.repositories import ConnectionRepository, DeviceDirectoryProjector
@@ -18,13 +17,11 @@ class CloseConnection:
         connections: ConnectionRepository,
         events: EventBus,
         clock: Clock,
-        channel_revoker: DeviceChannelRevoker,
         directory_projector: DeviceDirectoryProjector | None = None,
     ) -> None:
         self._connections = connections
         self._events = events
         self._clock = clock
-        self._channel_revoker = channel_revoker
         self._directory_projector = directory_projector
 
     async def execute(
@@ -41,8 +38,6 @@ class CloseConnection:
         else:
             closed = lease.close()
             await self._connections.upsert(closed)
-        if not await self._connections.active_for_device(lease.device_id, now=now):
-            await self._channel_revoker.execute(lease.device_id, reason="connection-closed")
         await self._events.publish(
             DomainEvent(
                 event_id=f"{connection_id}:closed",

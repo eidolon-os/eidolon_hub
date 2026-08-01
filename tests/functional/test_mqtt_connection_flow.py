@@ -46,17 +46,6 @@ class _Close:
         self.arguments = kwargs
 
 
-class _Authenticate:
-    async def execute(self, **kwargs):
-        self.arguments = kwargs
-        return _lease()
-
-
-class _Signals:
-    async def execute(self, signal):
-        self.signal = signal
-
-
 def _lease():
     return SimpleNamespace(
         connection_id="connection-1",
@@ -74,15 +63,11 @@ async def test_mqtt_lifecycle_executes_shared_application_contracts() -> None:
     register = _Register()
     renew = _Renew()
     close = _Close()
-    authenticate = _Authenticate()
-    signals = _Signals()
     handler = create_mqtt_application_handler(
         enroll=enroll,
         register=register,
         renew=renew,
         close=close,
-        authenticate_connection=authenticate,
-        handle_channel_signal=signals,
         expected_connector_id="mqtt-cloud",
     )
 
@@ -160,21 +145,6 @@ async def test_mqtt_lifecycle_executes_shared_application_contracts() -> None:
     await handler(
         _message(
             {
-                "operation": "channel.accept",
-                "request_id": "request-channel",
-                "device_id": "device-1",
-                "connection_id": "connection-1",
-                "lease_token": "signed-lease-token-device-1",
-                "channel_id": "channel-1",
-            }
-        )
-    )
-    assert authenticate.arguments["device_id"] == "device-1"
-    assert signals.signal.channel_id == "channel-1"
-
-    await handler(
-        _message(
-            {
                 "operation": "connection.closed",
                 "request_id": "request-close",
                 "device_id": "device-1",
@@ -193,8 +163,6 @@ async def test_mqtt_binding_rejects_a_spoofed_connector_id() -> None:
         register=_Register(),
         renew=_Renew(),
         close=_Close(),
-        authenticate_connection=_Authenticate(),
-        handle_channel_signal=_Signals(),
         expected_connector_id="mqtt-cloud",
     )
 

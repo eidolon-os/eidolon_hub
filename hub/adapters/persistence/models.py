@@ -109,16 +109,36 @@ class DirectoryRow(Base):
 
 
 class ChannelLeaseRow(Base):
-    __tablename__ = "hub_channel_leases"
+    __tablename__ = "hub_channel_assignments"
 
     channel_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     device_id: Mapped[str] = mapped_column(String(255), index=True)
-    profile_name: Mapped[str] = mapped_column(String(255), index=True)
+    purpose: Mapped[str] = mapped_column(String(255), index=True)
+    kinds: Mapped[str] = mapped_column(Text)
+    binding_format: Mapped[str] = mapped_column(String(128))
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    renew_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
-    __table_args__ = (Index("ix_hub_channels_active", "device_id", "profile_name", "expires_at"),)
+    __table_args__ = (
+        Index("ix_hub_channels_active", "device_id", "purpose", "state", "expires_at"),
+    )
+
+
+class ChannelProviderSyncRow(Base):
+    __tablename__ = "hub_channel_provider_sync"
+
+    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    desired_revision: Mapped[str] = mapped_column(String(96), index=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    owner_instance_id: Mapped[str] = mapped_column(String(255), default="", index=True)
+    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    last_error: Mapped[str] = mapped_column(String(128), default="")
+    version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class ChannelCursorRow(Base):
@@ -140,7 +160,5 @@ class EventRow(Base):
     source: Mapped[str] = mapped_column(String(512), default="")
     subject: Mapped[str] = mapped_column(String(512), index=True)
     owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
-    subject_type: Mapped[str] = mapped_column(String(64), default="")
-    subject_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     data_json: Mapped[str] = mapped_column(Text)

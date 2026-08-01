@@ -83,14 +83,6 @@ class _Projector:
         self.values.append(device_id)
 
 
-class _Revoker:
-    def __init__(self):
-        self.values = []
-
-    async def execute(self, device_id, *, reason):
-        self.values.append((device_id, reason))
-
-
 async def test_approval_is_owner_scoped_and_request_id_idempotent() -> None:
     devices, events, projector = _Devices(), _Recorder(), _Projector()
     use_case = ApproveDevice(
@@ -116,7 +108,7 @@ async def test_approval_is_owner_scoped_and_request_id_idempotent() -> None:
         await use_case.execute(device_id="device-1", owner_id="owner-2", request_id="approval-1")
 
 
-async def test_revocation_closes_connections_and_revokes_provider_channels() -> None:
+async def test_revocation_closes_only_hub_owned_connection_facts() -> None:
     devices, events, projector = _Devices(), _Recorder(), _Projector()
     devices.device = await ApproveDevice(
         devices=devices,
@@ -124,11 +116,10 @@ async def test_revocation_closes_connections_and_revokes_provider_channels() -> 
         clock=_Clock(),
         directory_projector=projector,
     ).execute(device_id="device-1", owner_id="owner-1", request_id="approval-1")
-    connections, revoker = _Connections(), _Revoker()
+    connections = _Connections()
     use_case = RevokeDevice(
         devices=devices,
         connections=connections,
-        channel_revoker=revoker,
         events=events,
         clock=_Clock(),
         directory_projector=projector,
@@ -141,5 +132,4 @@ async def test_revocation_closes_connections_and_revokes_provider_channels() -> 
     assert revoked.revoked is True
     assert revoked.approved is False
     assert connections.lease.is_active(NOW) is False
-    assert revoker.values == [("device-1", "device-revoked")]
     assert projector.values[-1] == "device-1"

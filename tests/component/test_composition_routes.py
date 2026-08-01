@@ -15,15 +15,17 @@ def test_three_plane_openapi_routes_exist_before_lifespan_start() -> None:
 
     assert "/api/connection/v1/descriptor" in paths
     assert "/api/connection/v1/register" in paths
-    assert "/api/connection/v1/signals" in paths
+    assert "/api/connection/v1/signals" not in paths
+    assert "/api/connection/v1/signals/{device_id}" in paths
     assert "/api/device-management/v1/directory/{owner_scope}" in paths
     assert "/api/device-management/v1/events/{owner_scope}" in paths
-    assert "/api/device-management/v1/devices/{device_id}/channels/{profile_name}" in paths
+    assert "/api/device-management/v1/devices/{device_id}/channels/{profile_name}" not in paths
     assert "/api/device-management/v1/devices/{device_id}/commands" in paths
     assert "/api/device-management/v1/commands/{command_id}" in paths
     assert "/api/device-management/v1/devices/{device_id}/approval" in paths
     assert "/api/device-management/v1/devices/{device_id}/revocation" in paths
     assert "/api/provider/v1/data/inbound" in paths
+    assert "/api/provider/v1/channels/lifecycle" in paths
 
 
 def test_production_app_does_not_start_telemetry_export_without_endpoint() -> None:
@@ -39,11 +41,14 @@ def test_production_app_does_not_start_telemetry_export_without_endpoint() -> No
 def test_composition_starts_with_only_hub_owned_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("EIDOLON_HUB_LEASE_SECRET", "l" * 32)
     monkeypatch.setenv("EIDOLON_HUB_MANAGEMENT_JWT_SECRET", "m" * 32)
-    monkeypatch.setenv("EIDOLON_HUB_PROVIDER_TOKEN", "p" * 32)
+    monkeypatch.setenv("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN", "p" * 32)
     config = replace(
         HubConfig(),
         observability=replace(HubConfig().observability, enabled=False),
-        mdns=replace(HubConfig().mdns, enabled=False),
+        connection_plane=replace(
+            HubConfig().connection_plane,
+            mdns=replace(HubConfig().connection_plane.mdns, enabled=False),
+        ),
         persistence=PersistenceConfig(
             adapter="sqlite",
             sqlite_path=str(tmp_path / "runtime" / "hub.sqlite3"),

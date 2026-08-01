@@ -5,30 +5,13 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
-class Delivery(BaseModel):
+class ChannelSignalDelivery(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
     operation: Literal["channel.signal-delivery"]
     payload_json: Annotated[str | None, Field(max_length=131072)] = None
-
-
-class Accepted(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    operation: Literal["channel.signal-accepted"]
-    request_id: Annotated[str, Field(max_length=96, min_length=1)]
-    accepted: Literal[True]
-
-
-class ChannelSignalHttpStatus(RootModel[Delivery | Accepted]):
-    model_config = ConfigDict(
-        frozen=True,
-    )
-    root: Annotated[Delivery | Accepted, Field(title="Channel Signal HTTP Status")]
