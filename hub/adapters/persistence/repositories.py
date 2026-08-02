@@ -6,7 +6,7 @@ import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from hub.adapters.persistence.database import HubDatabase
@@ -552,12 +552,6 @@ class SqlChannelLeaseRepository:
                 for name, value in values.items():
                     setattr(row, name, value)
         return lease
-
-    async def delete(self, channel_id: str) -> None:
-        async with self._database.sessions.begin() as session:
-            await session.execute(
-                delete(ChannelLeaseRow).where(ChannelLeaseRow.channel_id == channel_id)
-            )
 
     async def active_for_device(
         self,

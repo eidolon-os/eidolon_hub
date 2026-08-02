@@ -11,6 +11,20 @@
 - 测试：`python -m pytest -q`。
 - Commit SHA：`N/A (working tree)`。
 
+## 2026-08-02 — 部署边界、严格 Profile 与版本化 Schema
+
+- 修改目标：让同一 artifact 以最少选择逻辑运行 Local/Cloud，同时不把 Nginx/Ingress/Uvicorn 的内部监听参数混入设备公开契约。
+- 修改前行为：`api.host/port` 同时控制 Uvicorn 与 mDNS SRV；`public_base_url` 宣称 HTTPS 但直接启动没有 TLS；即使 Cloud 已注入环境变量也强制要求 `.env` 文件；`enabled: true + empty endpoint` 会静默关闭 OTEL；启动以 `create_all()` 猜测 Schema；一个 reconciliation 周期同时驱动在线投影和 cache 全量刷新。
+- 首先失败：无 `config/.env` 时直接 `HubConfig.load()` 得到 `FileNotFoundError`；首次在旧 `create_all()` PostgreSQL 测试库执行基线 migration 得到 `DuplicateTableError`，确认不能把无 revision 的旧开发 Schema 误当成当前 Schema 后，将测试迁到隔离临时 PostgreSQL Schema，而不是删除现有表或加入兼容接管。
+- Settings：改为单一 strict/frozen/extra-forbid Pydantic Model；`EIDOLON_HUB_PROFILE=local|cloud` 选择两份完整配置，显式 YAML 路径为高级覆盖；删除 `api`、YAML OTLP endpoint、静态 shared instance ID、DSN env-name indirection、cache enable toggle 和重载 reconciliation 字段。
+- 部署边界：ASGI host/port、TLS、forwarded-header trust 和反向代理归部署命令；Hub 只配置公开 HTTPS base。mDNS type 固定，实例名从 `hub_id` 派生，hostname/port 从公开 URL 派生。
+- 运行时：Cloud instance ID 强制来自每副本唯一的 `EIDOLON_HUB_INSTANCE_ID`；dotenv 默认可选；OTEL 启用时必须存在标准 `OTEL_EXPORTER_OTLP_ENDPOINT`。
+- Persistence：加入 packaged Alembic `0001`、幂等 upgrade 和 revision head check。Local 可启动迁移；Cloud 通过 `eidolon-hub-migrate` Job 升级，应用实例只验证 head。PostgreSQL credential-free DSN 在 YAML，user/password 在环境变量，并显式配置 pool timeout/recycle。Directory 始终 DB-authoritative + memory write-through；Local 不轮询，Cloud cache refresh 与 online projection 周期独立。
+- 测试：默认 `144 passed, 2 skipped in 5.19s`；带本机 PostgreSQL 18 测试 DSN 全量 `146 passed in 5.25s`；Cloud `2 passed in 0.44s`；Unit `97 passed`；Architecture/Contract/Component/Deployment/E2E 全部通过；Domain/Application branch `98%`（`117 passed`）。
+- 架构反思：公开地址和进程监听必须是两个概念；静默禁用 observability 会制造错误运维认知；数据库 revision 是 Cloud 多副本启动前置条件。当前 Cloud cache refresh 仍为全量扫描，大规模目录需要 watermark 增量读取。
+- 未证明：真实 Nginx/Ingress TLS、OTEL Collector 可达性/认证、migration rolling deployment、DB failover 和网络分区仍是部署门禁。
+- Commit SHA：`N/A (working tree)`。
+
 ## 2026-08-02 — 删除 Hub MQTT/Connection Connector，改为 Device Session + Direct Acquire
 
 - 修改目标：WAN bootstrap 使用 Commissioned HTTPS Descriptor URI；mDNS 只做同链路 URI 发布；实际 MQTT 能力归外部 Channel Provider backend。Hub 注册、在线和通信通道不再混为 Connection Connector。
@@ -25,7 +39,7 @@
 - 覆盖率：Unit/Component/Functional 的 Domain + Application branch suite 为 `98%`（`795 statements / 234 branches`，`104 passed`），超过 `90%` 门禁。
 - 架构反思：Connector 是伪抽象；进程内 mailbox 不能满足 Cloud 多实例；后台 Provider desired-state 把资源策略放错边界。Direct Acquire 把失败显式留在设备请求中，同时不回滚注册事实。Provider 资源清理由有限期 lease/credential 和 Provider 自己负责。
 - 未证明：`eidolon_channel` 未修改；生产 TLS、DNS/VLAN、Provider/DB restart、网络分区和 rolling upgrade 仍需独立部署门禁。
-- Commit SHA：`N/A (working tree)`。
+- Commit SHA：`cd7e4b3`。
 
 ## 2026-08-01 — 分层骨架与 SDK 所有权迁移
 

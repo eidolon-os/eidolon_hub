@@ -28,8 +28,6 @@ from hub.contracts.generated.schema_models.channel.data_envelope_schema import (
 from hub.contracts.generated.schema_models.device.manifest_schema import (
     DeviceManifest as GeneratedDeviceManifest,
 )
-from hub.contracts.guard import parse_guard_message
-from hub.contracts.sense import parse_sense_message
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "hub" / "contracts" / "schemas"
@@ -146,17 +144,6 @@ def test_golden_contract_examples_are_accepted() -> None:
     )
     ChannelAcquisitionRequest.model_validate_json(
         (EXAMPLES / "channel-acquisition.json").read_text(encoding="utf-8")
-    )
-    parse_sense_message(json.loads((EXAMPLES / "sense-attention.json").read_text()))
-    parse_guard_message(json.loads((EXAMPLES / "guard-candidate.json").read_text()))
-
-
-def test_guard_and_sense_examples_conform_to_schema_sources() -> None:
-    Draft202012Validator(_schema("sense/message.schema.json")).validate(
-        json.loads((EXAMPLES / "sense-attention.json").read_text())
-    )
-    Draft202012Validator(_schema("guard/message.schema.json")).validate(
-        json.loads((EXAMPLES / "guard-candidate.json").read_text())
     )
 
 

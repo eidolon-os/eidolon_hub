@@ -21,5 +21,3 @@ async def test_projection_worker_runs_immediately_and_stops_cleanly() -> None:
     await worker.start()
     await asyncio.wait_for(projector.called.wait(), timeout=0.5)
     await worker.stop()
-
-    assert worker.is_running is False

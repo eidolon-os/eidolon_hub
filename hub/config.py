@@ -1,343 +1,222 @@
-"""Production configuration for the protocol-neutral Hub control plane."""
+"""Strict deployment configuration for the Eidolon Hub control plane."""
 
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
-from ipaddress import ip_address
+import sysconfig
 from pathlib import Path
-from typing import Any
-from urllib.parse import urlparse
+from typing import Annotated, Any, Literal
+from urllib.parse import parse_qsl, urlparse
 
 import yaml
+from pydantic import BaseModel, ConfigDict, Field, PositiveFloat, PositiveInt, model_validator
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_DEFAULT_YAML = _REPO_ROOT / "config" / "settings.yaml"
-_DEFAULT_ENV = _REPO_ROOT / "config" / ".env"
+_CONFIG_ROOT = _REPO_ROOT / "config"
+_INSTALLED_CONFIG_ROOT = Path(sysconfig.get_path("data")) / "config"
+_DEFAULT_ENV = _CONFIG_ROOT / ".env"
+_PROFILE_ENV = "EIDOLON_HUB_PROFILE"
+_SETTINGS_ENV = "EIDOLON_HUB_SETTINGS_YAML"
+_VALID_PROFILES = frozenset({"local", "cloud"})
 
 
-def _resolve_settings_yaml() -> Path:
-    explicit = os.environ.get("EIDOLON_HUB_SETTINGS_YAML", "").strip()
-    path = Path(explicit).expanduser() if explicit else _DEFAULT_YAML
-    if not path.is_file():
-        raise FileNotFoundError(f"Hub settings file is missing: {path}")
-    return path.resolve()
+class _StrictConfig(BaseModel):
+    """One declarative source of defaults, types and unknown-field rejection."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
-def _resolve_env_file() -> Path:
-    explicit = os.environ.get("EIDOLON_HUB_ENV_FILE", "").strip()
-    if explicit:
-        path = Path(explicit).expanduser()
-    else:
-        path = _DEFAULT_ENV
-    if not path.is_file():
-        raise FileNotFoundError(f"Hub environment file is missing: {path}")
-    return path.resolve()
+class DeploymentConfig(_StrictConfig):
+    mode: Literal["local", "cloud"] = "local"
 
 
-def _bootstrap_dotenv() -> None:
-    from dotenv import load_dotenv
-
-    load_dotenv(_resolve_env_file(), override=False)
-
-
-def _load_yaml() -> dict[str, Any]:
-    value = yaml.safe_load(_resolve_settings_yaml().read_text(encoding="utf-8")) or {}
-    if not isinstance(value, dict):
-        raise ValueError("Hub settings must be a YAML object")
-    return value
+class ObservabilityConfig(_StrictConfig):
+    enabled: bool = False
+    service_name: str = Field(default="eidolon-hub", min_length=1, max_length=128)
 
 
-def _section(value: dict[str, Any], key: str) -> dict[str, Any]:
-    section = value.get(key) or {}
-    if not isinstance(section, dict):
-        raise ValueError(f"{key} must be a YAML object")
-    return section
-
-
-def _reject_unknown(value: dict[str, Any], allowed: set[str], path: str) -> None:
-    unknown = sorted(set(value) - allowed)
-    if unknown:
-        raise ValueError(f"unknown Hub settings at {path}: {', '.join(unknown)}")
-
-
-def _boolean(value: dict[str, Any], key: str, default: bool, path: str) -> bool:
-    raw = value.get(key, default)
-    if not isinstance(raw, bool):
-        raise ValueError(f"{path}.{key} must be a YAML boolean")
-    return raw
-
-
-def _is_loopback_hostname(hostname: str | None) -> bool:
-    if hostname is None:
-        return False
-    if hostname.lower() == "localhost":
-        return True
-    try:
-        return ip_address(hostname).is_loopback
-    except ValueError:
-        return False
-
-
-def _validate_settings_shape(value: dict[str, Any]) -> None:
-    """Fail closed when retired or misspelled settings remain in YAML."""
-
-    _reject_unknown(
-        value,
-        {"api", "observability", "discovery", "device_access", "channel_provider", "persistence"},
-        "root",
-    )
-    _reject_unknown(_section(value, "api"), {"host", "port"}, "api")
-    _reject_unknown(
-        _section(value, "observability"),
-        {"enabled", "service_name", "otlp_endpoint"},
-        "observability",
-    )
-    discovery = _section(value, "discovery")
-    _reject_unknown(
-        discovery,
-        {"mdns"},
-        "discovery",
-    )
-    _reject_unknown(
-        _section(discovery, "mdns"),
-        {"enabled", "service_type", "service_name", "hostname"},
-        "discovery.mdns",
-    )
-    _reject_unknown(
-        _section(value, "device_access"),
-        {
-            "hub_id",
-            "hub_instance_id",
-            "public_base_url",
-            "session_lease_seconds",
-            "heartbeat_after_ms",
-        },
-        "device_access",
-    )
-    _reject_unknown(
-        _section(value, "channel_provider"),
-        {"contract_url"},
-        "channel_provider",
-    )
-    _reject_unknown(
-        _section(value, "persistence"),
-        {
-            "adapter",
-            "sqlite_path",
-            "postgresql_dsn_env",
-            "init_schema",
-            "pool_size",
-            "max_overflow",
-            "directory_cache_enabled",
-            "reconciliation_seconds",
-        },
-        "persistence",
-    )
-
-
-@dataclass(frozen=True, slots=True)
-class ApiConfig:
-    host: str = "0.0.0.0"
-    port: int = 8082
-
-
-@dataclass(frozen=True, slots=True)
-class ObservabilityConfig:
+class MdnsDiscoveryConfig(_StrictConfig):
     enabled: bool = True
-    service_name: str = "eidolon-hub"
-    otlp_endpoint: str = ""
 
 
-@dataclass(frozen=True, slots=True)
-class MdnsDiscoveryConfig:
-    enabled: bool = True
-    service_type: str = "_eidolon-hub._tcp.local."
-    service_name: str = ""
-    hostname: str = "eidolon-hub"
+class DiscoveryConfig(_StrictConfig):
+    mdns: MdnsDiscoveryConfig = Field(default_factory=MdnsDiscoveryConfig)
 
 
-@dataclass(frozen=True, slots=True)
-class PersistenceConfig:
-    adapter: str = "sqlite"
-    sqlite_path: str = "var/eidolon-hub.sqlite3"
-    postgresql_dsn_env: str = "EIDOLON_HUB_POSTGRES_DSN"
-    init_schema: bool = True
-    pool_size: int = 10
-    max_overflow: int = 20
-    directory_cache_enabled: bool = True
-    reconciliation_seconds: float = 5.0
+class DeviceAccessConfig(_StrictConfig):
+    hub_id: str = Field(default="eidolon-hub-local", min_length=1, max_length=128)
+    public_base_url: str = "https://eidolon-hub.local"
+    session_lease_seconds: int = Field(default=45, ge=15, le=3600)
+    heartbeat_after_ms: int = Field(default=15_000, ge=1000, le=300_000)
+
+    @model_validator(mode="after")
+    def validate_access_contract(self) -> DeviceAccessConfig:
+        parsed = urlparse(self.public_base_url)
+        if (
+            parsed.scheme != "https"
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("device_access.public_base_url must be a plain HTTPS base URL")
+        if self.heartbeat_after_ms * 3 > self.session_lease_seconds * 1000:
+            raise ValueError(
+                "device heartbeat interval must not exceed one third of its session lease"
+            )
+        return self
 
 
-@dataclass(frozen=True, slots=True)
-class DiscoveryConfig:
-    mdns: MdnsDiscoveryConfig = field(default_factory=MdnsDiscoveryConfig)
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceAccessConfig:
-    hub_id: str = "eidolon-hub-local"
-    hub_instance_id: str = "eidolon-hub-local-1"
-    public_base_url: str = "https://eidolon-hub.local:8082"
-    session_lease_seconds: int = 45
-    heartbeat_after_ms: int = 15_000
-
-
-@dataclass(frozen=True, slots=True)
-class ChannelProviderConfig:
+class ChannelProviderConfig(_StrictConfig):
     contract_url: str = "http://127.0.0.1:8090/v1"
 
+    @model_validator(mode="after")
+    def validate_contract_url(self) -> ChannelProviderConfig:
+        parsed = urlparse(self.contract_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise ValueError("channel_provider.contract_url must be a plain HTTP(S) base URL")
+        if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
+            raise ValueError("remote Channel Provider must use HTTPS")
+        return self
 
-@dataclass(frozen=True, slots=True)
-class HubConfig:
-    """Only deployment settings understood by the production Hub."""
 
-    api: ApiConfig = field(default_factory=ApiConfig)
-    observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
-    persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
-    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
-    device_access: DeviceAccessConfig = field(default_factory=DeviceAccessConfig)
-    channel_provider: ChannelProviderConfig = field(default_factory=ChannelProviderConfig)
+class SqlitePersistenceConfig(_StrictConfig):
+    adapter: Literal["sqlite"] = "sqlite"
+    path: str = Field(default="var/eidolon-hub.sqlite3", min_length=1)
+    migrate_on_startup: bool = True
+
+
+class PostgresqlPersistenceConfig(_StrictConfig):
+    adapter: Literal["postgresql"] = "postgresql"
+    dsn: str = "postgresql://127.0.0.1:5432/eidolon_hub"
+    migrate_on_startup: bool = False
+    pool_size: PositiveInt = 10
+    max_overflow: int = Field(default=20, ge=0)
+    pool_timeout_seconds: PositiveFloat = 10.0
+    pool_recycle_seconds: PositiveInt = 1800
+
+    @model_validator(mode="after")
+    def validate_non_secret_dsn(self) -> PostgresqlPersistenceConfig:
+        parsed = urlparse(self.dsn)
+        query_keys = {key.casefold() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+        if (
+            parsed.scheme != "postgresql"
+            or not parsed.hostname
+            or not parsed.path.strip("/")
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+            or query_keys & {"user", "username", "pass", "password"}
+        ):
+            raise ValueError("persistence.dsn must be a credential-free PostgreSQL database URL")
+        try:
+            parsed.port
+        except ValueError as exc:
+            raise ValueError("persistence.dsn contains an invalid PostgreSQL port") from exc
+        return self
+
+
+PersistenceConfig = Annotated[
+    SqlitePersistenceConfig | PostgresqlPersistenceConfig,
+    Field(discriminator="adapter"),
+]
+
+
+class DeviceDirectoryConfig(_StrictConfig):
+    projection_interval_seconds: PositiveFloat = 5.0
+    cache_refresh_seconds: PositiveFloat | None = None
+
+
+class HubConfig(_StrictConfig):
+    """Only deployment-independent behavior and external contract addresses."""
+
+    deployment: DeploymentConfig = Field(default_factory=DeploymentConfig)
+    observability: ObservabilityConfig = Field(default_factory=ObservabilityConfig)
+    persistence: PersistenceConfig = Field(default_factory=SqlitePersistenceConfig)
+    device_directory: DeviceDirectoryConfig = Field(default_factory=DeviceDirectoryConfig)
+    discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
+    device_access: DeviceAccessConfig = Field(default_factory=DeviceAccessConfig)
+    channel_provider: ChannelProviderConfig = Field(default_factory=ChannelProviderConfig)
+
+    @model_validator(mode="after")
+    def validate_deployment(self) -> HubConfig:
+        public_hostname = urlparse(self.device_access.public_base_url).hostname or ""
+        if self.deployment.mode == "cloud":
+            if self.discovery.mdns.enabled:
+                raise ValueError("cloud deployment cannot enable link-local mDNS")
+            if self.persistence.adapter != "postgresql":
+                raise ValueError("cloud deployment requires PostgreSQL persistence")
+        if self.discovery.mdns.enabled and not public_hostname.endswith(".local"):
+            raise ValueError("enabled mDNS requires a .local public_base_url hostname")
+        return self
 
     @classmethod
     def load(cls) -> HubConfig:
         _bootstrap_dotenv()
-        source = _load_yaml()
-        _validate_settings_shape(source)
-        config = cls(
-            api=_api_from_yaml(source),
-            observability=_observability_from_yaml(source),
-            persistence=_persistence_from_yaml(source),
-            discovery=_discovery_from_yaml(source),
-            device_access=_device_access_from_yaml(source),
-            channel_provider=_channel_provider_from_yaml(source),
-        )
-        validate_hub_config(config)
+        requested_profile, settings_path = _resolve_settings_yaml()
+        source = _load_yaml(settings_path)
+        if "deployment" not in source:
+            raise ValueError("Hub settings must explicitly declare deployment.mode")
+        config = cls.model_validate(source)
+        if requested_profile is not None and config.deployment.mode != requested_profile:
+            raise ValueError(
+                f"selected profile {requested_profile!r} contains mode {config.deployment.mode!r}"
+            )
         return config
 
 
-def _api_from_yaml(value: dict[str, Any]) -> ApiConfig:
-    section = _section(value, "api")
-    return ApiConfig(
-        host=str(section.get("host") or "0.0.0.0"), port=int(section.get("port", 8082))
-    )
+def _resolve_profile() -> str:
+    profile = os.environ.get(_PROFILE_ENV, "local").strip().lower() or "local"
+    if profile not in _VALID_PROFILES:
+        raise ValueError(f"{_PROFILE_ENV} must be local or cloud")
+    return profile
 
 
-def _observability_from_yaml(value: dict[str, Any]) -> ObservabilityConfig:
-    section = _section(value, "observability")
-    endpoint = (
-        os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT") or str(section.get("otlp_endpoint") or "")
-    ).strip()
-    return ObservabilityConfig(
-        enabled=_boolean(section, "enabled", True, "observability"),
-        service_name=str(section.get("service_name") or "eidolon-hub").strip(),
-        otlp_endpoint=endpoint,
-    )
+def _resolve_settings_yaml() -> tuple[str | None, Path]:
+    explicit = os.environ.get(_SETTINGS_ENV, "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        requested_profile: str | None = None
+    else:
+        requested_profile = _resolve_profile()
+        filename = f"settings.{requested_profile}.yaml"
+        source_root = (
+            _CONFIG_ROOT if (_CONFIG_ROOT / filename).is_file() else _INSTALLED_CONFIG_ROOT
+        )
+        path = source_root / filename
+    if not path.is_file():
+        raise FileNotFoundError(f"Hub settings file is missing: {path}")
+    return requested_profile, path.resolve()
 
 
-def _mdns_from_yaml(value: dict[str, Any]) -> MdnsDiscoveryConfig:
-    section = _section(value, "mdns")
-    return MdnsDiscoveryConfig(
-        enabled=_boolean(section, "enabled", True, "discovery.mdns"),
-        service_type=str(section.get("service_type") or "_eidolon-hub._tcp.local."),
-        service_name=str(section.get("service_name") or ""),
-        hostname=str(section.get("hostname") or "eidolon-hub"),
-    )
+def _bootstrap_dotenv() -> None:
+    """Load a dotenv when requested; cloud environments need no dotenv file."""
+
+    from dotenv import load_dotenv
+
+    explicit = os.environ.get("EIDOLON_HUB_ENV_FILE", "").strip()
+    if explicit:
+        path = Path(explicit).expanduser()
+        if not path.is_file():
+            raise FileNotFoundError(f"Hub environment file is missing: {path}")
+        load_dotenv(path.resolve(), override=False)
+    elif _DEFAULT_ENV.is_file():
+        load_dotenv(_DEFAULT_ENV, override=False)
 
 
-def _persistence_from_yaml(value: dict[str, Any]) -> PersistenceConfig:
-    section = _section(value, "persistence")
-    return PersistenceConfig(
-        adapter=str(section.get("adapter") or "sqlite").strip().lower(),
-        sqlite_path=str(section.get("sqlite_path") or "var/eidolon-hub.sqlite3").strip(),
-        postgresql_dsn_env=str(
-            section.get("postgresql_dsn_env") or "EIDOLON_HUB_POSTGRES_DSN"
-        ).strip(),
-        init_schema=_boolean(section, "init_schema", True, "persistence"),
-        pool_size=int(section.get("pool_size", 10)),
-        max_overflow=int(section.get("max_overflow", 20)),
-        directory_cache_enabled=_boolean(section, "directory_cache_enabled", True, "persistence"),
-        reconciliation_seconds=float(section.get("reconciliation_seconds", 5.0)),
-    )
-
-
-def _discovery_from_yaml(value: dict[str, Any]) -> DiscoveryConfig:
-    section = _section(value, "discovery")
-    return DiscoveryConfig(mdns=_mdns_from_yaml(section))
-
-
-def _device_access_from_yaml(value: dict[str, Any]) -> DeviceAccessConfig:
-    section = _section(value, "device_access")
-    return DeviceAccessConfig(
-        hub_id=str(section.get("hub_id") or "eidolon-hub-local"),
-        hub_instance_id=str(section.get("hub_instance_id") or "eidolon-hub-local-1"),
-        public_base_url=str(
-            section.get("public_base_url") or "https://eidolon-hub.local:8082"
-        ).rstrip("/"),
-        session_lease_seconds=int(section.get("session_lease_seconds", 45)),
-        heartbeat_after_ms=int(section.get("heartbeat_after_ms", 15_000)),
-    )
-
-
-def _channel_provider_from_yaml(value: dict[str, Any]) -> ChannelProviderConfig:
-    section = _section(value, "channel_provider")
-    return ChannelProviderConfig(
-        contract_url=str(section.get("contract_url") or "http://127.0.0.1:8090/v1").rstrip("/")
-    )
-
-
-def validate_hub_config(config: HubConfig) -> None:
-    if not config.api.host.strip():
-        raise ValueError("api.host is required")
-    if not 1 <= config.api.port <= 65_535:
-        raise ValueError("api.port must be between 1 and 65535")
-    if not config.device_access.hub_id.strip() or not config.device_access.hub_instance_id.strip():
-        raise ValueError("device_access hub identifiers are required")
-    access_url = urlparse(config.device_access.public_base_url)
-    if (
-        access_url.scheme != "https"
-        or not access_url.netloc
-        or access_url.username is not None
-        or access_url.password is not None
-        or access_url.query
-        or access_url.fragment
-    ):
-        raise ValueError("device_access.public_base_url must be a plain HTTPS base URL")
-    if config.device_access.session_lease_seconds < 15:
-        raise ValueError("device_access.session_lease_seconds must be at least 15")
-    if not 1_000 <= config.device_access.heartbeat_after_ms <= 300_000:
-        raise ValueError("device_access.heartbeat_after_ms is out of range")
-    mdns = config.discovery.mdns
-    if mdns.enabled:
-        if not mdns.service_type.startswith("_") or not mdns.service_type.endswith(".local."):
-            raise ValueError("mDNS service_type must be a .local. service type")
-        if mdns.service_name and not mdns.service_name.endswith(mdns.service_type):
-            raise ValueError("mDNS service_name must belong to service_type")
-        if not mdns.hostname.strip():
-            raise ValueError("enabled mDNS discovery requires hostname")
-    persistence = config.persistence
-    if persistence.adapter not in {"sqlite", "postgresql"}:
-        raise ValueError("persistence.adapter must be sqlite or postgresql")
-    if persistence.adapter == "sqlite" and not persistence.sqlite_path:
-        raise ValueError("SQLite persistence requires sqlite_path")
-    if persistence.adapter == "postgresql" and not persistence.postgresql_dsn_env:
-        raise ValueError("PostgreSQL persistence requires postgresql_dsn_env")
-    if persistence.pool_size < 1 or persistence.max_overflow < 0:
-        raise ValueError("invalid persistence pool sizing")
-    if persistence.reconciliation_seconds <= 0:
-        raise ValueError("persistence.reconciliation_seconds must be positive")
-    provider_url = urlparse(config.channel_provider.contract_url)
-    if (
-        provider_url.scheme not in {"http", "https"}
-        or not provider_url.netloc
-        or provider_url.username is not None
-        or provider_url.password is not None
-        or provider_url.query
-        or provider_url.fragment
-    ):
-        raise ValueError("channel_provider.contract_url must be a plain HTTP(S) base URL")
-    if provider_url.scheme == "http" and not _is_loopback_hostname(provider_url.hostname):
-        raise ValueError("remote Channel Provider must use HTTPS")
+def _load_yaml(path: Path) -> dict[str, Any]:
+    value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(value, dict):
+        raise ValueError("Hub settings must be a YAML object")
+    return value
 
 
 def load_hub_config() -> HubConfig:

@@ -80,10 +80,14 @@ Provider -> Hub: POST /api/provider/v1/channels/lifecycle
 
 ## 持久化、内存热路径与多实例
 
-数据库是权威源。SQLite 用于 Local，PostgreSQL 用于 Cloud；上层只依赖 Repository Port。公共 Device Directory 可启用进程内热缓存：启动从 DB 恢复，写入先提交 DB 再更新内存，多实例按 revision 周期对账。缓存只优化读取，不参与授权、fencing、session/channel 校验或 command/cursor 正确性。
+数据库是权威源。SQLite 用于 Local，PostgreSQL 用于 Cloud；上层只依赖 Repository Port。公共 Device Directory 始终使用进程内热缓存：启动从 DB 恢复，写入先提交 DB 再更新内存。Local 单实例没有第二写入者，不轮询 DB；Cloud 多实例按独立 cache refresh 周期对账。缓存只优化读取，不参与授权、fencing、session/channel 校验或 command/cursor 正确性。Directory 的在线状态投影周期与 cache refresh 是两个独立配置，不能复用一个 reconciliation 参数。
+
+Schema 由 Hub 内置 Alembic revision 管理。Local 可在启动时迁移；Cloud 由独立 migration Job 升级，应用副本只校验当前 revision 等于 packaged head。
 
 Hub 不依赖 NATS/JetStream。多实例正确性由 PostgreSQL 行锁、递增 authority fencing、幂等 ID 和持久事件流承担。外部模块通过 Device Management API/事件游标交互，不读取 Hub 内部表或 KV。
 
 ## 配置与 Composition
 
-`hub/composition/app.py` 是唯一生产组装位置。`config/settings.yaml` 只有 API、Observability、Discovery、Device Access、Channel Provider 地址和 Persistence；未知字段 fail closed。Hub 不含 MQTT、LiveKit、具体媒体或硬件配置。
+`hub/composition/app.py` 是唯一生产组装位置。`EIDOLON_HUB_PROFILE=local|cloud` 直接选择两份完整严格配置；显式 `EIDOLON_HUB_SETTINGS_YAML` 可覆盖路径。ASGI 监听、TLS 和代理信任属于部署层，因此配置中没有 API host/port。Hub 只理解 Observability、Discovery、Device Access、Device Directory、Channel Provider 地址和 Persistence；未知字段 fail closed，且不含 MQTT、LiveKit、具体媒体或硬件配置。
+
+`hub_id` 是稳定逻辑身份；Cloud 副本的 `hub_instance_id` 来自 `EIDOLON_HUB_INSTANCE_ID`，禁止在共享 YAML 中静态复用。mDNS service type 固定为契约常量，实例名由 `hub_id` 派生，hostname/port 由公开 HTTPS URL 派生。

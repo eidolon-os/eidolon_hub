@@ -19,7 +19,7 @@ from hub.domain.sessions.entities import DeviceSessionLease
 @pytest.fixture
 async def database(tmp_path):
     value = HubDatabase.sqlite(tmp_path / "directory.sqlite3")
-    await value.init_schema()
+    await value.migrate()
     try:
         yield value
     finally:

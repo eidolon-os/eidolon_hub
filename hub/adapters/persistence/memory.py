@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import suppress
 from typing import Protocol
 
 from hub.domain.devices.entities import DeviceDirectoryEntry
@@ -30,19 +31,19 @@ class CachedDeviceDirectoryRepository:
         self,
         source: DirectorySnapshotSource,
         *,
-        reconciliation_seconds: float = 5.0,
+        refresh_interval_seconds: float | None = None,
     ) -> None:
-        if reconciliation_seconds <= 0:
-            raise ValueError("reconciliation_seconds must be positive")
+        if refresh_interval_seconds is not None and refresh_interval_seconds <= 0:
+            raise ValueError("refresh_interval_seconds must be positive")
         self._source = source
-        self._reconciliation_seconds = reconciliation_seconds
+        self._refresh_interval_seconds = refresh_interval_seconds
         self._values: dict[str, DeviceDirectoryEntry] = {}
         self._lock = asyncio.Lock()
         self._task: asyncio.Task[None] | None = None
 
     async def start(self) -> None:
         await self.refresh()
-        if self._task is None:
+        if self._refresh_interval_seconds is not None and self._task is None:
             self._task = asyncio.create_task(
                 self._reconcile_loop(),
                 name="hub-device-directory-reconciler",
@@ -52,10 +53,8 @@ class CachedDeviceDirectoryRepository:
         task, self._task = self._task, None
         if task is not None:
             task.cancel()
-            try:
+            with suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
 
     async def refresh(self) -> None:
         entries = await self._source.list_all()
@@ -83,8 +82,9 @@ class CachedDeviceDirectoryRepository:
             )
 
     async def _reconcile_loop(self) -> None:
+        assert self._refresh_interval_seconds is not None
         while True:
-            await asyncio.sleep(self._reconciliation_seconds)
+            await asyncio.sleep(self._refresh_interval_seconds)
             try:
                 await self.refresh()
             except Exception:

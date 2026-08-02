@@ -18,16 +18,21 @@ Hub 没有 MQTT、LiveKit、NATS、`eidolon_data` 或 `eidolon_sdk` 运行时依
 ```bash
 uv sync --all-groups
 cp config/.env.example config/.env
+export EIDOLON_HUB_PROFILE=local
 uv run uvicorn hub.main:app --host 0.0.0.0 --port 8082
 ```
 
-`config/settings.yaml` 是唯一受版本控制的非秘密配置。`config/.env` 只承载密钥且不提交。启动需要三个至少 32 字节的凭据：
+ASGI 监听地址、端口、TLS 和可信代理由 Uvicorn/Gunicorn、Nginx、Ingress 等部署层管理，不属于 Hub 行为配置。`public_base_url` 必须指向设备真正可访问的 TLS 终止地址；上面的 Uvicorn 命令只启动内部 HTTP upstream，不能直接满足设备 HTTPS 契约。
+
+`EIDOLON_HUB_PROFILE=local|cloud` 选择 `config/settings.local.yaml` 或 `config/settings.cloud.yaml`，未指定时为 Local。部署需要自定义完整配置时，使用 `EIDOLON_HUB_SETTINGS_YAML=/path/settings.yaml` 覆盖。`.env` 只方便本地开发；Cloud 可直接注入环境变量，不要求磁盘存在 `.env`。启动需要三个至少 32 字节的凭据：
 
 - `EIDOLON_HUB_LEASE_SECRET`
 - `EIDOLON_HUB_MANAGEMENT_JWT_SECRET`
 - `EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN`
 
-本地默认使用 Hub 自有 SQLite；云端把 `persistence.adapter` 改为 `postgresql`，并通过 `EIDOLON_HUB_POSTGRES_DSN` 注入 DSN。设置 `OTEL_EXPORTER_OTLP_ENDPOINT` 后启用 OTLP/gRPC 输出；不设置时不外发。
+Local 使用 Hub 自有 SQLite 并在启动时执行版本化迁移。Cloud 的非秘密 PostgreSQL DSN（host、port、database 和 SSL query）位于 `persistence.dsn`，DSN 禁止包含凭据；用户名和密码分别由 `EIDOLON_HUB_POSTGRES_USER`、`EIDOLON_HUB_POSTGRES_PASSWORD` 注入。发布前以独立 Job 执行 `uv run eidolon-hub-migrate`；应用实例只校验 Schema revision，不自行改表。每个 Cloud 副本还必须注入唯一的 `EIDOLON_HUB_INSTANCE_ID`。
+
+Observability 是真实的 OpenTelemetry OTLP/gRPC 接口：当前导出 HTTP Trace、请求计数/延迟 Metric 和 Python Log。Local profile 明确关闭；Cloud profile 启用并要求 `OTEL_EXPORTER_OTLP_ENDPOINT`，缺失时启动失败而不是静默降级。
 
 ## 生产 API
 

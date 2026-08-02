@@ -35,7 +35,6 @@ logs/
 var/
 app/SQLlite/SQLGen.db
 
-data/
 **/.trash/
 
 # Benchmark artifacts

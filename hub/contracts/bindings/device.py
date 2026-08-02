@@ -173,20 +173,3 @@ class DeviceBusEventPage(ContractModel):
     @classmethod
     def _event_arrays(cls, value):
         return tuple(value) if isinstance(value, list) else value
-
-
-class ReportedState(ContractModel):
-    operation: Literal["device.reported-state"] = "device.reported-state"
-    device_id: str = Field(min_length=1, max_length=128)
-    revision: int = Field(ge=1)
-    observed_at_ms: int = Field(ge=0)
-    values: JsonObject = Field(default_factory=dict, max_length=128)
-
-
-class DeviceEvent(ContractModel):
-    operation: Literal["device.event"] = "device.event"
-    event_id: str = Field(min_length=1, max_length=96)
-    device_id: str = Field(min_length=1, max_length=128)
-    name: str = Field(min_length=1, max_length=128)
-    occurred_at_ms: int = Field(ge=0)
-    payload: JsonObject = Field(default_factory=dict)

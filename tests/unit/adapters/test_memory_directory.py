@@ -50,7 +50,7 @@ class _Source:
 
 async def test_cache_hydrates_and_updates_only_after_database_commit() -> None:
     source = _Source()
-    cache = CachedDeviceDirectoryRepository(source, reconciliation_seconds=60)
+    cache = CachedDeviceDirectoryRepository(source, refresh_interval_seconds=60)
     await cache.start()
     try:
         assert await cache.list(owner_scope="owner-1") == (_entry(),)
@@ -66,7 +66,7 @@ async def test_cache_hydrates_and_updates_only_after_database_commit() -> None:
 
 async def test_refresh_reconciles_another_instance_change() -> None:
     source = _Source()
-    cache = CachedDeviceDirectoryRepository(source, reconciliation_seconds=60)
+    cache = CachedDeviceDirectoryRepository(source, refresh_interval_seconds=60)
     await cache.start()
     try:
         changed = replace(_entry(), online=True)

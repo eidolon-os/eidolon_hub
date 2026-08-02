@@ -54,8 +54,10 @@ def configure_opentelemetry(
 ) -> OpenTelemetryRuntime:
     """Build local providers without mutating process-global OTEL providers."""
 
-    if not enabled or not endpoint:
+    if not enabled:
         return OpenTelemetryRuntime(enabled=False)
+    if not endpoint:
+        raise ValueError("enabled OpenTelemetry export requires an OTLP endpoint")
 
     resource = Resource.create({SERVICE_NAME: service_name})
     tracer_provider = TracerProvider(resource=resource)

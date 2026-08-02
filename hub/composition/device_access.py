@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
+from urllib.parse import urlparse
 
 from hub.adapters.discovery.zeroconf import ZeroconfHubAdvertiser
 from hub.adapters.persistence.repositories import SqlHubRepositories
@@ -23,6 +24,8 @@ from hub.interfaces.http.routers.device_access import DeviceAccessHttpServices
 from hub.ports.channels import ChannelProviderControl
 from hub.ports.identity import Clock, IdGenerator
 
+_MDNS_SERVICE_TYPE = "_eidolon-hub._tcp.local."
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceAccessGraph:
@@ -39,6 +42,7 @@ def build_device_access(
     clock: Clock,
     ids: IdGenerator,
     lease_secret: bytes,
+    hub_instance_id: str,
 ) -> DeviceAccessGraph:
     sessions = repositories.sessions
     enroll = EnrollDevice(
@@ -49,7 +53,7 @@ def build_device_access(
         credential_issuer=HmacLeaseCredentialIssuer(lease_secret),
         clock=clock,
         ids=ids,
-        hub_instance_id=config.device_access.hub_instance_id,
+        hub_instance_id=hub_instance_id,
         session_ttl=timedelta(seconds=config.device_access.session_lease_seconds),
     )
     register = RegisterDevice(
@@ -115,12 +119,16 @@ def _mdns_advertiser(
     mdns = config.discovery.mdns
     if not mdns.enabled:
         return None
+    public_url = urlparse(config.device_access.public_base_url)
+    public_hostname = public_url.hostname or ""
+    mdns_hostname = public_hostname.removesuffix(".local")
+    public_port = public_url.port or 443
     return ZeroconfHubAdvertiser(
         advertisement_id="mdns-local",
-        service_type=mdns.service_type,
-        service_name=mdns.service_name or f"Eidolon Hub.{mdns.service_type}",
-        hostname=mdns.hostname,
-        port=config.api.port,
+        service_type=_MDNS_SERVICE_TYPE,
+        service_name=f"{config.device_access.hub_id}.{_MDNS_SERVICE_TYPE}",
+        hostname=mdns_hostname,
+        port=public_port,
         descriptor_uri=descriptor.descriptor_uri,
         registration_uri=descriptor.registration_uri,
     )

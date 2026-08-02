@@ -49,14 +49,6 @@ class DeviceRegistrationIntent:
     device_kind: str
     manifest: DeviceManifestDocument
 
-    @property
-    def manifest_json(self) -> str:
-        return self.manifest.canonical_json
-
-    @property
-    def manifest_revision(self) -> str:
-        return self.manifest.revision
-
 
 @dataclass(frozen=True, slots=True)
 class DirectorySession:

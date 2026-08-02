@@ -221,9 +221,7 @@ def test_managed_device_registration_and_command_values() -> None:
     device = ManagedDevice(identity, "Device", "generic", manifest, NOW, NOW)
     assert device.manifest_json == manifest.canonical_json
     assert device.manifest_revision == manifest.revision
-    intent = DeviceRegistrationIntent("request-1", identity, "Device", "generic", manifest)
-    assert intent.manifest_json == manifest.canonical_json
-    assert intent.manifest_revision == manifest.revision
+    DeviceRegistrationIntent("request-1", identity, "Device", "generic", manifest)
     with pytest.raises(ValueError, match="device_kind"):
         replace(device, device_kind="")
     with pytest.raises(ValueError, match="timezone-aware"):

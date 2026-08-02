@@ -133,22 +133,29 @@ def test_hub_has_no_transport_connector_or_mqtt_runtime() -> None:
     assert not (ROOT / "hub" / "ports" / "connections.py").exists()
     assert not any((ROOT / "hub" / "adapters" / "connections").glob("*.py"))
     assert not any((ROOT / "hub" / "domain" / "connections").glob("*.py"))
-    production_settings = (ROOT / "config" / "settings.yaml").read_text().lower()
+    production_settings = "\n".join(
+        path.read_text().lower() for path in (ROOT / "config").glob("settings.*.yaml")
+    )
     assert "mqtt" not in production_settings
     assert "connection_plane" not in production_settings
 
 
 def test_production_config_contains_no_provider_or_hardware_details() -> None:
     config_source = (ROOT / "hub" / "config.py").read_text(encoding="utf-8").lower()
-    settings_source = (ROOT / "config" / "settings.yaml").read_text(encoding="utf-8").lower()
+    settings_source = "\n".join(
+        path.read_text(encoding="utf-8").lower()
+        for path in (ROOT / "config").glob("settings.*.yaml")
+    )
     forbidden = {"livekit", "esp32", "room_name", "turn_url", "codec"}
 
     assert {value for value in forbidden if value in config_source} == set()
     assert {value for value in forbidden if value in settings_source} == set()
 
 
-def test_configuration_has_one_canonical_yaml_and_current_env_contract() -> None:
-    assert (ROOT / "config" / "settings.yaml").is_file()
+def test_configuration_has_two_explicit_profiles_and_current_env_contract() -> None:
+    assert (ROOT / "config" / "settings.local.yaml").is_file()
+    assert (ROOT / "config" / "settings.cloud.yaml").is_file()
+    assert not (ROOT / "config" / "settings.yaml").exists()
     assert not (ROOT / "config" / "settings.example.yaml").exists()
     assert not (ROOT / ".env.example").exists()
 
@@ -158,9 +165,14 @@ def test_configuration_has_one_canonical_yaml_and_current_env_contract() -> None
         "EIDOLON_HUB_MANAGEMENT_JWT_SECRET",
         "EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN",
     }
+    postgresql_credentials = {
+        "EIDOLON_HUB_POSTGRES_USER",
+        "EIDOLON_HUB_POSTGRES_PASSWORD",
+    }
     retired = {"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_API_URL", "MDNS_CONFIG_PATH"}
 
     assert all(f"{name}=" in environment_source for name in required)
+    assert all(f"{name}=" in environment_source for name in postgresql_credentials)
     assert all(name not in environment_source for name in retired)
 
 

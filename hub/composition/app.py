@@ -18,10 +18,11 @@ from hub.composition.channel_control import build_channel_control
 from hub.composition.device_access import build_device_access
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
+    load_runtime_environment,
     load_runtime_secrets,
     open_runtime_resources,
 )
-from hub.config import HubConfig, load_hub_config, validate_hub_config
+from hub.config import HubConfig, load_hub_config
 from hub.interfaces.http.routers.device_access import (
     DeviceAccessHttpServices,
     create_device_access_router,
@@ -45,7 +46,6 @@ class ComposedHttpRuntime:
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     app_config = config or load_hub_config()
-    validate_hub_config(app_config)
     runtime: ComposedHttpRuntime | None = None
     telemetry: OpenTelemetryRuntime | None = None
 
@@ -61,10 +61,11 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         stack = AsyncExitStack()
         await stack.__aenter__()
         try:
+            environment = load_runtime_environment(app_config)
             telemetry = configure_opentelemetry(
                 enabled=app_config.observability.enabled,
                 service_name=app_config.observability.service_name,
-                endpoint=app_config.observability.otlp_endpoint,
+                endpoint=environment.otlp_endpoint,
             )
             stack.callback(telemetry.shutdown)
             resources = await open_runtime_resources(app_config, stack)
@@ -89,6 +90,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 clock=resources.clock,
                 ids=resources.ids,
                 lease_secret=secrets.lease,
+                hub_instance_id=environment.hub_instance_id,
             )
             management = build_device_management(
                 repositories=resources.repositories,
@@ -101,7 +103,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             )
             directory_worker = DeviceDirectoryProjectionWorker(
                 projector,
-                interval_seconds=app_config.persistence.reconciliation_seconds,
+                interval_seconds=app_config.device_directory.projection_interval_seconds,
             )
 
             if device_access.mdns_advertiser is not None:

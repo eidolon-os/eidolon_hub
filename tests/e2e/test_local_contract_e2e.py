@@ -3,7 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -13,7 +12,15 @@ from jose import jwt
 from werkzeug.wrappers import Response
 
 from hub.composition.app import create_composed_app
-from hub.config import ChannelProviderConfig, HubConfig, PersistenceConfig
+from hub.config import (
+    ChannelProviderConfig,
+    DeviceAccessConfig,
+    DeviceDirectoryConfig,
+    DiscoveryConfig,
+    HubConfig,
+    MdnsDiscoveryConfig,
+    SqlitePersistenceConfig,
+)
 from hub.contracts.bindings.channel import (
     CommandAckPayload,
     CommandResultPayload,
@@ -121,24 +128,12 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         headers={"Authorization": f"Bearer {provider_token}"},
     ).respond_with_handler(provider_data)
 
-    config = replace(
-        HubConfig(),
-        observability=replace(HubConfig().observability, enabled=False),
-        device_access=replace(
-            HubConfig().device_access,
-            public_base_url="https://hub.e2e.invalid",
-        ),
-        discovery=replace(
-            HubConfig().discovery,
-            mdns=replace(HubConfig().discovery.mdns, enabled=False),
-        ),
+    config = HubConfig(
+        device_access=DeviceAccessConfig(public_base_url="https://hub.e2e.invalid"),
+        discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
         channel_provider=ChannelProviderConfig(contract_url=httpserver.url_for("/v1")),
-        persistence=PersistenceConfig(
-            adapter="sqlite",
-            sqlite_path=str(tmp_path / "hub-e2e.sqlite3"),
-            directory_cache_enabled=True,
-            reconciliation_seconds=60,
-        ),
+        persistence=SqlitePersistenceConfig(path=str(tmp_path / "hub-e2e.sqlite3")),
+        device_directory=DeviceDirectoryConfig(projection_interval_seconds=60),
     )
     admin = _admin_credential(management_secret)
     private_key = ec.generate_private_key(ec.SECP256R1())

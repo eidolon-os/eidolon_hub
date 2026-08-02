@@ -26,7 +26,7 @@ NOW = datetime(2026, 8, 1, tzinfo=UTC)
 @pytest.fixture
 async def database(tmp_path):
     value = HubDatabase.sqlite(tmp_path / "hub.sqlite3")
-    await value.init_schema()
+    await value.migrate()
     try:
         yield value
     finally:

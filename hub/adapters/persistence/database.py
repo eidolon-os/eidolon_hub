@@ -6,8 +6,13 @@ and domain code only receive the small repository ports.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+from alembic import command
+from alembic.config import Config
+from alembic.runtime.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -16,7 +21,8 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from hub.adapters.persistence.models import Base
+_MIGRATIONS = Path(__file__).with_name("migrations")
+_SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class HubDatabase:
@@ -53,28 +59,80 @@ class HubDatabase:
         *,
         pool_size: int = 10,
         max_overflow: int = 20,
+        pool_timeout_seconds: float = 10.0,
+        pool_recycle_seconds: int = 1800,
         echo: bool = False,
+        search_path: str | None = None,
     ) -> HubDatabase:
         normalized = dsn.strip()
-        if normalized.startswith("postgres://"):
-            normalized = "postgresql://" + normalized.removeprefix("postgres://")
         if normalized.startswith("postgresql://"):
             normalized = "postgresql+asyncpg://" + normalized.removeprefix("postgresql://")
         if not normalized.startswith("postgresql+asyncpg://"):
             raise ValueError("PostgreSQL DSN must use the postgresql scheme")
+        if search_path is not None and not _SCHEMA_NAME.fullmatch(search_path):
+            raise ValueError("PostgreSQL search_path must be one schema identifier")
+        connect_args = (
+            {"server_settings": {"search_path": search_path}} if search_path is not None else {}
+        )
         return cls(
             create_async_engine(
                 normalized,
                 pool_pre_ping=True,
                 pool_size=pool_size,
                 max_overflow=max_overflow,
+                pool_timeout=pool_timeout_seconds,
+                pool_recycle=pool_recycle_seconds,
                 echo=echo,
+                connect_args=connect_args,
             )
         )
 
-    async def init_schema(self) -> None:
+    async def migrate(self) -> None:
+        """Upgrade the database to the packaged, versioned schema head."""
+
         async with self.engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
+            await connection.run_sync(self._upgrade)
+
+    async def assert_schema_current(self) -> None:
+        """Fail startup when an out-of-band migration job has not reached head."""
+
+        async with self.engine.connect() as connection:
+            await connection.run_sync(self._assert_at_head)
+
+    async def assert_no_migration_drift(self) -> None:
+        """CI helper: ensure current ORM metadata needs no unversioned operation."""
+
+        async with self.engine.connect() as connection:
+            await connection.run_sync(self._check)
+
+    @staticmethod
+    def _upgrade(connection) -> None:
+        config = HubDatabase._alembic_config()
+        config.attributes["connection"] = connection
+        command.upgrade(config, "head")
+
+    @staticmethod
+    def _assert_at_head(connection) -> None:
+        config = HubDatabase._alembic_config()
+        expected = set(ScriptDirectory.from_config(config).get_heads())
+        current = set(MigrationContext.configure(connection).get_current_heads())
+        if current != expected:
+            raise RuntimeError(
+                f"Hub database schema is not current: current={sorted(current)}, "
+                f"expected={sorted(expected)}"
+            )
+
+    @staticmethod
+    def _check(connection) -> None:
+        config = HubDatabase._alembic_config()
+        config.attributes["connection"] = connection
+        command.check(config)
+
+    @staticmethod
+    def _alembic_config() -> Config:
+        config = Config()
+        config.set_main_option("script_location", str(_MIGRATIONS))
+        return config
 
     async def close(self) -> None:
         await self.engine.dispose()

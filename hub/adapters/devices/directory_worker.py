@@ -28,10 +28,6 @@ class DeviceDirectoryProjectionWorker:
         self._interval = interval_seconds
         self._task: asyncio.Task[None] | None = None
 
-    @property
-    def is_running(self) -> bool:
-        return self._task is not None
-
     async def start(self) -> None:
         if self._task is None:
             self._task = asyncio.create_task(

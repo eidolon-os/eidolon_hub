@@ -62,10 +62,6 @@ class ZeroconfHubAdvertiser:
         self._info: ServiceInfo | None = None
         self._refresh_task: asyncio.Task[None] | None = None
 
-    @property
-    def advertisement_id(self) -> str:
-        return self._advertisement_id
-
     def _build_info(self, addresses: tuple[str, ...]) -> ServiceInfo:
         if not addresses:
             raise RuntimeError("mDNS advertisement has no usable interface addresses")

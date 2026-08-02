@@ -87,9 +87,6 @@ class _Channels:
         self.values[lease.channel_id] = lease
         return lease
 
-    async def delete(self, channel_id):
-        self.values.pop(channel_id, None)
-
     async def list_for_device(self, device_id):
         return tuple(value for value in self.values.values() if value.device_id == device_id)
 
