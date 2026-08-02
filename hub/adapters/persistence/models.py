@@ -47,14 +47,11 @@ class CommandRow(Base):
     result_json: Mapped[str | None] = mapped_column(Text)
 
 
-class ConnectionRow(Base):
-    __tablename__ = "hub_connection_leases"
+class DeviceSessionRow(Base):
+    __tablename__ = "hub_device_sessions"
 
-    connection_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     device_id: Mapped[str] = mapped_column(String(255), index=True)
-    connector_id: Mapped[str] = mapped_column(String(255))
-    connector_kind: Mapped[str] = mapped_column(String(32))
-    signaling_ref: Mapped[str] = mapped_column(Text)
     opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     renewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -62,12 +59,11 @@ class ConnectionRow(Base):
     identity_fingerprint: Mapped[str] = mapped_column(String(512))
     hub_instance_id: Mapped[str] = mapped_column(String(255), index=True)
     fencing_token: Mapped[int] = mapped_column(Integer)
-    priority: Mapped[int] = mapped_column(Integer, default=100)
     heartbeat_sequence: Mapped[int] = mapped_column(Integer, default=0)
     state: Mapped[str] = mapped_column(String(32), index=True)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
-    __table_args__ = (Index("ix_hub_connections_active", "device_id", "state", "expires_at"),)
+    __table_args__ = (Index("ix_hub_sessions_active", "device_id", "state", "expires_at"),)
 
 
 class DeviceAuthorityRow(Base):
@@ -88,10 +84,6 @@ class ChallengeRow(Base):
     client_nonce: Mapped[str] = mapped_column(Text)
     server_nonce: Mapped[str] = mapped_column(Text)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    connector_id: Mapped[str] = mapped_column(String(255))
-    connector_kind: Mapped[str] = mapped_column(String(32))
-    signaling_ref: Mapped[str] = mapped_column(Text)
-    priority: Mapped[int] = mapped_column(Integer)
     consumed: Mapped[bool] = mapped_column(Boolean, default=False)
     version: Mapped[int] = mapped_column(Integer, default=1)
 
@@ -124,21 +116,6 @@ class ChannelLeaseRow(Base):
     __table_args__ = (
         Index("ix_hub_channels_active", "device_id", "purpose", "state", "expires_at"),
     )
-
-
-class ChannelProviderSyncRow(Base):
-    __tablename__ = "hub_channel_provider_sync"
-
-    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    operation_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    desired_revision: Mapped[str] = mapped_column(String(96), index=True)
-    state: Mapped[str] = mapped_column(String(32), index=True)
-    attempts: Mapped[int] = mapped_column(Integer, default=0)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    owner_instance_id: Mapped[str] = mapped_column(String(255), default="", index=True)
-    claim_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
-    last_error: Mapped[str] = mapped_column(String(128), default="")
-    version: Mapped[int] = mapped_column(Integer, default=1)
 
 
 class ChannelCursorRow(Base):

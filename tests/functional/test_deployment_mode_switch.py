@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from hub.composition.app import create_composed_app
-from hub.config import HubConfig, MqttConnectorConfig, PersistenceConfig
+from hub.config import HubConfig, PersistenceConfig
 
 
 def test_local_and_cloud_configs_publish_identical_device_bus_contracts() -> None:
@@ -16,14 +16,9 @@ def test_local_and_cloud_configs_publish_identical_device_bus_contracts() -> Non
             adapter="postgresql",
             postgresql_dsn_env="EIDOLON_HUB_TEST_POSTGRES_DSN",
         ),
-        connection_plane=replace(
-            HubConfig().connection_plane,
-            mdns=replace(HubConfig().connection_plane.mdns, enabled=False),
-            mqtt=MqttConnectorConfig(
-                enabled=True,
-                hostname="broker.cloud.invalid",
-                connector_id="mqtt-cloud",
-            ),
+        discovery=replace(
+            HubConfig().discovery,
+            mdns=replace(HubConfig().discovery.mdns, enabled=False),
         ),
     )
 
@@ -34,8 +29,8 @@ def test_local_and_cloud_configs_publish_identical_device_bus_contracts() -> Non
     assert local_openapi["components"]["schemas"] == cloud_openapi["components"]["schemas"]
     assert local.persistence.adapter == "sqlite"
     assert cloud.persistence.adapter == "postgresql"
-    assert local.connection_plane.mdns.enabled is True
-    assert cloud.connection_plane.mqtt.enabled is True
+    assert local.discovery.mdns.enabled is True
+    assert cloud.discovery.mdns.enabled is False
 
 
 def test_mode_switch_has_no_data_or_live_lease_migration_semantics() -> None:
@@ -45,4 +40,4 @@ def test_mode_switch_has_no_data_or_live_lease_migration_semantics() -> None:
 
     assert "migration_source" not in persistence_fields
     assert "bridge_to_cloud" not in persistence_fields
-    assert "replicate_connections" not in persistence_fields
+    assert "replicate_sessions" not in persistence_fields

@@ -10,14 +10,18 @@ from hypothesis import given, settings
 from hypothesis_jsonschema import from_schema
 from jsonschema import Draft202012Validator
 
-from hub.contracts.bindings.channel import ChannelGrant, ChannelLifecycleEvent, DataEnvelope
-from hub.contracts.bindings.connection import ConnectionHello, HubDescriptor
+from hub.contracts.bindings.channel import (
+    ChannelAcquisitionRequest,
+    ChannelLifecycleEvent,
+    DataEnvelope,
+)
 from hub.contracts.bindings.device import (
     DeviceCommandStatus,
     DeviceDirectoryEntry,
     DeviceManifest,
     DeviceRegistration,
 )
+from hub.contracts.bindings.session import HubDescriptor, SessionHello
 from hub.contracts.generated.schema_models.channel.data_envelope_schema import (
     DataEnvelope as GeneratedDataEnvelope,
 )
@@ -49,20 +53,15 @@ def test_generated_contract_shapes_are_current() -> None:
     )
 
 
-def test_generated_channel_grant_matches_source_schema() -> None:
-    grant = ChannelGrant(
-        operation_id="channel-sync:sha256:desired",
-        channel_id="channel-1",
-        purpose="management",
-        kinds=("reliable-data",),
-        binding_format="application/eidolon-channel+json",
-        issued_at_ms=1_799_999_000_000,
-        lease_expires_at_ms=1_800_000_000_000,
-        opaque_binding="encrypted-provider-binding",
+def test_channel_acquisition_request_matches_source_schema() -> None:
+    request = ChannelAcquisitionRequest(
+        request_id="acquire-1",
+        session_id="session-1",
+        lease_token="0123456789abcdef",
     )
 
-    Draft202012Validator(_schema("channel/channel.schema.json")).validate(
-        grant.model_dump(mode="json")
+    Draft202012Validator(_schema("channel/acquisition.schema.json")["$defs"]["request"]).validate(
+        request.model_dump(mode="json")
     )
 
 
@@ -86,12 +85,15 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
     now = datetime(2026, 8, 1, tzinfo=timezone.utc)
     values = (
         (
-            "connection/descriptor.schema.json",
+            "session/descriptor.schema.json",
             HubDescriptor(
                 hub_id="hub-1",
-                descriptor_uri="https://hub.example/api/connection/v1/descriptor",
-                https_registration_uri="https://hub.example/api/connection/v1/register",
-                mqtt_endpoint_uri="mqtts://broker.example:8883",
+                descriptor_uri="https://hub.example/api/device-access/v1/descriptor",
+                device_access_uri="https://hub.example/api/device-access/v1",
+                registration_uri="https://hub.example/api/device-access/v1/register",
+                channel_acquisition_uri=(
+                    "https://hub.example/api/device-access/v1/channels/acquire"
+                ),
             ),
         ),
         (
@@ -138,13 +140,13 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
 
 
 def test_golden_contract_examples_are_accepted() -> None:
-    ConnectionHello.model_validate_json(
-        (EXAMPLES / "connection-hello.json").read_text(encoding="utf-8")
-    )
+    SessionHello.model_validate_json((EXAMPLES / "session-hello.json").read_text(encoding="utf-8"))
     DeviceRegistration.model_validate_json(
         (EXAMPLES / "device-registration.json").read_text(encoding="utf-8")
     )
-    ChannelGrant.model_validate_json((EXAMPLES / "channel-grant.json").read_text(encoding="utf-8"))
+    ChannelAcquisitionRequest.model_validate_json(
+        (EXAMPLES / "channel-acquisition.json").read_text(encoding="utf-8")
+    )
     parse_sense_message(json.loads((EXAMPLES / "sense-attention.json").read_text()))
     parse_guard_message(json.loads((EXAMPLES / "guard-candidate.json").read_text()))
 

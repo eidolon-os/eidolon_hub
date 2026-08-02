@@ -10,27 +10,21 @@ observability:
   # Prefer the standard OTEL_EXPORTER_OTLP_ENDPOINT environment variable.
   otlp_endpoint: ""
 
-connection_plane:
+device_access:
   hub_id: eidolon-hub-local
   hub_instance_id: eidolon-hub-local-1
   public_base_url: https://eidolon-hub.local:8082
-  lease_seconds: 45
+  session_lease_seconds: 45
   heartbeat_after_ms: 15000
-  # Discovery publisher: advertises Descriptor URI but never creates a
-  # ConnectionLease. It is grouped here as part of Connection Plane ingress.
+
+discovery:
+  # Publishes the same HTTPS Descriptor URI used by commissioned WAN devices.
+  # mDNS never creates a DeviceSessionLease.
   mdns:
     enabled: true
     service_type: _eidolon-hub._tcp.local.
     service_name: Eidolon Hub._eidolon-hub._tcp.local.
     hostname: eidolon-hub
-  mqtt:
-    enabled: false
-    connector_id: mqtt-cloud
-    hostname: ""
-    port: 8883
-    username: ""
-    password_env: EIDOLON_HUB_MQTT_PASSWORD
-    priority: 100
 
 # Hub knows only this versioned contract base. Transport/media policy and
 # dynamic credentials are wholly owned by the external Channel Provider.

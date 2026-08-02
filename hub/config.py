@@ -84,7 +84,7 @@ def _validate_settings_shape(value: dict[str, Any]) -> None:
 
     _reject_unknown(
         value,
-        {"api", "observability", "connection_plane", "channel_provider", "persistence"},
+        {"api", "observability", "discovery", "device_access", "channel_provider", "persistence"},
         "root",
     )
     _reject_unknown(_section(value, "api"), {"host", "port"}, "api")
@@ -93,29 +93,27 @@ def _validate_settings_shape(value: dict[str, Any]) -> None:
         {"enabled", "service_name", "otlp_endpoint"},
         "observability",
     )
-    connection = _section(value, "connection_plane")
+    discovery = _section(value, "discovery")
     _reject_unknown(
-        connection,
+        discovery,
+        {"mdns"},
+        "discovery",
+    )
+    _reject_unknown(
+        _section(discovery, "mdns"),
+        {"enabled", "service_type", "service_name", "hostname"},
+        "discovery.mdns",
+    )
+    _reject_unknown(
+        _section(value, "device_access"),
         {
             "hub_id",
             "hub_instance_id",
             "public_base_url",
-            "lease_seconds",
+            "session_lease_seconds",
             "heartbeat_after_ms",
-            "mdns",
-            "mqtt",
         },
-        "connection_plane",
-    )
-    _reject_unknown(
-        _section(connection, "mdns"),
-        {"enabled", "service_type", "service_name", "hostname"},
-        "connection_plane.mdns",
-    )
-    _reject_unknown(
-        _section(connection, "mqtt"),
-        {"enabled", "connector_id", "hostname", "port", "username", "password_env", "priority"},
-        "connection_plane.mqtt",
+        "device_access",
     )
     _reject_unknown(
         _section(value, "channel_provider"),
@@ -172,25 +170,17 @@ class PersistenceConfig:
 
 
 @dataclass(frozen=True, slots=True)
-class MqttConnectorConfig:
-    enabled: bool = False
-    connector_id: str = "mqtt-cloud"
-    hostname: str = ""
-    port: int = 8883
-    username: str = ""
-    password_env: str = "EIDOLON_HUB_MQTT_PASSWORD"
-    priority: int = 100
+class DiscoveryConfig:
+    mdns: MdnsDiscoveryConfig = field(default_factory=MdnsDiscoveryConfig)
 
 
 @dataclass(frozen=True, slots=True)
-class ConnectionPlaneConfig:
+class DeviceAccessConfig:
     hub_id: str = "eidolon-hub-local"
     hub_instance_id: str = "eidolon-hub-local-1"
     public_base_url: str = "https://eidolon-hub.local:8082"
-    lease_seconds: int = 45
+    session_lease_seconds: int = 45
     heartbeat_after_ms: int = 15_000
-    mdns: MdnsDiscoveryConfig = field(default_factory=MdnsDiscoveryConfig)
-    mqtt: MqttConnectorConfig = field(default_factory=MqttConnectorConfig)
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,7 +195,8 @@ class HubConfig:
     api: ApiConfig = field(default_factory=ApiConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     persistence: PersistenceConfig = field(default_factory=PersistenceConfig)
-    connection_plane: ConnectionPlaneConfig = field(default_factory=ConnectionPlaneConfig)
+    discovery: DiscoveryConfig = field(default_factory=DiscoveryConfig)
+    device_access: DeviceAccessConfig = field(default_factory=DeviceAccessConfig)
     channel_provider: ChannelProviderConfig = field(default_factory=ChannelProviderConfig)
 
     @classmethod
@@ -217,7 +208,8 @@ class HubConfig:
             api=_api_from_yaml(source),
             observability=_observability_from_yaml(source),
             persistence=_persistence_from_yaml(source),
-            connection_plane=_connection_plane_from_yaml(source),
+            discovery=_discovery_from_yaml(source),
+            device_access=_device_access_from_yaml(source),
             channel_provider=_channel_provider_from_yaml(source),
         )
         validate_hub_config(config)
@@ -246,7 +238,7 @@ def _observability_from_yaml(value: dict[str, Any]) -> ObservabilityConfig:
 def _mdns_from_yaml(value: dict[str, Any]) -> MdnsDiscoveryConfig:
     section = _section(value, "mdns")
     return MdnsDiscoveryConfig(
-        enabled=_boolean(section, "enabled", True, "connection_plane.mdns"),
+        enabled=_boolean(section, "enabled", True, "discovery.mdns"),
         service_type=str(section.get("service_type") or "_eidolon-hub._tcp.local."),
         service_name=str(section.get("service_name") or ""),
         hostname=str(section.get("hostname") or "eidolon-hub"),
@@ -269,27 +261,21 @@ def _persistence_from_yaml(value: dict[str, Any]) -> PersistenceConfig:
     )
 
 
-def _connection_plane_from_yaml(value: dict[str, Any]) -> ConnectionPlaneConfig:
-    section = _section(value, "connection_plane")
-    mqtt = _section(section, "mqtt")
-    return ConnectionPlaneConfig(
+def _discovery_from_yaml(value: dict[str, Any]) -> DiscoveryConfig:
+    section = _section(value, "discovery")
+    return DiscoveryConfig(mdns=_mdns_from_yaml(section))
+
+
+def _device_access_from_yaml(value: dict[str, Any]) -> DeviceAccessConfig:
+    section = _section(value, "device_access")
+    return DeviceAccessConfig(
         hub_id=str(section.get("hub_id") or "eidolon-hub-local"),
         hub_instance_id=str(section.get("hub_instance_id") or "eidolon-hub-local-1"),
         public_base_url=str(
             section.get("public_base_url") or "https://eidolon-hub.local:8082"
         ).rstrip("/"),
-        lease_seconds=int(section.get("lease_seconds", 45)),
+        session_lease_seconds=int(section.get("session_lease_seconds", 45)),
         heartbeat_after_ms=int(section.get("heartbeat_after_ms", 15_000)),
-        mdns=_mdns_from_yaml(section),
-        mqtt=MqttConnectorConfig(
-            enabled=_boolean(mqtt, "enabled", False, "connection_plane.mqtt"),
-            connector_id=str(mqtt.get("connector_id") or "mqtt-cloud"),
-            hostname=str(mqtt.get("hostname") or ""),
-            port=int(mqtt.get("port", 8883)),
-            username=str(mqtt.get("username") or ""),
-            password_env=str(mqtt.get("password_env") or "EIDOLON_HUB_MQTT_PASSWORD"),
-            priority=int(mqtt.get("priority", 100)),
-        ),
     )
 
 
@@ -305,18 +291,23 @@ def validate_hub_config(config: HubConfig) -> None:
         raise ValueError("api.host is required")
     if not 1 <= config.api.port <= 65_535:
         raise ValueError("api.port must be between 1 and 65535")
+    if not config.device_access.hub_id.strip() or not config.device_access.hub_instance_id.strip():
+        raise ValueError("device_access hub identifiers are required")
+    access_url = urlparse(config.device_access.public_base_url)
     if (
-        not config.connection_plane.hub_id.strip()
-        or not config.connection_plane.hub_instance_id.strip()
+        access_url.scheme != "https"
+        or not access_url.netloc
+        or access_url.username is not None
+        or access_url.password is not None
+        or access_url.query
+        or access_url.fragment
     ):
-        raise ValueError("connection_plane hub identifiers are required")
-    if not config.connection_plane.public_base_url.startswith("https://"):
-        raise ValueError("connection_plane.public_base_url must use HTTPS")
-    if config.connection_plane.lease_seconds < 15:
-        raise ValueError("connection_plane.lease_seconds must be at least 15")
-    if not 1_000 <= config.connection_plane.heartbeat_after_ms <= 300_000:
-        raise ValueError("connection_plane.heartbeat_after_ms is out of range")
-    mdns = config.connection_plane.mdns
+        raise ValueError("device_access.public_base_url must be a plain HTTPS base URL")
+    if config.device_access.session_lease_seconds < 15:
+        raise ValueError("device_access.session_lease_seconds must be at least 15")
+    if not 1_000 <= config.device_access.heartbeat_after_ms <= 300_000:
+        raise ValueError("device_access.heartbeat_after_ms is out of range")
+    mdns = config.discovery.mdns
     if mdns.enabled:
         if not mdns.service_type.startswith("_") or not mdns.service_type.endswith(".local."):
             raise ValueError("mDNS service_type must be a .local. service type")
@@ -324,11 +315,6 @@ def validate_hub_config(config: HubConfig) -> None:
             raise ValueError("mDNS service_name must belong to service_type")
         if not mdns.hostname.strip():
             raise ValueError("enabled mDNS discovery requires hostname")
-    mqtt = config.connection_plane.mqtt
-    if mqtt.enabled and not mqtt.hostname:
-        raise ValueError("enabled MQTT connector requires hostname")
-    if not 1 <= mqtt.port <= 65_535:
-        raise ValueError("MQTT port must be between 1 and 65535")
     persistence = config.persistence
     if persistence.adapter not in {"sqlite", "postgresql"}:
         raise ValueError("persistence.adapter must be sqlite or postgresql")

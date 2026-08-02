@@ -1,1 +1,0 @@
-{"operation":"channel.grant","operation_id":"channel-sync:sha256:desired","channel_id":"data-1","purpose":"management","kinds":["reliable-data"],"binding_format":"application/eidolon-channel+json","issued_at_ms":1796083200000,"lease_expires_at_ms":1800000000000,"opaque_binding":"encrypted-provider-binding"}

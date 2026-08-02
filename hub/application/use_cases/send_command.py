@@ -1,4 +1,4 @@
-"""Create a durable command and send it through a data channel, never MQTT."""
+"""Create a durable command and send it through a reliable data channel."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.commands.state_machine import transition_command
 from hub.ports.channels import CommandChannelSender
 from hub.ports.identity import Clock, IdGenerator
-from hub.ports.repositories import CommandRepository, DeviceRepository
+from hub.ports.repositories import CommandRepository, DeviceRepository, DeviceSessionRepository
 
 
 class SendCommand:
@@ -17,12 +17,14 @@ class SendCommand:
         self,
         *,
         devices: DeviceRepository,
+        sessions: DeviceSessionRepository,
         commands: CommandRepository,
         sender: CommandChannelSender,
         clock: Clock,
         ids: IdGenerator,
     ) -> None:
         self._devices = devices
+        self._sessions = sessions
         self._commands = commands
         self._sender = sender
         self._clock = clock
@@ -42,6 +44,9 @@ class SendCommand:
             raise KeyError(device_id)
         if not device.approved:
             raise PermissionError("device is not approved for commands")
+        now = self._clock.now()
+        if not await self._sessions.active_for_device(device_id, now=now):
+            raise ConnectionError("device has no active session")
         try:
             payload = json.loads(payload_json)
         except json.JSONDecodeError as exc:
@@ -50,7 +55,6 @@ class SendCommand:
             raise ValueError("command payload_json must contain a JSON object")
         if ttl <= timedelta(0) or ttl > timedelta(minutes=5):
             raise ValueError("command ttl must be between zero and five minutes")
-        now = self._clock.now()
         command_id = request_id or self._ids.new("command")
         current = await self._commands.get(command_id)
         if current is not None:

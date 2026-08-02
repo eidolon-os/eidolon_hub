@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 from datetime import UTC, datetime
 
 from hub.contracts.bindings.channel import (
+    ChannelAcquisitionResponse,
+    ChannelAssignment,
     ChannelLifecycleEvent,
     CommandAckPayload,
     CommandResultPayload,
@@ -24,10 +27,9 @@ from hub.contracts.bindings.device import (
 from hub.contracts.bindings.device import (
     DeviceDirectoryEntry as DeviceDirectoryEntryWire,
 )
-from hub.contracts.bindings.device import (
-    DirectoryConnection as DirectoryConnectionWire,
-)
+from hub.contracts.bindings.device import DirectorySession as DirectorySessionWire
 from hub.domain.channels.entities import (
+    ChannelAssignmentSet,
     ChannelDataEnvelope,
     ChannelLifecycle,
     ChannelState,
@@ -147,6 +149,30 @@ def channel_lifecycle_to_domain(event: ChannelLifecycleEvent) -> ChannelLifecycl
     )
 
 
+def channel_assignments_to_wire(
+    assignments: ChannelAssignmentSet,
+    *,
+    request_id: str,
+) -> ChannelAcquisitionResponse:
+    return ChannelAcquisitionResponse(
+        request_id=request_id,
+        device_id=assignments.device_id,
+        manifest_revision=assignments.manifest_revision,
+        channels=tuple(
+            ChannelAssignment(
+                channel_id=grant.lease.channel_id,
+                purpose=grant.lease.purpose,
+                kinds=tuple(sorted(kind.value for kind in grant.lease.kinds)),
+                binding_format=grant.lease.binding_format,
+                issued_at_ms=int(grant.lease.issued_at.timestamp() * 1000),
+                expires_at_ms=int(grant.lease.expires_at.timestamp() * 1000),
+                opaque_binding=base64.b64encode(grant.opaque_binding.relay_bytes()).decode("ascii"),
+            )
+            for grant in assignments.grants
+        ),
+    )
+
+
 def registration_status_to_wire(device: ManagedDevice) -> DeviceRegistrationStatus:
     return DeviceRegistrationStatus(
         device_id=device.identity.device_id,
@@ -175,14 +201,12 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         approved=entry.approved,
         revoked=entry.revoked,
         online=entry.online,
-        connections=tuple(
-            DirectoryConnectionWire(
-                connection_id=value.connection_id,
-                connector_id=value.connector_id,
-                connector_kind=value.connector_kind,
+        sessions=tuple(
+            DirectorySessionWire(
+                session_id=value.session_id,
                 expires_at=value.expires_at,
             )
-            for value in entry.connections
+            for value in entry.sessions
         ),
         registered_at=entry.registered_at,
         updated_at=entry.updated_at,

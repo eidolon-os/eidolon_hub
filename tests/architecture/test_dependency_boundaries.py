@@ -126,18 +126,16 @@ def test_production_entry_and_interfaces_do_not_use_legacy_service_locator() -> 
     assert violations == []
 
 
-def test_connection_plane_never_imports_livekit() -> None:
-    violations = []
-    for root in (
-        ROOT / "hub" / "adapters" / "connections",
-        ROOT / "hub" / "domain" / "connections",
-        ROOT / "hub" / "ports" / "connections.py",
-    ):
-        paths = [root] if root.is_file() else root.rglob("*.py")
-        for path in paths:
-            if "livekit" in _imports(path):
-                violations.append(str(path.relative_to(ROOT)))
-    assert violations == []
+def test_hub_has_no_transport_connector_or_mqtt_runtime() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["dependencies"]).lower()
+    assert "aiomqtt" not in dependencies
+    assert not (ROOT / "hub" / "ports" / "connections.py").exists()
+    assert not any((ROOT / "hub" / "adapters" / "connections").glob("*.py"))
+    assert not any((ROOT / "hub" / "domain" / "connections").glob("*.py"))
+    production_settings = (ROOT / "config" / "settings.yaml").read_text().lower()
+    assert "mqtt" not in production_settings
+    assert "connection_plane" not in production_settings
 
 
 def test_production_config_contains_no_provider_or_hardware_details() -> None:

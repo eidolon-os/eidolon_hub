@@ -8,15 +8,15 @@ from hub.composition.app import create_composed_app
 from hub.config import HubConfig, PersistenceConfig
 
 
-def test_three_plane_openapi_routes_exist_before_lifespan_start() -> None:
+def test_public_contract_routes_exist_before_lifespan_start() -> None:
     app = create_composed_app(HubConfig())
 
     paths = app.openapi()["paths"]
 
-    assert "/api/connection/v1/descriptor" in paths
-    assert "/api/connection/v1/register" in paths
-    assert "/api/connection/v1/signals" not in paths
-    assert "/api/connection/v1/signals/{device_id}" in paths
+    assert "/api/device-access/v1/descriptor" in paths
+    assert "/api/device-access/v1/register" in paths
+    assert "/api/device-access/v1/channels/acquire" in paths
+    assert not any("signals" in path for path in paths)
     assert "/api/device-management/v1/directory/{owner_scope}" in paths
     assert "/api/device-management/v1/events/{owner_scope}" in paths
     assert "/api/device-management/v1/devices/{device_id}/channels/{profile_name}" not in paths
@@ -45,9 +45,9 @@ def test_composition_starts_with_only_hub_owned_sqlite(tmp_path, monkeypatch) ->
     config = replace(
         HubConfig(),
         observability=replace(HubConfig().observability, enabled=False),
-        connection_plane=replace(
-            HubConfig().connection_plane,
-            mdns=replace(HubConfig().connection_plane.mdns, enabled=False),
+        discovery=replace(
+            HubConfig().discovery,
+            mdns=replace(HubConfig().discovery.mdns, enabled=False),
         ),
         persistence=PersistenceConfig(
             adapter="sqlite",

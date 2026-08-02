@@ -8,14 +8,12 @@ from typing import Annotated, List, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 
-class Connection(BaseModel):
+class Session(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
     )
-    connection_id: Annotated[str, Field(max_length=128, min_length=1)]
-    connector_id: Annotated[str, Field(max_length=96, min_length=1)]
-    connector_kind: Annotated[str, Field(max_length=64, min_length=1)]
+    session_id: Annotated[str, Field(max_length=128, min_length=1)]
     expires_at: AwareDatetime
 
 
@@ -34,7 +32,7 @@ class DeviceDirectoryEntry(BaseModel):
     approved: bool
     revoked: bool
     online: bool
-    connections: Annotated[List[Connection], Field(max_length=32)]
+    sessions: Annotated[List[Session], Field(max_length=32)]
     registered_at: AwareDatetime
     updated_at: AwareDatetime
     revision: Annotated[int, Field(ge=1)]

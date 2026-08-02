@@ -88,14 +88,14 @@ class ProviderChannelDevice(ContractModel):
     connected: bool
 
 
-class ProviderChannelSyncRequest(ContractModel):
-    operation: Literal["channel.sync-device"] = "channel.sync-device"
+class ProviderChannelAcquisitionRequest(ContractModel):
+    operation: Literal["channel.acquire-device"] = "channel.acquire-device"
     operation_id: str = Field(min_length=1, max_length=128)
     hub_id: str = Field(min_length=1, max_length=128)
     device: ProviderChannelDevice
 
 
-class ProviderChannelAssignment(ContractModel):
+class ChannelAssignment(ContractModel):
     channel_id: str = Field(min_length=1, max_length=128)
     purpose: str = Field(min_length=1, max_length=96)
     kinds: tuple[ChannelKind, ...] = Field(min_length=1, max_length=4)
@@ -117,12 +117,12 @@ class ProviderChannelAssignment(ContractModel):
         return value
 
 
-class ProviderChannelSyncResponse(ContractModel):
+class ProviderChannelAcquisitionResponse(ContractModel):
     operation: Literal["channel.assignments"] = "channel.assignments"
     operation_id: str = Field(min_length=1, max_length=128)
     device_id: str = Field(min_length=1, max_length=128)
     manifest_revision: str = Field(min_length=1, max_length=96)
-    channels: tuple[ProviderChannelAssignment, ...] = Field(default=(), max_length=16)
+    channels: tuple[ChannelAssignment, ...] = Field(default=(), max_length=16)
 
     @field_validator("channels", mode="before")
     @classmethod
@@ -130,20 +130,23 @@ class ProviderChannelSyncResponse(ContractModel):
         return tuple(value) if isinstance(value, list) else value
 
 
-class ChannelGrant(ContractModel):
-    operation: Literal["channel.grant"] = "channel.grant"
-    operation_id: str = Field(min_length=1, max_length=128)
-    channel_id: str = Field(min_length=1, max_length=128)
-    purpose: str = Field(min_length=1, max_length=96)
-    kinds: tuple[ChannelKind, ...] = Field(min_length=1, max_length=4)
-    binding_format: str = Field(min_length=1, max_length=128)
-    issued_at_ms: int = Field(ge=0)
-    lease_expires_at_ms: int = Field(ge=0)
-    opaque_binding: str = Field(min_length=1, max_length=87_384, repr=False)
+class ChannelAcquisitionRequest(ContractModel):
+    operation: Literal["channel.acquire"] = "channel.acquire"
+    request_id: str = Field(min_length=1, max_length=96)
+    session_id: str = Field(min_length=1, max_length=128)
+    lease_token: str = Field(min_length=16, max_length=512, repr=False)
 
-    @field_validator("kinds", mode="before")
+
+class ChannelAcquisitionResponse(ContractModel):
+    operation: Literal["channel.acquired"] = "channel.acquired"
+    request_id: str = Field(min_length=1, max_length=96)
+    device_id: str = Field(min_length=1, max_length=128)
+    manifest_revision: str = Field(min_length=1, max_length=96)
+    channels: tuple[ChannelAssignment, ...] = Field(default=(), max_length=16)
+
+    @field_validator("channels", mode="before")
     @classmethod
-    def _kind_arrays(cls, value):
+    def _channel_arrays(cls, value):
         return tuple(value) if isinstance(value, list) else value
 
 

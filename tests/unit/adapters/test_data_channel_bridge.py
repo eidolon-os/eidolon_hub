@@ -150,7 +150,7 @@ async def test_command_requires_active_management_channel() -> None:
         await bridge.send_command(_command(device_id="offline-device"))
 
 
-async def test_pending_channel_cannot_carry_inbound_or_outbound_data() -> None:
+async def test_pending_channel_cannot_carry_outbound_data() -> None:
     channels = _Channels()
     channels.lease = replace(channels.lease, state=ChannelState.PENDING)
     sender, cursors, ingest = _Sender(), _Cursors(), _Ingest()

@@ -1,14 +1,13 @@
 # ADR 0001: Separate connection, device management, and channel control
 
-- Status: accepted
+- Status: superseded by ADR 0011
 - Date: 2026-08-01
 
 ## Decision
 
-Hub uses independent connection, device-management, and channel-control
-boundaries. Connection adapters emit normalized events and do not persist
-device facts. Channel providers are invoked through a provider-neutral port and
-own all provider-specific connection details.
+This ADR recorded the first separation attempt. ADR 0011 removes the transport
+Connection Plane and replaces it with HTTPS Device Sessions plus direct Channel
+Acquisition.
 
 LiveKit is not a device connection mechanism. MQTT is a rendezvous transport
 and cannot carry operational data.

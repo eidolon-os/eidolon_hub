@@ -16,15 +16,10 @@ from hub.domain.channels.entities import (
     ProviderDeviceContext,
 )
 from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.connections.entities import (
-    ConnectionLease,
-    ConnectorKind,
-    DeviceAuthorityLease,
-)
-from hub.domain.connections.registry import ConnectionNotFound, ConnectionRegistry
 from hub.domain.devices.entities import DeviceRegistrationIntent, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import DeviceAuthorityLease, DeviceSessionLease
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -41,13 +36,10 @@ def _channel_lease() -> ChannelLease:
     )
 
 
-def _connection(**changes) -> ConnectionLease:
+def _session(**changes) -> DeviceSessionLease:
     values = {
-        "connection_id": "connection-1",
+        "session_id": "session-1",
         "device_id": "device-1",
-        "connector_id": "https-local",
-        "connector_kind": ConnectorKind.HTTPS,
-        "signaling_ref": "http-mailbox:device-1",
         "opened_at": NOW,
         "renewed_at": NOW,
         "expires_at": NOW + timedelta(seconds=45),
@@ -57,7 +49,7 @@ def _connection(**changes) -> ConnectionLease:
         "fencing_token": 1,
     }
     values.update(changes)
-    return ConnectionLease(**values)
+    return DeviceSessionLease(**values)
 
 
 def _manifest() -> DeviceManifestDocument:
@@ -131,7 +123,7 @@ def test_channel_lease_envelope_and_lifecycle_invariants() -> None:
         replace(context, owner_id="")
 
 
-def test_authority_and_connection_invariants_and_renewal_guards() -> None:
+def test_authority_and_session_invariants_and_renewal_guards() -> None:
     authority = DeviceAuthorityLease("device-1", "hub-1", 1, NOW + timedelta(seconds=45))
     for changes, message in (
         ({"device_id": ""}, "required"),
@@ -141,12 +133,10 @@ def test_authority_and_connection_invariants_and_renewal_guards() -> None:
         with pytest.raises(ValueError, match=message):
             replace(authority, **changes)
 
-    lease = _connection()
+    lease = _session()
     for field_name in (
-        "connection_id",
+        "session_id",
         "device_id",
-        "connector_id",
-        "signaling_ref",
         "lease_token",
         "identity_fingerprint",
         "hub_instance_id",
@@ -165,11 +155,16 @@ def test_authority_and_connection_invariants_and_renewal_guards() -> None:
             replace(lease, **changes)
 
     with pytest.raises(ValueError, match="closed"):
-        lease.close().renew(now=NOW, ttl=timedelta(seconds=1), lease_token=lease.lease_token)
+        lease.close().renew(
+            now=NOW,
+            ttl=timedelta(seconds=1),
+            lease_token=lease.lease_token,
+            sequence=1,
+        )
     with pytest.raises(PermissionError, match="mismatch"):
-        lease.renew(now=NOW, ttl=timedelta(seconds=1), lease_token="wrong")
+        lease.renew(now=NOW, ttl=timedelta(seconds=1), lease_token="wrong", sequence=1)
     with pytest.raises(ValueError, match="positive"):
-        lease.renew(now=NOW, ttl=timedelta(0), lease_token=lease.lease_token)
+        lease.renew(now=NOW, ttl=timedelta(0), lease_token=lease.lease_token, sequence=1)
     sequenced = lease.renew(
         now=NOW + timedelta(seconds=1),
         ttl=timedelta(seconds=10),
@@ -186,33 +181,6 @@ def test_authority_and_connection_invariants_and_renewal_guards() -> None:
         )
         is sequenced
     )
-    assert (
-        lease.renew(
-            now=NOW, ttl=timedelta(seconds=1), lease_token=lease.lease_token
-        ).heartbeat_sequence
-        == 1
-    )
-
-
-def test_connection_registry_conflicts_not_found_and_idempotency() -> None:
-    registry = ConnectionRegistry()
-    original = registry.open(_connection())
-    assert registry.open(_connection()) is original
-    with pytest.raises(ValueError, match="another device"):
-        registry.open(_connection(device_id="device-2"))
-    replaced = registry.open(_connection(fencing_token=2, priority=1))
-    assert replaced.fencing_token == 2
-    renewed = registry.renew(
-        "connection-1", lease_token=replaced.lease_token, ttl=timedelta(seconds=30), now=NOW
-    )
-    assert renewed.heartbeat_sequence == 1
-    for operation in (
-        lambda: registry.renew("missing", lease_token="x", ttl=timedelta(seconds=1), now=NOW),
-        lambda: registry.close("missing"),
-    ):
-        with pytest.raises(ConnectionNotFound):
-            operation()
-    assert ConnectionRegistry().preferred_for_device("missing", now=NOW) is None
 
 
 @pytest.mark.parametrize(

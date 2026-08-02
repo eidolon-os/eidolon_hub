@@ -6,9 +6,8 @@ import pytest
 
 from hub.config import (
     ChannelProviderConfig,
-    ConnectionPlaneConfig,
+    DeviceAccessConfig,
     HubConfig,
-    MqttConnectorConfig,
     PersistenceConfig,
     validate_hub_config,
 )
@@ -23,12 +22,10 @@ def test_default_production_config_knows_only_provider_contract_address() -> Non
     assert not hasattr(config, "channel_control")
 
 
-def test_enabled_mqtt_requires_a_broker_hostname_before_resources_start() -> None:
-    config = HubConfig(
-        connection_plane=ConnectionPlaneConfig(mqtt=MqttConnectorConfig(enabled=True, hostname=""))
-    )
+def test_device_access_requires_https_and_a_bounded_session_lease() -> None:
+    config = HubConfig(device_access=DeviceAccessConfig(public_base_url="http://hub.example"))
 
-    with pytest.raises(ValueError, match="requires hostname"):
+    with pytest.raises(ValueError, match="plain HTTPS base URL"):
         validate_hub_config(config)
 
 
@@ -71,8 +68,9 @@ persistence:
   adapter: sqlite
   sqlite_path: runtime/test-hub.sqlite3
   directory_cache_enabled: false
-connection_plane:
+device_access:
   public_base_url: https://hub.example
+discovery:
   mdns: {enabled: false}
 channel_provider:
   contract_url: https://provider.example/v1
@@ -86,7 +84,7 @@ channel_provider:
     config = HubConfig.load()
 
     assert config.api.port == 8443
-    assert config.connection_plane.mdns.enabled is False
+    assert config.discovery.mdns.enabled is False
     assert config.persistence.adapter == "sqlite"
     assert config.persistence.sqlite_path == "runtime/test-hub.sqlite3"
     assert config.persistence.directory_cache_enabled is False
@@ -102,11 +100,10 @@ def test_checked_in_settings_match_the_complete_setting_model(tmp_path, monkeypa
 
     config = HubConfig.load()
 
-    assert config.connection_plane.mdns.enabled is True
-    assert config.connection_plane.mqtt.enabled is False
+    assert config.discovery.mdns.enabled is True
     assert config.persistence.adapter == "sqlite"
     assert not hasattr(config, "mdns")
-    assert not hasattr(config.connection_plane, "explicit_descriptor_uris")
+    assert not hasattr(config.device_access, "explicit_descriptor_uris")
 
 
 @pytest.mark.parametrize(
@@ -129,20 +126,17 @@ def test_retired_top_level_settings_fail_closed(retired_setting, tmp_path, monke
         HubConfig.load()
 
 
-def test_retired_connection_discovery_sources_fail_closed(tmp_path, monkeypatch) -> None:
+def test_retired_connection_plane_fails_closed(tmp_path, monkeypatch) -> None:
     canonical = Path(__file__).resolve().parents[2] / "config" / "settings.yaml"
     settings = tmp_path / "settings.yaml"
     environment = tmp_path / ".env"
-    value = canonical.read_text(encoding="utf-8").replace(
-        "  mqtt:\n",
-        "  explicit_descriptor_uris: []\n  mqtt:\n",
-    )
+    value = canonical.read_text(encoding="utf-8") + "\nconnection_plane: {}\n"
     settings.write_text(value, encoding="utf-8")
     environment.write_text("# test environment\n", encoding="utf-8")
     monkeypatch.setenv("EIDOLON_HUB_SETTINGS_YAML", str(settings))
     monkeypatch.setenv("EIDOLON_HUB_ENV_FILE", str(environment))
 
-    with pytest.raises(ValueError, match="unknown Hub settings at connection_plane"):
+    with pytest.raises(ValueError, match="unknown Hub settings at root"):
         HubConfig.load()
 
 
@@ -151,13 +145,13 @@ def test_yaml_booleans_are_strictly_typed(tmp_path, monkeypatch) -> None:
     settings = tmp_path / "settings.yaml"
     environment = tmp_path / ".env"
     value = canonical.read_text(encoding="utf-8").replace(
-        "    enabled: false\n    connector_id: mqtt-cloud",
-        '    enabled: "false"\n    connector_id: mqtt-cloud',
+        "    enabled: true\n    service_type:",
+        '    enabled: "true"\n    service_type:',
     )
     settings.write_text(value, encoding="utf-8")
     environment.write_text("# test environment\n", encoding="utf-8")
     monkeypatch.setenv("EIDOLON_HUB_SETTINGS_YAML", str(settings))
     monkeypatch.setenv("EIDOLON_HUB_ENV_FILE", str(environment))
 
-    with pytest.raises(ValueError, match="connection_plane.mqtt.enabled must be a YAML boolean"):
+    with pytest.raises(ValueError, match="discovery.mdns.enabled must be a YAML boolean"):
         HubConfig.load()

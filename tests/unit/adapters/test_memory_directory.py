@@ -20,7 +20,7 @@ def _entry(*, online: bool = False) -> DeviceDirectoryEntry:
         approved=True,
         revoked=False,
         online=online,
-        connections=(),
+        sessions=(),
         registered_at=NOW,
         updated_at=NOW,
     )

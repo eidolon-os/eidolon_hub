@@ -39,7 +39,7 @@ class ZeroconfHubAdvertiser:
     def __init__(
         self,
         *,
-        connector_id: str,
+        advertisement_id: str,
         service_type: str,
         service_name: str,
         hostname: str,
@@ -49,7 +49,7 @@ class ZeroconfHubAdvertiser:
         addresses: tuple[str, ...] | None = None,
         refresh_seconds: float = 10.0,
     ) -> None:
-        self._connector_id = connector_id
+        self._advertisement_id = advertisement_id
         self._service_type = service_type
         self._service_name = service_name
         self._hostname = hostname
@@ -63,8 +63,8 @@ class ZeroconfHubAdvertiser:
         self._refresh_task: asyncio.Task[None] | None = None
 
     @property
-    def connector_id(self) -> str:
-        return self._connector_id
+    def advertisement_id(self) -> str:
+        return self._advertisement_id
 
     def _build_info(self, addresses: tuple[str, ...]) -> ServiceInfo:
         if not addresses:
@@ -100,7 +100,7 @@ class ZeroconfHubAdvertiser:
         self._info = info
         if self._addresses is None and self._refresh_seconds > 0:
             self._refresh_task = asyncio.create_task(
-                self._refresh_loop(), name=f"zeroconf-refresh:{self._connector_id}"
+                self._refresh_loop(), name=f"zeroconf-refresh:{self._advertisement_id}"
             )
 
     async def _refresh_loop(self) -> None:

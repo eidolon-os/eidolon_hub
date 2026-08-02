@@ -1,13 +1,13 @@
-"""Project durable device facts and active connections into the public blackboard."""
+"""Project durable device facts and active sessions into the public blackboard."""
 
 from __future__ import annotations
 
-from hub.domain.devices.entities import DeviceDirectoryEntry, DirectoryConnection
+from hub.domain.devices.entities import DeviceDirectoryEntry, DirectorySession
 from hub.ports.identity import Clock
 from hub.ports.repositories import (
-    ConnectionRepository,
     DeviceDirectoryRepository,
     DeviceRepository,
+    DeviceSessionRepository,
 )
 
 
@@ -16,12 +16,12 @@ class ProjectDeviceDirectory:
         self,
         *,
         devices: DeviceRepository,
-        connections: ConnectionRepository,
+        sessions: DeviceSessionRepository,
         directory: DeviceDirectoryRepository,
         clock: Clock,
     ) -> None:
         self._devices = devices
-        self._connections = connections
+        self._sessions = sessions
         self._directory = directory
         self._clock = clock
 
@@ -30,7 +30,7 @@ class ProjectDeviceDirectory:
         if device is None:
             raise KeyError(device_id)
         now = self._clock.now()
-        leases = await self._connections.active_for_device(device_id, now=now)
+        leases = await self._sessions.active_for_device(device_id, now=now)
         owner_scope = device.owner_id or "unclaimed"
         entry = DeviceDirectoryEntry(
             device_id=device_id,
@@ -42,11 +42,9 @@ class ProjectDeviceDirectory:
             approved=device.approved,
             revoked=device.revoked,
             online=bool(leases) and not device.revoked,
-            connections=tuple(
-                DirectoryConnection(
-                    connection_id=lease.connection_id,
-                    connector_id=lease.connector_id,
-                    connector_kind=lease.connector_kind.value,
+            sessions=tuple(
+                DirectorySession(
+                    session_id=lease.session_id,
                     expires_at=lease.expires_at,
                 )
                 for lease in leases

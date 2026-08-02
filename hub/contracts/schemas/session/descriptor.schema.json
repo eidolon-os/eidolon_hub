@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/session/descriptor.schema.json",
+  "title": "HubDeviceAccessDescriptor",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "hub_id", "descriptor_uri", "device_access_uri", "registration_uri", "channel_acquisition_uri", "protocol_versions"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "hub_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "descriptor_uri": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "device_access_uri": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "registration_uri": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "channel_acquisition_uri": {"type": "string", "format": "uri", "pattern": "^https://", "maxLength": 2048},
+    "protocol_versions": {"type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": {"type": "integer", "minimum": 1}}
+  }
+}

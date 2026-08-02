@@ -11,7 +11,7 @@ from hub.contracts.bindings.device import (
     DeviceRegistration,
 )
 from hub.contracts.mappers import registration_to_domain
-from hub.domain.connections.entities import ConnectionLease, ConnectorKind
+from hub.domain.sessions.entities import DeviceSessionLease
 
 
 class _Clock:
@@ -33,12 +33,12 @@ class _Devices:
         return device
 
 
-class _Connections:
+class _Sessions:
     def __init__(self, lease):
         self.lease = lease
 
-    async def get(self, connection_id):
-        return self.lease if self.lease.connection_id == connection_id else None
+    async def get(self, session_id):
+        return self.lease if self.lease.session_id == session_id else None
 
 
 class _Events:
@@ -66,12 +66,9 @@ def _wire_registration(*, title="Device"):
 @pytest.mark.asyncio
 async def test_registration_retry_is_idempotent_and_request_id_is_content_bound() -> None:
     now = _Clock.value
-    lease = ConnectionLease(
-        connection_id="connection-1",
+    lease = DeviceSessionLease(
+        session_id="session-1",
         device_id="device-1",
-        connector_id="https-local",
-        connector_kind=ConnectorKind.HTTPS,
-        signaling_ref="http-mailbox:device-1",
         opened_at=now,
         renewed_at=now,
         expires_at=now + timedelta(seconds=45),
@@ -84,19 +81,19 @@ async def test_registration_retry_is_idempotent_and_request_id_is_content_bound(
     events = _Events()
     use_case = RegisterDevice(
         devices=devices,
-        connections=_Connections(lease),
+        sessions=_Sessions(lease),
         events=events,
         clock=_Clock(),
     )
     intent = registration_to_domain(_wire_registration())
 
     first = await use_case.execute(
-        connection_id=lease.connection_id,
+        session_id=lease.session_id,
         lease_token=lease.lease_token,
         registration=intent,
     )
     retried = await use_case.execute(
-        connection_id=lease.connection_id,
+        session_id=lease.session_id,
         lease_token=lease.lease_token,
         registration=intent,
     )
@@ -105,7 +102,7 @@ async def test_registration_retry_is_idempotent_and_request_id_is_content_bound(
     assert len(events.values) == 1
     with pytest.raises(ValueError, match="different content"):
         await use_case.execute(
-            connection_id=lease.connection_id,
+            session_id=lease.session_id,
             lease_token=lease.lease_token,
             registration=registration_to_domain(_wire_registration(title="Changed")),
         )

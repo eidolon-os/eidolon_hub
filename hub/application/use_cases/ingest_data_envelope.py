@@ -16,7 +16,11 @@ from hub.domain.commands.entities import CommandState, DeviceCommand
 from hub.domain.commands.state_machine import transition_command
 from hub.ports.event_bus import DomainEvent, EventBus
 from hub.ports.identity import Clock
-from hub.ports.repositories import ChannelLeaseRepository, CommandRepository
+from hub.ports.repositories import (
+    ChannelLeaseRepository,
+    CommandRepository,
+    DeviceSessionRepository,
+)
 
 
 class DataEnvelopeRejected(ValueError):
@@ -28,11 +32,13 @@ class IngestDataEnvelope:
         self,
         *,
         channels: ChannelLeaseRepository,
+        sessions: DeviceSessionRepository,
         commands: CommandRepository,
         events: EventBus,
         clock: Clock,
     ) -> None:
         self._channels = channels
+        self._sessions = sessions
         self._commands = commands
         self._events = events
         self._clock = clock
@@ -42,6 +48,8 @@ class IngestDataEnvelope:
         lease = await self._channels.get(envelope.channel_id)
         if lease is None or lease.device_id != envelope.device_id or not lease.is_active(now):
             raise DataEnvelopeRejected("active channel lease required")
+        if not await self._sessions.active_for_device(envelope.device_id, now=now):
+            raise DataEnvelopeRejected("active device session required")
         if isinstance(envelope.payload, InboundCommandData):
             raise DataEnvelopeRejected("devices cannot send command envelopes")
         if isinstance(envelope.payload, CommandAckData):

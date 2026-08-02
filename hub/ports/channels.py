@@ -6,7 +6,6 @@ from typing import Protocol
 
 from hub.domain.channels.entities import (
     ChannelAssignmentSet,
-    ChannelGrant,
     ChannelLifecycle,
     ProviderDeviceContext,
 )
@@ -14,11 +13,7 @@ from hub.domain.commands.entities import DeviceCommand
 
 
 class ChannelProviderControl(Protocol):
-    async def sync_device(self, context: ProviderDeviceContext) -> ChannelAssignmentSet: ...
-
-
-class ChannelGrantSender(Protocol):
-    async def send_grant(self, *, signaling_ref: str, grant: ChannelGrant) -> None: ...
+    async def acquire_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet: ...
 
 
 class CommandChannelSender(Protocol):

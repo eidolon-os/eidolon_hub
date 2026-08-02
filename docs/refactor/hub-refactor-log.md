@@ -1,6 +1,6 @@
 # Hub 重构工程日志
 
-本日志记录逻辑改动、首先失败的测试、所有权迁移、依赖变化、反思和风险。当前工作区尚未创建提交，因此所有条目的 Commit SHA 为 `N/A (working tree)`；不会虚构 SHA。
+本日志记录逻辑改动、首先失败的测试、所有权迁移、依赖变化、反思和风险。本轮尚未提交的条目以 `N/A (working tree)` 标记；不会虚构 SHA。
 
 ## 2026-08-01 — Characterization baseline
 
@@ -9,6 +9,22 @@
 - 首先失败：baseline 为 `196 passed, 1 failed`，失败是旧 mDNS TXT 仍断言 `config_url`；确认 Descriptor URI 才是新发现边界后更新 characterization expectation。
 - 泄漏：Connection、Channel、Device Fact 在旧 DeviceManager 中混合；LiveKit URL/Room/Token 泄漏进 Hub 配置；DataStore 是隐藏 Service Locator。
 - 测试：`python -m pytest -q`。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-02 — 删除 Hub MQTT/Connection Connector，改为 Device Session + Direct Acquire
+
+- 修改目标：WAN bootstrap 使用 Commissioned HTTPS Descriptor URI；mDNS 只做同链路 URI 发布；实际 MQTT 能力归外部 Channel Provider backend。Hub 注册、在线和通信通道不再混为 Connection Connector。
+- 修改前行为：mDNS advertiser 与 MQTT client 被同一个 start/stop Port 包装；`ConnectionLease` 保存 connector kind、priority 与 signaling ref；后台 desired-state worker 通过 SQL claim 调 Provider sync，再经内存 mailbox/MQTT 投递 Grant。
+- 首先失败：新增 `test_acquire_device_channels.py` 时因 Use Case 不存在而 collection failed；删除旧模块后 21 个测试文件因旧 Connection/MQTT/reconcile imports collection failed，随后逐类迁移而非保留兼容层。
+- 契约变化：`connection/*` 改为 `session/*`；新增公共 `channel/assignment`、device acquisition 和 provider acquisition Schema；删除 MQTT AsyncAPI、signal delivery、旧 Channel Grant push Schema。生成 shapes 已重新生成，禁止手改。
+- 实现变化：新增持久 `DeviceSessionLease/Authority`；设备注册获批后主动调用 `/api/device-access/v1/channels/acquire`；Hub 调 Provider `/device-channels/acquire` 并直接返回 opaque binding，只保存通用 lease metadata。命令与上行 Envelope 同时要求 active Session 和 active Channel。
+- 删除代码：Hub MQTT adapter、Connection Port/Domain/Composition、Connector Supervisor、signaling mailbox/grant sender、desired-state reconciler/worker/Provider sync DB state，以及 Hub 端 Explicit URI/Unicast DNS resolver。
+- 配置/依赖：`connection_plane` 改为 `device_access + discovery.mdns`；删除 MQTT setting/env、`aiomqtt`、`dnspython` 和无文件的 AsyncAPI package data。
+- 测试迁移：删除 MQTT/Connector/reconcile 旧测试，重写 Session、HTTPS、Provider、Persistence、Local/Cloud parity 和黑盒 E2E；报告同步到 2026-08-02 当前契约。
+- 验证：Architecture `15 passed`；Unit `84 passed`；Contract `13 passed`；Component `13 passed`；Local Functional `3 passed`；Deployment Mode `2 passed`；Contract E2E `1 passed`；本机 PostgreSQL 18 Cloud `2 passed`；带 PostgreSQL DSN 全量 `133 passed in 5.41s`。
+- 覆盖率：Unit/Component/Functional 的 Domain + Application branch suite 为 `98%`（`795 statements / 234 branches`，`104 passed`），超过 `90%` 门禁。
+- 架构反思：Connector 是伪抽象；进程内 mailbox 不能满足 Cloud 多实例；后台 Provider desired-state 把资源策略放错边界。Direct Acquire 把失败显式留在设备请求中，同时不回滚注册事实。Provider 资源清理由有限期 lease/credential 和 Provider 自己负责。
+- 未证明：`eidolon_channel` 未修改；生产 TLS、DNS/VLAN、Provider/DB restart、网络分区和 rolling upgrade 仍需独立部署门禁。
 - Commit SHA：`N/A (working tree)`。
 
 ## 2026-08-01 — 分层骨架与 SDK 所有权迁移

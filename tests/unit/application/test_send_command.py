@@ -61,6 +61,14 @@ class _Commands:
         return command
 
 
+class _Sessions:
+    def __init__(self):
+        self.online = True
+
+    async def active_for_device(self, device_id, *, now):
+        return (object(),) if self.online and device_id == "device-1" else ()
+
+
 class _Sender:
     def __init__(self):
         self.items = []
@@ -73,23 +81,25 @@ class _Sender:
 
 
 def _use_case():
-    devices, commands, sender = _Devices(), _Commands(), _Sender()
+    devices, sessions, commands, sender = _Devices(), _Sessions(), _Commands(), _Sender()
     return (
         SendCommand(
             devices=devices,
+            sessions=sessions,
             commands=commands,
             sender=sender,
             clock=_Clock(),
             ids=_Ids(),
         ),
         devices,
+        sessions,
         commands,
         sender,
     )
 
 
 async def test_command_request_is_durable_and_idempotent() -> None:
-    use_case, _devices, commands, sender = _use_case()
+    use_case, _devices, _sessions, commands, sender = _use_case()
 
     first = await use_case.execute(
         device_id="device-1",
@@ -110,7 +120,7 @@ async def test_command_request_is_durable_and_idempotent() -> None:
 
 
 async def test_request_id_content_binding_prevents_command_substitution() -> None:
-    use_case, _devices, _commands, _sender = _use_case()
+    use_case, _devices, _sessions, _commands, _sender = _use_case()
     await use_case.execute(
         device_id="device-1",
         operation="sensor.calibrate",
@@ -128,7 +138,7 @@ async def test_request_id_content_binding_prevents_command_substitution() -> Non
 
 
 async def test_unapproved_device_and_transport_failure_are_not_hidden() -> None:
-    use_case, devices, commands, sender = _use_case()
+    use_case, devices, _sessions, commands, sender = _use_case()
     devices.device = replace(devices.device, approved=False)
     with pytest.raises(PermissionError, match="not approved"):
         await use_case.execute(
@@ -148,3 +158,17 @@ async def test_unapproved_device_and_transport_failure_are_not_hidden() -> None:
             ttl=timedelta(seconds=10),
         )
     assert commands.items["request-failed"].state is CommandState.FAILED
+
+
+async def test_offline_device_cannot_receive_a_command() -> None:
+    use_case, _devices, sessions, _commands, sender = _use_case()
+    sessions.online = False
+
+    with pytest.raises(ConnectionError, match="active session"):
+        await use_case.execute(
+            device_id="device-1",
+            operation="sensor.calibrate",
+            payload_json="{}",
+        )
+
+    assert sender.items == []

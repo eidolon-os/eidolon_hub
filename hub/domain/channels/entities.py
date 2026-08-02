@@ -23,13 +23,6 @@ class ChannelState(StrEnum):
     FAILED = "failed"
 
 
-class ProviderSyncState(StrEnum):
-    PENDING = "pending"
-    SYNCHRONIZING = "synchronizing"
-    SUCCEEDED = "succeeded"
-    FAILED = "failed"
-
-
 @dataclass(frozen=True, slots=True)
 class OpaqueChannelBinding:
     """An encrypted/provider-owned blob Hub may relay but never inspect."""
@@ -158,27 +151,6 @@ class ChannelAssignmentSet:
         channel_ids = [grant.lease.channel_id for grant in self.grants]
         if len(channel_ids) != len(set(channel_ids)):
             raise ValueError("provider returned duplicate channel ids")
-
-
-@dataclass(frozen=True, slots=True)
-class ProviderSyncRecord:
-    device_id: str
-    operation_id: str
-    desired_revision: str
-    state: ProviderSyncState
-    attempts: int
-    updated_at: datetime
-    owner_instance_id: str = ""
-    claim_expires_at: datetime | None = None
-    last_error: str = ""
-
-    def __post_init__(self) -> None:
-        if not self.device_id or not self.operation_id or not self.desired_revision:
-            raise ValueError("provider sync identifiers are required")
-        if self.attempts < 0 or self.updated_at.tzinfo is None:
-            raise ValueError("invalid provider sync attempt metadata")
-        if self.claim_expires_at is not None and self.claim_expires_at.tzinfo is None:
-            raise ValueError("provider sync claim expiry must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)

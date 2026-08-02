@@ -1,4 +1,4 @@
-"""Revoke a device and its Hub-owned connections."""
+"""Revoke a device and its Hub-owned sessions."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ from hub.domain.devices.entities import ManagedDevice
 from hub.ports.event_bus import DomainEvent, EventBus
 from hub.ports.identity import Clock
 from hub.ports.repositories import (
-    ConnectionRepository,
     DeviceDirectoryProjector,
     DeviceRepository,
+    DeviceSessionRepository,
 )
 
 
@@ -20,13 +20,13 @@ class RevokeDevice:
         self,
         *,
         devices: DeviceRepository,
-        connections: ConnectionRepository,
+        sessions: DeviceSessionRepository,
         events: EventBus,
         clock: Clock,
         directory_projector: DeviceDirectoryProjector,
     ) -> None:
         self._devices = devices
-        self._connections = connections
+        self._sessions = sessions
         self._events = events
         self._clock = clock
         self._directory_projector = directory_projector
@@ -50,8 +50,8 @@ class RevokeDevice:
             last_management_fingerprint=fingerprint,
         )
         persisted = await self._devices.upsert(revoked)
-        for lease in await self._connections.active_for_device(device_id, now=now):
-            await self._connections.upsert(lease.close())
+        for lease in await self._sessions.active_for_device(device_id, now=now):
+            await self._sessions.upsert(lease.close())
         await self._events.publish(
             DomainEvent(
                 event_id=request_id,

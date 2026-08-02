@@ -59,11 +59,15 @@ class DeviceRegistrationIntent:
 
 
 @dataclass(frozen=True, slots=True)
-class DirectoryConnection:
-    connection_id: str
-    connector_id: str
-    connector_kind: str
+class DirectorySession:
+    session_id: str
     expires_at: datetime
+
+    def __post_init__(self) -> None:
+        if not self.session_id.strip():
+            raise ValueError("directory session_id is required")
+        if self.expires_at.tzinfo is None:
+            raise ValueError("directory session expiry must be timezone-aware")
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +83,7 @@ class DeviceDirectoryEntry:
     approved: bool
     revoked: bool
     online: bool
-    connections: tuple[DirectoryConnection, ...]
+    sessions: tuple[DirectorySession, ...]
     registered_at: datetime
     updated_at: datetime
     revision: int = 1

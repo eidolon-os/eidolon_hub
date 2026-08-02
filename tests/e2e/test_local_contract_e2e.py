@@ -15,7 +15,6 @@ from werkzeug.wrappers import Response
 from hub.composition.app import create_composed_app
 from hub.config import ChannelProviderConfig, HubConfig, PersistenceConfig
 from hub.contracts.bindings.channel import (
-    ChannelGrant,
     CommandAckPayload,
     CommandResultPayload,
     DataEnvelope,
@@ -79,7 +78,7 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
     monkeypatch.setenv("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN", provider_token)
     received_provider_envelopes: list[dict[str, object]] = []
 
-    def provider_sync(request):
+    def provider_acquire(request):
         body = request.get_json()
         now = datetime.now(UTC)
         return Response(
@@ -112,10 +111,10 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         return Response('{"accepted":true}', content_type="application/json")
 
     httpserver.expect_request(
-        "/v1/device-channels/sync",
+        "/v1/device-channels/acquire",
         method="POST",
         headers={"Authorization": f"Bearer {provider_token}"},
-    ).respond_with_handler(provider_sync)
+    ).respond_with_handler(provider_acquire)
     httpserver.expect_request(
         "/v1/data/envelopes",
         method="POST",
@@ -125,10 +124,13 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
     config = replace(
         HubConfig(),
         observability=replace(HubConfig().observability, enabled=False),
-        connection_plane=replace(
-            HubConfig().connection_plane,
+        device_access=replace(
+            HubConfig().device_access,
             public_base_url="https://hub.e2e.invalid",
-            mdns=replace(HubConfig().connection_plane.mdns, enabled=False),
+        ),
+        discovery=replace(
+            HubConfig().discovery,
+            mdns=replace(HubConfig().discovery.mdns, enabled=False),
         ),
         channel_provider=ChannelProviderConfig(contract_url=httpserver.url_for("/v1")),
         persistence=PersistenceConfig(
@@ -149,12 +151,11 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
 
     with TestClient(create_composed_app(config)) as client:
         hello = client.post(
-            "/api/connection/v1/hello",
+            "/api/device-access/v1/hello",
             json={
-                "operation": "connection.hello",
+                "operation": "session.hello",
                 "request_id": "e2e-hello-1",
                 "device_id": "e2e-device-1",
-                "connector_id": "https-local",
                 "client_nonce": "e2e-client-nonce-0001",
             },
         )
@@ -162,7 +163,7 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         challenge = hello.json()
         proof_bytes = "\n".join(
             (
-                "eidolon.connection.proof.v1",
+                "eidolon.session.proof.v1",
                 challenge["challenge_id"],
                 "e2e-device-1",
                 "e2e-client-nonce-0001",
@@ -171,9 +172,9 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         ).encode()
         signature = _b64url(private_key.sign(proof_bytes, ec.ECDSA(hashes.SHA256())))
         proof = client.post(
-            "/api/connection/v1/proof",
+            "/api/device-access/v1/proof",
             json={
-                "operation": "connection.proof",
+                "operation": "session.proof",
                 "request_id": "e2e-proof-1",
                 "challenge_id": challenge["challenge_id"],
                 "device_id": "e2e-device-1",
@@ -184,10 +185,10 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         assert proof.status_code == 200, proof.text
         accepted = proof.json()
         registration = client.post(
-            "/api/connection/v1/register",
+            "/api/device-access/v1/register",
             json={
-                "operation": "connection.registration",
-                "connection_id": accepted["connection_id"],
+                "operation": "session.registration",
+                "session_id": accepted["session_id"],
                 "lease_token": accepted["lease_token"],
                 "registration": _device_registration(fingerprint),
             },
@@ -204,25 +205,26 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
         )
         assert approval.status_code == 200, approval.text
 
-        signal = client.get(
-            "/api/connection/v1/signals/e2e-device-1",
-            params={
-                "connection_id": accepted["connection_id"],
+        acquired = client.post(
+            "/api/device-access/v1/channels/acquire",
+            json={
+                "operation": "channel.acquire",
+                "request_id": "e2e-acquire-1",
+                "session_id": accepted["session_id"],
                 "lease_token": accepted["lease_token"],
-                "timeout_seconds": 10,
             },
         )
-        assert signal.status_code == 200, signal.text
-        grant = ChannelGrant.model_validate_json(signal.json()["payload_json"])
-        assert grant.channel_id == "e2e-channel-1"
-        assert base64.b64decode(grant.opaque_binding).endswith(b'"opaque"}')
+        assert acquired.status_code == 200, acquired.text
+        grant = acquired.json()["channels"][0]
+        assert grant["channel_id"] == "e2e-channel-1"
+        assert base64.b64decode(grant["opaque_binding"]).endswith(b'"opaque"}')
 
         lifecycle = client.post(
             "/api/provider/v1/channels/lifecycle",
             headers={"Authorization": f"Bearer {provider_token}"},
             json={
                 "operation": "channel.lifecycle",
-                "channel_id": grant.channel_id,
+                "channel_id": grant["channel_id"],
                 "device_id": "e2e-device-1",
                 "state": "active",
                 "occurred_at_ms": int(datetime.now(UTC).timestamp() * 1000),
@@ -266,7 +268,7 @@ def test_local_black_box_contract_survives_hub_restart(tmp_path, monkeypatch, ht
                 headers={"Authorization": f"Bearer {provider_token}"},
                 content=DataEnvelope(
                     envelope_id=f"e2e-envelope-{sequence}",
-                    channel_id=grant.channel_id,
+                    channel_id=grant["channel_id"],
                     device_id="e2e-device-1",
                     kind=kind,
                     sequence=sequence,

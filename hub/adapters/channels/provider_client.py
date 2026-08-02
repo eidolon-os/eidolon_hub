@@ -9,9 +9,9 @@ from typing import Protocol
 import httpx
 
 from hub.contracts.bindings.channel import (
+    ProviderChannelAcquisitionRequest,
+    ProviderChannelAcquisitionResponse,
     ProviderChannelDevice,
-    ProviderChannelSyncRequest,
-    ProviderChannelSyncResponse,
 )
 from hub.contracts.bindings.device import DeviceManifest
 from hub.domain.channels.entities import (
@@ -37,14 +37,17 @@ class HttpRequestReplyClient:
         self._headers = {"Authorization": f"Bearer {bearer_token}"} if bearer_token else {}
 
     async def request(self, route: str, payload: bytes, *, timeout: float) -> bytes:
-        response = await self._client.post(
-            route,
-            content=payload,
-            headers={"Content-Type": "application/json", **self._headers},
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return response.content
+        try:
+            response = await self._client.post(
+                route,
+                content=payload,
+                headers={"Content-Type": "application/json", **self._headers},
+                timeout=timeout,
+            )
+            response.raise_for_status()
+            return response.content
+        except httpx.HTTPError as exc:
+            raise ConnectionError("Channel Provider unavailable") from exc
 
 
 class ChannelProviderHttpClient:
@@ -60,11 +63,11 @@ class ChannelProviderHttpClient:
         if not contract_url.startswith(("http://", "https://")):
             raise ValueError("Channel Provider contract_url must be HTTP(S)")
         self._client = client
-        self._route = f"{contract_url.rstrip('/')}/device-channels/sync"
+        self._route = f"{contract_url.rstrip('/')}/device-channels/acquire"
         self._timeout = timeout_seconds
 
-    async def sync_device(self, context: ProviderDeviceContext) -> ChannelAssignmentSet:
-        request = ProviderChannelSyncRequest(
+    async def acquire_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet:
+        request = ProviderChannelAcquisitionRequest(
             operation_id=context.operation_id,
             hub_id=context.hub_id,
             device=ProviderChannelDevice(
@@ -82,7 +85,7 @@ class ChannelProviderHttpClient:
             ),
         )
         payload = request.model_dump_json().encode()
-        response = ProviderChannelSyncResponse.model_validate_json(
+        response = ProviderChannelAcquisitionResponse.model_validate_json(
             await self._client.request(self._route, payload, timeout=self._timeout)
         )
         grants = tuple(

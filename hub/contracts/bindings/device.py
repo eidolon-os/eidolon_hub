@@ -111,10 +111,8 @@ class DeviceLifecycleStatus(ContractModel):
     revoked: bool
 
 
-class DirectoryConnection(ContractModel):
-    connection_id: str = Field(min_length=1, max_length=128)
-    connector_id: str = Field(min_length=1, max_length=96)
-    connector_kind: str = Field(min_length=1, max_length=64)
+class DirectorySession(ContractModel):
+    session_id: str = Field(min_length=1, max_length=128)
     expires_at: datetime
 
 
@@ -129,14 +127,14 @@ class DeviceDirectoryEntry(ContractModel):
     approved: bool
     revoked: bool
     online: bool
-    connections: tuple[DirectoryConnection, ...] = Field(default=(), max_length=32)
+    sessions: tuple[DirectorySession, ...] = Field(default=(), max_length=32)
     registered_at: datetime
     updated_at: datetime
     revision: int = Field(ge=1)
 
-    @field_validator("connections", mode="before")
+    @field_validator("sessions", mode="before")
     @classmethod
-    def _connection_arrays(cls, value):
+    def _session_arrays(cls, value):
         return tuple(value) if isinstance(value, list) else value
 
 

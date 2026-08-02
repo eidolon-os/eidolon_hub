@@ -11,14 +11,12 @@ from hub.domain.channels.entities import (
     ChannelKind,
     ChannelLease,
     ChannelState,
-    ProviderSyncRecord,
-    ProviderSyncState,
 )
 from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.connections.entities import ConnectionLease, ConnectorKind
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import DeviceSessionLease
 from hub.ports.event_bus import DomainEvent
 from hub.ports.identity import EnrollmentChallenge
 
@@ -55,13 +53,10 @@ def _device() -> ManagedDevice:
     )
 
 
-def _connection(*, fencing_token: int = 1) -> ConnectionLease:
-    return ConnectionLease(
-        connection_id="connection-1",
+def _session(*, fencing_token: int = 1) -> DeviceSessionLease:
+    return DeviceSessionLease(
+        session_id="session-1",
         device_id="device-1",
-        connector_id="https-local",
-        connector_kind=ConnectorKind.HTTPS,
-        signaling_ref="http-mailbox:device-1",
         opened_at=NOW,
         renewed_at=NOW,
         expires_at=NOW + timedelta(seconds=45),
@@ -95,14 +90,14 @@ async def test_device_and_command_round_trip_are_idempotent(database) -> None:
     assert await repositories.commands.get("command-1") == command
 
 
-async def test_connection_repository_enforces_fencing_and_queries_active(database) -> None:
-    repository = SqlHubRepositories(database).connections
-    lease = _connection(fencing_token=2)
+async def test_session_repository_enforces_fencing_and_queries_active(database) -> None:
+    repository = SqlHubRepositories(database).sessions
+    lease = _session(fencing_token=2)
     await repository.upsert(lease)
 
     assert await repository.active_for_device("device-1", now=NOW) == (lease,)
     with pytest.raises(PermissionError, match="stale"):
-        await repository.upsert(_connection(fencing_token=1))
+        await repository.upsert(_session(fencing_token=1))
 
 
 async def test_authority_lease_fences_takeover_after_expiry(database) -> None:
@@ -139,10 +134,6 @@ async def test_challenge_consumption_is_durable_and_single_use(database) -> None
         client_nonce="client",
         server_nonce="server",
         expires_at=NOW + timedelta(seconds=30),
-        connector_id="https-local",
-        connector_kind="https",
-        signaling_ref="http-mailbox:device-1",
-        priority=100,
     )
     await repository.create(challenge)
 
@@ -163,7 +154,7 @@ async def test_directory_channel_and_cursor_runtime_state_survives_reopen(databa
         approved=True,
         revoked=False,
         online=False,
-        connections=(),
+        sessions=(),
         registered_at=NOW,
         updated_at=NOW,
     )
@@ -191,60 +182,23 @@ async def test_directory_channel_and_cursor_runtime_state_survives_reopen(databa
     assert not await repositories.channel_cursors.accept_inbound(
         channel_id="channel-1", sequence=1, envelope_id="envelope-1"
     )
+    with pytest.raises(PermissionError, match="reused"):
+        await repositories.channel_cursors.accept_inbound(
+            channel_id="channel-1", sequence=1, envelope_id="another-envelope"
+        )
+    assert await repositories.channel_cursors.accept_inbound(
+        channel_id="channel-1", sequence=2, envelope_id="envelope-2"
+    )
+    with pytest.raises(PermissionError, match="stale"):
+        await repositories.channel_cursors.accept_inbound(
+            channel_id="channel-1", sequence=1, envelope_id="envelope-1"
+        )
 
     assert first.revision == 1 and second.revision == 2
     assert await repositories.directory.list(owner_scope="owner-1") == (second,)
     assert await repositories.channel_leases.active_for_device(
         "device-1", now=NOW, purpose="management"
     ) == (channel,)
-
-
-async def test_channel_provider_sync_claim_is_durable_and_fenced(database) -> None:
-    repository = SqlHubRepositories(database).channel_provider_sync
-    desired = ProviderSyncRecord(
-        device_id="device-1",
-        operation_id="channel-sync:sha256:desired",
-        desired_revision="sha256:desired",
-        state=ProviderSyncState.PENDING,
-        attempts=0,
-        updated_at=NOW,
-    )
-
-    first = await repository.try_claim(
-        desired,
-        owner_instance_id="hub-1",
-        now=NOW,
-        claim_ttl=timedelta(seconds=30),
-    )
-    competing = await repository.try_claim(
-        desired,
-        owner_instance_id="hub-2",
-        now=NOW + timedelta(seconds=1),
-        claim_ttl=timedelta(seconds=30),
-    )
-    takeover = await repository.try_claim(
-        desired,
-        owner_instance_id="hub-2",
-        now=NOW + timedelta(seconds=31),
-        claim_ttl=timedelta(seconds=30),
-    )
-    await repository.mark_succeeded(
-        device_id="device-1",
-        operation_id=desired.operation_id,
-        now=NOW + timedelta(seconds=32),
-    )
-    replay = await repository.try_claim(
-        desired,
-        owner_instance_id="hub-2",
-        now=NOW + timedelta(seconds=33),
-        claim_ttl=timedelta(seconds=30),
-    )
-
-    assert first is not None and first.attempts == 1
-    assert competing is None
-    assert takeover is not None and takeover.attempts == 2
-    assert replay is not None and replay.attempts == 3
-    assert replay.state is ProviderSyncState.SYNCHRONIZING
 
 
 async def test_domain_event_stream_is_owner_scoped_and_idempotent(database) -> None:

@@ -1,4 +1,4 @@
-"""Production composition root for the three-plane Hub."""
+"""Production composition root for Hub device access and management."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ from dataclasses import dataclass
 
 from fastapi import FastAPI
 
-from hub.adapters.connections.http import HttpConnectionServices, create_connection_router
 from hub.adapters.devices.directory_worker import DeviceDirectoryProjectionWorker
 from hub.adapters.observability.opentelemetry import (
     OpenTelemetryHttpMiddleware,
@@ -16,13 +15,17 @@ from hub.adapters.observability.opentelemetry import (
 )
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.composition.channel_control import build_channel_control
-from hub.composition.connection_plane import build_connection_plane
+from hub.composition.device_access import build_device_access
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
     load_runtime_secrets,
     open_runtime_resources,
 )
 from hub.config import HubConfig, load_hub_config, validate_hub_config
+from hub.interfaces.http.routers.device_access import (
+    DeviceAccessHttpServices,
+    create_device_access_router,
+)
 from hub.interfaces.http.routers.device_management import (
     DeviceManagementHttpServices,
     create_device_management_router,
@@ -35,7 +38,7 @@ from hub.interfaces.http.routers.provider_gateway import (
 
 @dataclass(frozen=True, slots=True)
 class ComposedHttpRuntime:
-    connections: HttpConnectionServices
+    device_access: DeviceAccessHttpServices
     management: DeviceManagementHttpServices
     provider: ProviderGatewayHttpServices
 
@@ -67,25 +70,25 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             resources = await open_runtime_resources(app_config, stack)
             projector = ProjectDeviceDirectory(
                 devices=resources.repositories.devices,
-                connections=resources.repositories.connections,
+                sessions=resources.repositories.sessions,
                 directory=resources.directory,
                 clock=resources.clock,
-            )
-            connection_plane = build_connection_plane(
-                config=app_config,
-                repositories=resources.repositories,
-                projector=projector,
-                clock=resources.clock,
-                ids=resources.ids,
-                lease_secret=secrets.lease,
             )
             channel_control = build_channel_control(
                 config=app_config,
                 repositories=resources.repositories,
                 http_client=resources.http_client,
-                grant_sender=connection_plane.grant_sender,
                 provider_token=secrets.provider_token,
                 clock=resources.clock,
+            )
+            device_access = build_device_access(
+                config=app_config,
+                repositories=resources.repositories,
+                projector=projector,
+                provider=channel_control.provider,
+                clock=resources.clock,
+                ids=resources.ids,
+                lease_secret=secrets.lease,
             )
             management = build_device_management(
                 repositories=resources.repositories,
@@ -101,15 +104,14 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 interval_seconds=app_config.persistence.reconciliation_seconds,
             )
 
-            await connection_plane.supervisor.start()
-            stack.push_async_callback(connection_plane.supervisor.stop)
+            if device_access.mdns_advertiser is not None:
+                await device_access.mdns_advertiser.start()
+                stack.push_async_callback(device_access.mdns_advertiser.stop)
             await directory_worker.start()
             stack.push_async_callback(directory_worker.stop)
-            await channel_control.worker.start()
-            stack.push_async_callback(channel_control.worker.stop)
 
             runtime = ComposedHttpRuntime(
-                connections=connection_plane.http_services,
+                device_access=device_access.http_services,
                 management=management,
                 provider=channel_control.http_services,
             )
@@ -125,7 +127,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         lifespan=lifespan,
     )
     app.add_middleware(OpenTelemetryHttpMiddleware, runtime=lambda: telemetry)
-    app.include_router(create_connection_router(lambda: require_runtime().connections))
+    app.include_router(create_device_access_router(lambda: require_runtime().device_access))
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
     )

@@ -7,23 +7,18 @@ import pytest
 
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.use_cases.approve_device import ApproveDevice
-from hub.application.use_cases.authenticate_connection import AuthenticateConnection
-from hub.application.use_cases.close_connection import CloseConnection
+from hub.application.use_cases.close_session import CloseDeviceSession
 from hub.application.use_cases.enroll_device import EnrollDevice, EnrollmentHello
 from hub.application.use_cases.get_command import GetCommand
 from hub.application.use_cases.register_device import RegisterDevice
-from hub.application.use_cases.renew_connection import RenewConnection
+from hub.application.use_cases.renew_session import RenewDeviceSession
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.application.use_cases.send_command import SendCommand
 from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.connections.entities import (
-    ConnectionLease,
-    ConnectorKind,
-    DeviceAuthorityLease,
-)
 from hub.domain.devices.entities import DeviceRegistrationIntent, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import DeviceAuthorityLease, DeviceSessionLease
 from hub.ports.identity import EnrollmentChallenge
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
@@ -77,15 +72,15 @@ class _Commands:
         return value
 
 
-class _Connections:
+class _Sessions:
     def __init__(self, *leases):
-        self.values = {lease.connection_id: lease for lease in leases}
+        self.values = {lease.session_id: lease for lease in leases}
 
     async def get(self, key):
         return self.values.get(key)
 
     async def upsert(self, value):
-        self.values[value.connection_id] = value
+        self.values[value.session_id] = value
         return value
 
     async def active_for_device(self, device_id, *, now):
@@ -180,13 +175,10 @@ def _device(**changes) -> ManagedDevice:
     return ManagedDevice(**values)
 
 
-def _connection(**changes) -> ConnectionLease:
+def _session(**changes) -> DeviceSessionLease:
     values = {
-        "connection_id": "connection-1",
+        "session_id": "session-1",
         "device_id": "device-1",
-        "connector_id": "https-local",
-        "connector_kind": ConnectorKind.HTTPS,
-        "signaling_ref": "http-mailbox:device-1",
         "opened_at": NOW,
         "renewed_at": NOW,
         "expires_at": NOW + timedelta(seconds=45),
@@ -196,7 +188,7 @@ def _connection(**changes) -> ConnectionLease:
         "fencing_token": 1,
     }
     values.update(changes)
-    return ConnectionLease(**values)
+    return DeviceSessionLease(**values)
 
 
 def _command(**changes) -> DeviceCommand:
@@ -214,41 +206,6 @@ def _command(**changes) -> DeviceCommand:
     return DeviceCommand(**values)
 
 
-async def test_authenticate_connection_checks_every_lease_property() -> None:
-    valid = _connection()
-    use_case = AuthenticateConnection(connections=_Connections(valid), clock=_Clock())
-    assert (
-        await use_case.execute(
-            connection_id=valid.connection_id,
-            device_id=valid.device_id,
-            lease_token=valid.lease_token,
-        )
-        == valid
-    )
-    for connections, device_id, token in (
-        (_Connections(), "device-1", valid.lease_token),
-        (_Connections(valid), "device-2", valid.lease_token),
-        (_Connections(valid), "device-1", "wrong"),
-        (
-            _Connections(
-                _connection(
-                    opened_at=NOW - timedelta(seconds=60),
-                    renewed_at=NOW - timedelta(seconds=60),
-                    expires_at=NOW - timedelta(seconds=1),
-                )
-            ),
-            "device-1",
-            valid.lease_token,
-        ),
-    ):
-        with pytest.raises(PermissionError, match="active"):
-            await AuthenticateConnection(connections=connections, clock=_Clock()).execute(
-                connection_id=valid.connection_id,
-                device_id=device_id,
-                lease_token=token,
-            )
-
-
 async def test_get_command_and_directory_missing_values_are_explicit() -> None:
     command = _command()
     assert await GetCommand(_Commands(command)).execute(command.command_id) == command
@@ -257,7 +214,7 @@ async def test_get_command_and_directory_missing_values_are_explicit() -> None:
     with pytest.raises(KeyError):
         await ProjectDeviceDirectory(
             devices=_Devices(),
-            connections=_Connections(),
+            sessions=_Sessions(),
             directory=_Recorder(),
             clock=_Clock(),
         ).execute("missing")
@@ -280,25 +237,25 @@ async def test_approval_and_close_reject_invalid_or_missing_devices_and_leases()
     with pytest.raises(ValueError, match="revoked"):
         await approve.execute(device_id="device-1", owner_id="owner-1", request_id="request-1")
 
-    close = CloseConnection(
-        connections=_Connections(),
+    close = CloseDeviceSession(
+        sessions=_Sessions(),
         events=_Recorder(),
         clock=_Clock(),
         directory_projector=_Recorder(),
     )
     with pytest.raises(KeyError):
-        await close.execute(connection_id="missing", device_id="device-1", lease_token="x")
-    lease = _connection()
-    close._connections = _Connections(lease)
+        await close.execute(session_id="missing", device_id="device-1", lease_token="x")
+    lease = _session()
+    close._sessions = _Sessions(lease)
     with pytest.raises(PermissionError, match="does not match"):
         await close.execute(
-            connection_id=lease.connection_id, device_id="device-2", lease_token=lease.lease_token
+            session_id=lease.session_id, device_id="device-2", lease_token=lease.lease_token
         )
     closed = lease.close()
-    close._connections = _Connections(closed)
+    close._sessions = _Sessions(closed)
     assert (
         await close.execute(
-            connection_id=closed.connection_id,
+            session_id=closed.session_id,
             device_id=closed.device_id,
             lease_token=closed.lease_token,
         )
@@ -310,7 +267,7 @@ async def test_enrollment_rejects_short_unknown_expired_and_mismatched_challenge
     challenges = _Challenges()
     enroll = EnrollDevice(
         challenges=challenges,
-        connections=_Connections(),
+        sessions=_Sessions(),
         authority=_Authority(),
         proof_verifier=_Proof(),
         credential_issuer=_Issuer(),
@@ -319,11 +276,7 @@ async def test_enrollment_rejects_short_unknown_expired_and_mismatched_challenge
         hub_instance_id="hub-1",
     )
     with pytest.raises(ValueError, match="at least 16"):
-        await enroll.begin(
-            EnrollmentHello(
-                "device-1", "https-local", ConnectorKind.HTTPS, "http-mailbox:device-1", "short"
-            )
-        )
+        await enroll.begin(EnrollmentHello("device-1", "short"))
     with pytest.raises(PermissionError, match="unknown"):
         await enroll.complete(
             challenge_id="missing",
@@ -337,10 +290,6 @@ async def test_enrollment_rejects_short_unknown_expired_and_mismatched_challenge
         "0123456789abcdef",
         "fedcba9876543210",
         NOW + timedelta(seconds=1),
-        "https-local",
-        "https",
-        "http-mailbox:device-1",
-        100,
     )
     for challenge, expected, message in (
         (replace(base, consumed=True), "device-1", "unknown"),
@@ -363,49 +312,49 @@ async def test_registration_authentication_identity_and_projection_boundaries() 
         "register-1", identity, "Device", "generic", _device().manifest
     )
     events, projector = _Recorder(), _Recorder()
-    for connections, token in (
-        (_Connections(), "lease-token-device-1"),
-        (_Connections(_connection()), "wrong-token"),
+    for sessions, token in (
+        (_Sessions(), "lease-token-device-1"),
+        (_Sessions(_session()), "wrong-token"),
     ):
         with pytest.raises(PermissionError):
             await RegisterDevice(
                 devices=_Devices(),
-                connections=connections,
+                sessions=sessions,
                 events=events,
                 clock=_Clock(),
                 directory_projector=projector,
-            ).execute(connection_id="connection-1", lease_token=token, registration=intent)
+            ).execute(session_id="session-1", lease_token=token, registration=intent)
     devices = _Devices(_device(identity=DeviceIdentity("device-1", "p256:another-fingerprint")))
     with pytest.raises(PermissionError, match="cannot be replaced"):
         await RegisterDevice(
             devices=devices,
-            connections=_Connections(_connection()),
+            sessions=_Sessions(_session()),
             events=events,
             clock=_Clock(),
         ).execute(
-            connection_id="connection-1",
+            session_id="session-1",
             lease_token="lease-token-device-1",
             registration=intent,
         )
     devices = _Devices()
     await RegisterDevice(
         devices=devices,
-        connections=_Connections(_connection()),
+        sessions=_Sessions(_session()),
         events=events,
         clock=_Clock(),
         directory_projector=projector,
     ).execute(
-        connection_id="connection-1",
+        session_id="session-1",
         lease_token="lease-token-device-1",
         registration=intent,
     )
     assert projector.values == ["device-1"]
 
 
-async def test_connection_renewal_guards_and_idempotency() -> None:
+async def test_session_renewal_guards_and_idempotency() -> None:
     authority, events, projector = _Authority(), _Recorder(), _Recorder()
-    renew = RenewConnection(
-        connections=_Connections(),
+    renew = RenewDeviceSession(
+        sessions=_Sessions(),
         authority=authority,
         events=events,
         clock=_Clock(),
@@ -413,19 +362,17 @@ async def test_connection_renewal_guards_and_idempotency() -> None:
         directory_projector=projector,
     )
     with pytest.raises(KeyError):
-        await renew.execute(connection_id="missing", lease_token="x", sequence=1)
-    lease = _connection(heartbeat_sequence=1)
-    renew._connections = _Connections(lease)
+        await renew.execute(session_id="missing", lease_token="x", sequence=1)
+    lease = _session(heartbeat_sequence=1)
+    renew._sessions = _Sessions(lease)
     with pytest.raises(PermissionError):
-        await renew.execute(connection_id=lease.connection_id, lease_token="wrong", sequence=2)
+        await renew.execute(session_id=lease.session_id, lease_token="wrong", sequence=2)
     assert (
-        await renew.execute(
-            connection_id=lease.connection_id, lease_token=lease.lease_token, sequence=1
-        )
+        await renew.execute(session_id=lease.session_id, lease_token=lease.lease_token, sequence=1)
         is lease
     )
     renewed = await renew.execute(
-        connection_id=lease.connection_id, lease_token=lease.lease_token, sequence=2
+        session_id=lease.session_id, lease_token=lease.lease_token, sequence=2
     )
     assert renewed.heartbeat_sequence == 2
     assert projector.values == ["device-1"]
@@ -435,7 +382,7 @@ async def test_revoke_device_replay_semantics() -> None:
     devices = _Devices()
     revoke = RevokeDevice(
         devices=devices,
-        connections=_Connections(),
+        sessions=_Sessions(),
         events=_Recorder(),
         clock=_Clock(),
         directory_projector=_Recorder(),
@@ -465,6 +412,7 @@ async def test_send_command_rejects_bad_payload_and_ttl(payload, ttl, message) -
     with pytest.raises(ValueError, match=message):
         await SendCommand(
             devices=_Devices(_device()),
+            sessions=_Sessions(_session()),
             commands=_Commands(),
             sender=_Sender(),
             clock=_Clock(),
@@ -481,6 +429,7 @@ async def test_send_command_rejects_revoked_and_resumes_queued_request() -> None
     with pytest.raises(KeyError):
         await SendCommand(
             devices=_Devices(_device(revoked=True)),
+            sessions=_Sessions(_session()),
             commands=_Commands(),
             sender=_Sender(),
             clock=_Clock(),
@@ -490,6 +439,7 @@ async def test_send_command_rejects_revoked_and_resumes_queued_request() -> None
     commands, sender = _Commands(queued), _Sender()
     sent = await SendCommand(
         devices=_Devices(_device()),
+        sessions=_Sessions(_session()),
         commands=commands,
         sender=sender,
         clock=_Clock(),

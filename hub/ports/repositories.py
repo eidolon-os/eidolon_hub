@@ -5,10 +5,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Protocol
 
-from hub.domain.channels.entities import ChannelLease, ProviderSyncRecord
+from hub.domain.channels.entities import ChannelLease
 from hub.domain.commands.entities import DeviceCommand
-from hub.domain.connections.entities import ConnectionLease, DeviceAuthorityLease
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
+from hub.domain.sessions.entities import DeviceAuthorityLease, DeviceSessionLease
 
 
 class DeviceRepository(Protocol):
@@ -22,12 +22,12 @@ class CommandRepository(Protocol):
     async def upsert(self, command: DeviceCommand) -> DeviceCommand: ...
 
 
-class ConnectionRepository(Protocol):
-    async def get(self, connection_id: str) -> ConnectionLease | None: ...
-    async def upsert(self, lease: ConnectionLease) -> ConnectionLease: ...
+class DeviceSessionRepository(Protocol):
+    async def get(self, session_id: str) -> DeviceSessionLease | None: ...
+    async def upsert(self, lease: DeviceSessionLease) -> DeviceSessionLease: ...
     async def active_for_device(
         self, device_id: str, *, now: datetime
-    ) -> tuple[ConnectionLease, ...]: ...
+    ) -> tuple[DeviceSessionLease, ...]: ...
 
 
 class DeviceAuthorityRepository(Protocol):
@@ -78,22 +78,6 @@ class ChannelLeaseRepository(Protocol):
         self, device_id: str, *, now: datetime, purpose: str | None = None
     ) -> tuple[ChannelLease, ...]: ...
     async def list_for_device(self, device_id: str) -> tuple[ChannelLease, ...]: ...
-
-
-class ChannelProviderSyncRepository(Protocol):
-    async def get(self, device_id: str) -> ProviderSyncRecord | None: ...
-    async def try_claim(
-        self,
-        desired: ProviderSyncRecord,
-        *,
-        owner_instance_id: str,
-        now: datetime,
-        claim_ttl: timedelta,
-    ) -> ProviderSyncRecord | None: ...
-    async def mark_succeeded(self, *, device_id: str, operation_id: str, now: datetime) -> None: ...
-    async def mark_failed(
-        self, *, device_id: str, operation_id: str, now: datetime, error: str
-    ) -> None: ...
 
 
 class ChannelCursorRepository(Protocol):

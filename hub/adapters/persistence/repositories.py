@@ -14,11 +14,10 @@ from hub.adapters.persistence.models import (
     ChallengeRow,
     ChannelCursorRow,
     ChannelLeaseRow,
-    ChannelProviderSyncRow,
     CommandRow,
-    ConnectionRow,
     DeviceAuthorityRow,
     DeviceRow,
+    DeviceSessionRow,
     DirectoryRow,
     EventRow,
 )
@@ -26,23 +25,20 @@ from hub.domain.channels.entities import (
     ChannelKind,
     ChannelLease,
     ChannelState,
-    ProviderSyncRecord,
-    ProviderSyncState,
 )
 from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.connections.entities import (
-    ConnectionLease,
-    ConnectionState,
-    ConnectorKind,
-    DeviceAuthorityLease,
-)
 from hub.domain.devices.entities import (
     DeviceDirectoryEntry,
-    DirectoryConnection,
+    DirectorySession,
     ManagedDevice,
 )
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import (
+    DeviceAuthorityLease,
+    DeviceSessionLease,
+    DeviceSessionState,
+)
 from hub.ports.event_bus import DomainEvent, StoredDomainEvent
 from hub.ports.identity import EnrollmentChallenge
 
@@ -175,29 +171,29 @@ class SqlCommandRepository:
         )
 
 
-class SqlConnectionRepository:
+class SqlDeviceSessionRepository:
     def __init__(self, database: HubDatabase) -> None:
         self._database = database
 
-    async def get(self, connection_id: str) -> ConnectionLease | None:
+    async def get(self, session_id: str) -> DeviceSessionLease | None:
         async with self._database.sessions() as session:
-            row = await session.get(ConnectionRow, connection_id)
+            row = await session.get(DeviceSessionRow, session_id)
             return None if row is None else self._decode(row)
 
-    async def upsert(self, lease: ConnectionLease) -> ConnectionLease:
+    async def upsert(self, lease: DeviceSessionLease) -> DeviceSessionLease:
         async with self._database.sessions.begin() as session:
             row = await session.scalar(
-                select(ConnectionRow)
-                .where(ConnectionRow.connection_id == lease.connection_id)
+                select(DeviceSessionRow)
+                .where(DeviceSessionRow.session_id == lease.session_id)
                 .with_for_update()
             )
             if row is not None and lease.fencing_token < row.fencing_token:
-                raise PermissionError("stale connection fencing token")
+                raise PermissionError("stale device-session fencing token")
             if row is not None and row.device_id != lease.device_id:
-                raise ValueError("connection_id belongs to another device")
+                raise ValueError("session_id belongs to another device")
             values = self._values(lease)
             if row is None:
-                session.add(ConnectionRow(**values, version=1))
+                session.add(DeviceSessionRow(**values, version=1))
             else:
                 for name, value in values.items():
                     setattr(row, name, value)
@@ -206,14 +202,14 @@ class SqlConnectionRepository:
 
     async def active_for_device(
         self, device_id: str, *, now: datetime
-    ) -> tuple[ConnectionLease, ...]:
+    ) -> tuple[DeviceSessionLease, ...]:
         async with self._database.sessions() as session:
             rows = (
                 await session.scalars(
-                    select(ConnectionRow).where(
-                        ConnectionRow.device_id == device_id,
-                        ConnectionRow.state == ConnectionState.ACTIVE.value,
-                        ConnectionRow.expires_at > now,
+                    select(DeviceSessionRow).where(
+                        DeviceSessionRow.device_id == device_id,
+                        DeviceSessionRow.state == DeviceSessionState.ACTIVE.value,
+                        DeviceSessionRow.expires_at > now,
                     )
                 )
             ).all()
@@ -221,16 +217,13 @@ class SqlConnectionRepository:
         if leases:
             newest_epoch = max(item.fencing_token for item in leases)
             leases = [item for item in leases if item.fencing_token == newest_epoch]
-        return tuple(sorted(leases, key=lambda item: (item.priority, item.connection_id)))
+        return tuple(sorted(leases, key=lambda item: item.session_id))
 
     @staticmethod
-    def _values(lease: ConnectionLease) -> dict[str, object]:
+    def _values(lease: DeviceSessionLease) -> dict[str, object]:
         return {
-            "connection_id": lease.connection_id,
+            "session_id": lease.session_id,
             "device_id": lease.device_id,
-            "connector_id": lease.connector_id,
-            "connector_kind": lease.connector_kind.value,
-            "signaling_ref": lease.signaling_ref,
             "opened_at": lease.opened_at,
             "renewed_at": lease.renewed_at,
             "expires_at": lease.expires_at,
@@ -238,19 +231,15 @@ class SqlConnectionRepository:
             "identity_fingerprint": lease.identity_fingerprint,
             "hub_instance_id": lease.hub_instance_id,
             "fencing_token": lease.fencing_token,
-            "priority": lease.priority,
             "heartbeat_sequence": lease.heartbeat_sequence,
             "state": lease.state.value,
         }
 
     @staticmethod
-    def _decode(row: ConnectionRow) -> ConnectionLease:
-        return ConnectionLease(
-            connection_id=row.connection_id,
+    def _decode(row: DeviceSessionRow) -> DeviceSessionLease:
+        return DeviceSessionLease(
+            session_id=row.session_id,
             device_id=row.device_id,
-            connector_id=row.connector_id,
-            connector_kind=ConnectorKind(row.connector_kind),
-            signaling_ref=row.signaling_ref,
             opened_at=_aware(row.opened_at),
             renewed_at=_aware(row.renewed_at),
             expires_at=_aware(row.expires_at),
@@ -258,9 +247,8 @@ class SqlConnectionRepository:
             identity_fingerprint=row.identity_fingerprint,
             hub_instance_id=row.hub_instance_id,
             fencing_token=row.fencing_token,
-            priority=row.priority,
             heartbeat_sequence=row.heartbeat_sequence,
-            state=ConnectionState(row.state),
+            state=DeviceSessionState(row.state),
         )
 
 
@@ -396,7 +384,7 @@ class SqlChallengeRepository:
             if row is None:
                 raise KeyError(challenge_id)
             if row.consumed:
-                raise PermissionError("connection challenge already consumed")
+                raise PermissionError("session challenge already consumed")
             row.consumed = True
             row.version += 1
             return self._decode(row)
@@ -409,10 +397,6 @@ class SqlChallengeRepository:
             "client_nonce": value.client_nonce,
             "server_nonce": value.server_nonce,
             "expires_at": value.expires_at,
-            "connector_id": value.connector_id,
-            "connector_kind": value.connector_kind,
-            "signaling_ref": value.signaling_ref,
-            "priority": value.priority,
             "consumed": value.consumed,
         }
 
@@ -424,10 +408,6 @@ class SqlChallengeRepository:
             client_nonce=row.client_nonce,
             server_nonce=row.server_nonce,
             expires_at=_aware(row.expires_at),
-            connector_id=row.connector_id,
-            connector_kind=row.connector_kind,
-            signaling_ref=row.signaling_ref,
-            priority=row.priority,
             consumed=row.consumed,
         )
 
@@ -444,14 +424,12 @@ def _directory_payload(entry: DeviceDirectoryEntry) -> str:
             "approved": entry.approved,
             "revoked": entry.revoked,
             "online": entry.online,
-            "connections": [
+            "sessions": [
                 {
-                    "connection_id": item.connection_id,
-                    "connector_id": item.connector_id,
-                    "connector_kind": item.connector_kind,
+                    "session_id": item.session_id,
                     "expires_at": item.expires_at.isoformat(),
                 }
-                for item in entry.connections
+                for item in entry.sessions
             ],
             "registered_at": entry.registered_at.isoformat(),
             "updated_at": entry.updated_at.isoformat(),
@@ -474,14 +452,12 @@ def _decode_directory(payload: str) -> DeviceDirectoryEntry:
         approved=value["approved"],
         revoked=value["revoked"],
         online=value["online"],
-        connections=tuple(
-            DirectoryConnection(
-                connection_id=item["connection_id"],
-                connector_id=item["connector_id"],
-                connector_kind=item["connector_kind"],
+        sessions=tuple(
+            DirectorySession(
+                session_id=item["session_id"],
                 expires_at=datetime.fromisoformat(item["expires_at"]),
             )
-            for item in value["connections"]
+            for item in value["sessions"]
         ),
         registered_at=datetime.fromisoformat(value["registered_at"]),
         updated_at=datetime.fromisoformat(value["updated_at"]),
@@ -641,131 +617,6 @@ class SqlChannelLeaseRepository:
         )
 
 
-class SqlChannelProviderSyncRepository:
-    def __init__(self, database: HubDatabase) -> None:
-        self._database = database
-
-    async def get(self, device_id: str) -> ProviderSyncRecord | None:
-        async with self._database.sessions() as session:
-            row = await session.get(ChannelProviderSyncRow, device_id)
-            return None if row is None else self._decode(row)
-
-    async def try_claim(
-        self,
-        desired: ProviderSyncRecord,
-        *,
-        owner_instance_id: str,
-        now: datetime,
-        claim_ttl: timedelta,
-    ) -> ProviderSyncRecord | None:
-        if not owner_instance_id or claim_ttl <= timedelta(0):
-            raise ValueError("owner_instance_id and a positive claim_ttl are required")
-        for _ in range(8):
-            try:
-                async with self._database.sessions.begin() as session:
-                    row = await session.scalar(
-                        select(ChannelProviderSyncRow)
-                        .where(ChannelProviderSyncRow.device_id == desired.device_id)
-                        .with_for_update()
-                    )
-                    if row is not None:
-                        if (
-                            row.state == ProviderSyncState.SYNCHRONIZING.value
-                            and row.claim_expires_at is not None
-                            and _aware(row.claim_expires_at) > now
-                        ):
-                            return None
-                        same_operation = row.operation_id == desired.operation_id
-                        row.operation_id = desired.operation_id
-                        row.desired_revision = desired.desired_revision
-                        row.state = ProviderSyncState.SYNCHRONIZING.value
-                        row.attempts = row.attempts + 1 if same_operation else 1
-                        row.updated_at = now
-                        row.owner_instance_id = owner_instance_id
-                        row.claim_expires_at = now + claim_ttl
-                        row.last_error = ""
-                        row.version += 1
-                    else:
-                        row = ChannelProviderSyncRow(
-                            device_id=desired.device_id,
-                            operation_id=desired.operation_id,
-                            desired_revision=desired.desired_revision,
-                            state=ProviderSyncState.SYNCHRONIZING.value,
-                            attempts=1,
-                            updated_at=now,
-                            owner_instance_id=owner_instance_id,
-                            claim_expires_at=now + claim_ttl,
-                            last_error="",
-                            version=1,
-                        )
-                        session.add(row)
-                    await session.flush()
-                    return self._decode(row)
-            except IntegrityError:
-                continue
-        raise RuntimeError("Channel Provider sync claim retry budget exhausted")
-
-    async def mark_succeeded(self, *, device_id: str, operation_id: str, now: datetime) -> None:
-        await self._finish(
-            device_id=device_id,
-            operation_id=operation_id,
-            now=now,
-            state=ProviderSyncState.SUCCEEDED,
-            error="",
-        )
-
-    async def mark_failed(
-        self, *, device_id: str, operation_id: str, now: datetime, error: str
-    ) -> None:
-        if not error or len(error) > 128:
-            raise ValueError("a bounded Provider failure class is required")
-        await self._finish(
-            device_id=device_id,
-            operation_id=operation_id,
-            now=now,
-            state=ProviderSyncState.FAILED,
-            error=error,
-        )
-
-    async def _finish(
-        self,
-        *,
-        device_id: str,
-        operation_id: str,
-        now: datetime,
-        state: ProviderSyncState,
-        error: str,
-    ) -> None:
-        async with self._database.sessions.begin() as session:
-            row = await session.scalar(
-                select(ChannelProviderSyncRow)
-                .where(ChannelProviderSyncRow.device_id == device_id)
-                .with_for_update()
-            )
-            if row is None or row.operation_id != operation_id:
-                raise RuntimeError("stale Channel Provider sync completion")
-            row.state = state.value
-            row.updated_at = now
-            row.owner_instance_id = ""
-            row.claim_expires_at = None
-            row.last_error = error
-            row.version += 1
-
-    @staticmethod
-    def _decode(row: ChannelProviderSyncRow) -> ProviderSyncRecord:
-        return ProviderSyncRecord(
-            device_id=row.device_id,
-            operation_id=row.operation_id,
-            desired_revision=row.desired_revision,
-            state=ProviderSyncState(row.state),
-            attempts=row.attempts,
-            updated_at=_aware(row.updated_at),
-            owner_instance_id=row.owner_instance_id,
-            claim_expires_at=_aware(row.claim_expires_at) if row.claim_expires_at else None,
-            last_error=row.last_error,
-        )
-
-
 class SqlChannelCursorRepository:
     def __init__(self, database: HubDatabase) -> None:
         self._database = database
@@ -907,11 +758,10 @@ class SqlHubRepositories:
     def __init__(self, database: HubDatabase) -> None:
         self.devices = SqlDeviceRepository(database)
         self.commands = SqlCommandRepository(database)
-        self.connections = SqlConnectionRepository(database)
+        self.sessions = SqlDeviceSessionRepository(database)
         self.authority = SqlDeviceAuthorityRepository(database)
         self.challenges = SqlChallengeRepository(database)
         self.directory = SqlDeviceDirectoryRepository(database)
         self.channel_leases = SqlChannelLeaseRepository(database)
-        self.channel_provider_sync = SqlChannelProviderSyncRepository(database)
         self.channel_cursors = SqlChannelCursorRepository(database)
         self.events = SqlEventBus(database)

@@ -1,10 +1,12 @@
 # ADR 0010: Channel Provider 是 Hub 之外的通道策略与资源所有者
 
-- 状态：Accepted
+- 状态：Superseded by ADR 0011
 - 日期：2026-08-01
 - 基线提交：`37f38cdc69c7f4a37000fc9b18fef48601203857`
 
 ## 背景
+
+> 本文保留上一阶段的异步 desired-state 方案作为决策历史；当前实现见 ADR 0011，不再包含 reconciler、SQL claim、mailbox 或 MQTT Connector。
 
 旧实现由 Hub 配置 Channel Profile、Profile 到 Provisioner 的映射以及管理通道名称，随后同步调用 Provider 的 provision/renew/revoke 操作。这个模型同时承担了三件不同的事：
 

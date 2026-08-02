@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/session/registration.schema.json",
+  "title": "SessionDeviceRegistration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "session_id", "lease_token", "registration"],
+  "properties": {
+    "operation": {"const": "session.registration"},
+    "session_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "lease_token": {"type": "string", "minLength": 16, "maxLength": 512},
+    "registration": {"$ref": "../device/registration.schema.json"}
+  }
+}

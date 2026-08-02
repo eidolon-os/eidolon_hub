@@ -1,4 +1,4 @@
-"""Register identity and capabilities through any authenticated connection."""
+"""Register identity and capabilities through an authenticated device session."""
 
 from __future__ import annotations
 
@@ -12,9 +12,9 @@ from hub.domain.devices.entities import (
 from hub.ports.event_bus import DomainEvent, EventBus
 from hub.ports.identity import Clock
 from hub.ports.repositories import (
-    ConnectionRepository,
     DeviceDirectoryProjector,
     DeviceRepository,
+    DeviceSessionRepository,
 )
 
 
@@ -23,13 +23,13 @@ class RegisterDevice:
         self,
         *,
         devices: DeviceRepository,
-        connections: ConnectionRepository,
+        sessions: DeviceSessionRepository,
         events: EventBus,
         clock: Clock,
         directory_projector: DeviceDirectoryProjector | None = None,
     ) -> None:
         self._devices = devices
-        self._connections = connections
+        self._sessions = sessions
         self._events = events
         self._clock = clock
         self._directory_projector = directory_projector
@@ -37,20 +37,20 @@ class RegisterDevice:
     async def execute(
         self,
         *,
-        connection_id: str,
+        session_id: str,
         lease_token: str,
         registration: DeviceRegistrationIntent,
     ) -> ManagedDevice:
-        lease = await self._connections.get(connection_id)
+        lease = await self._sessions.get(session_id)
         now = self._clock.now()
         if lease is None or not lease.is_active(now):
-            raise PermissionError("active connection lease required")
+            raise PermissionError("active device session required")
         if (
             not hmac.compare_digest(lease.lease_token, lease_token)
             or lease.device_id != registration.identity.device_id
             or lease.identity_fingerprint != registration.identity.public_key_fingerprint
         ):
-            raise PermissionError("connection lease does not match registration")
+            raise PermissionError("device session does not match registration")
         current = await self._devices.get(registration.identity.device_id)
         if current is not None and current.identity != registration.identity:
             raise PermissionError("registered device identity cannot be replaced")
@@ -88,7 +88,7 @@ class RegisterDevice:
                 data_json=json.dumps(
                     {
                         "manifest_revision": device.manifest_revision,
-                        "connection_id": connection_id,
+                        "session_id": session_id,
                     },
                     sort_keys=True,
                 ),

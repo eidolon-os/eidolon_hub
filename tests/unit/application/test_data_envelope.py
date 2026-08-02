@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -68,6 +69,14 @@ class _Commands:
         return command
 
 
+class _Sessions:
+    def __init__(self):
+        self.online = True
+
+    async def active_for_device(self, device_id, *, now):
+        return (object(),) if self.online and device_id == "device-1" else ()
+
+
 class _Events:
     def __init__(self):
         self.items = []
@@ -120,22 +129,24 @@ def _envelope(kind: str, payload: dict, *, device_id: str = "device-1"):
 
 
 def _use_case():
-    channels, commands, events = _Channels(), _Commands(), _Events()
+    channels, sessions, commands, events = _Channels(), _Sessions(), _Commands(), _Events()
     return (
         IngestDataEnvelope(
             channels=channels,
+            sessions=sessions,
             commands=commands,
             events=events,
             clock=_Clock(),
         ),
         channels,
+        sessions,
         commands,
         events,
     )
 
 
 async def test_ack_and_result_update_durable_command_state() -> None:
-    use_case, _channels, commands, _events = _use_case()
+    use_case, _channels, _sessions, commands, _events = _use_case()
 
     accepted = await use_case.execute(
         _envelope("ack", {"command_id": "command-1", "status": "accepted"})
@@ -157,7 +168,7 @@ async def test_ack_and_result_update_durable_command_state() -> None:
 
 
 async def test_state_and_event_become_standard_internal_events() -> None:
-    use_case, _channels, _commands, events = _use_case()
+    use_case, _channels, _sessions, _commands, events = _use_case()
 
     await use_case.execute(_envelope("state", {"revision": 3, "values_json": '{"temperature":21}'}))
     await use_case.execute(
@@ -179,7 +190,7 @@ async def test_state_and_event_become_standard_internal_events() -> None:
 
 
 async def test_envelope_cannot_claim_another_device_or_send_commands() -> None:
-    use_case, _channels, _commands, _events = _use_case()
+    use_case, channels, _sessions, _commands, _events = _use_case()
 
     with pytest.raises(DataEnvelopeRejected, match="lease"):
         await use_case.execute(
@@ -191,10 +202,13 @@ async def test_envelope_cannot_claim_another_device_or_send_commands() -> None:
         )
     with pytest.raises(DataEnvelopeRejected, match="cannot send command"):
         await use_case.execute(_envelope("command", {"command_id": "command-1"}))
+    channels.lease = replace(channels.lease, state=ChannelState.PENDING)
+    with pytest.raises(DataEnvelopeRejected, match="active channel lease"):
+        await use_case.execute(_envelope("ack", {"command_id": "command-1", "status": "accepted"}))
 
 
 async def test_envelope_rejects_unknown_command_and_unsupported_typed_payload() -> None:
-    use_case, _channels, _commands, _events = _use_case()
+    use_case, _channels, _sessions, _commands, _events = _use_case()
     with pytest.raises(DataEnvelopeRejected, match="does not belong"):
         await use_case.execute(
             _envelope("ack", {"command_id": "unknown-command", "status": "accepted"})
@@ -210,3 +224,11 @@ async def test_envelope_rejects_unknown_command_and_unsupported_typed_payload() 
     object.__setattr__(unsupported, "payload", object())
     with pytest.raises(DataEnvelopeRejected, match="unsupported"):
         await use_case.execute(unsupported)
+
+
+async def test_channel_data_is_rejected_after_device_session_expires() -> None:
+    use_case, _channels, sessions, _commands, _events = _use_case()
+    sessions.online = False
+
+    with pytest.raises(DataEnvelopeRejected, match="active device session"):
+        await use_case.execute(_envelope("ack", {"command_id": "command-1", "status": "accepted"}))

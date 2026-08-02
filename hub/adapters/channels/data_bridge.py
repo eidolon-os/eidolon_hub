@@ -55,7 +55,7 @@ class HttpDataEnvelopeSender:
 
 
 class ProviderDataChannelBridge:
-    """Maps Provider traffic without knowing WSS, LiveKit or media details."""
+    """Maps Provider traffic without knowing backend or media details."""
 
     def __init__(
         self,

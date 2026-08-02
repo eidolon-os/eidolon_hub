@@ -29,6 +29,7 @@ def build_device_management(
         directory=directory,
         send_command=SendCommand(
             devices=repositories.devices,
+            sessions=repositories.sessions,
             commands=repositories.commands,
             sender=bridge,
             clock=clock,
@@ -43,7 +44,7 @@ def build_device_management(
         ),
         revoke_device=RevokeDevice(
             devices=repositories.devices,
-            connections=repositories.connections,
+            sessions=repositories.sessions,
             events=repositories.events,
             clock=clock,
             directory_projector=projector,

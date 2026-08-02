@@ -6,10 +6,10 @@ import pytest
 
 from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
-from hub.domain.connections.entities import ConnectionLease, ConnectorKind
 from hub.domain.devices.entities import ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import DeviceSessionLease
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
@@ -42,14 +42,11 @@ class _Devices:
         return device
 
 
-class _Connections:
+class _Sessions:
     def __init__(self):
-        self.lease = ConnectionLease(
-            connection_id="connection-1",
+        self.lease = DeviceSessionLease(
+            session_id="session-1",
             device_id="device-1",
-            connector_id="https-local",
-            connector_kind=ConnectorKind.HTTPS,
-            signaling_ref="http-mailbox:device-1",
             opened_at=NOW - timedelta(seconds=5),
             renewed_at=NOW - timedelta(seconds=5),
             expires_at=NOW + timedelta(seconds=45),
@@ -108,7 +105,7 @@ async def test_approval_is_owner_scoped_and_request_id_idempotent() -> None:
         await use_case.execute(device_id="device-1", owner_id="owner-2", request_id="approval-1")
 
 
-async def test_revocation_closes_only_hub_owned_connection_facts() -> None:
+async def test_revocation_closes_hub_owned_session_facts() -> None:
     devices, events, projector = _Devices(), _Recorder(), _Projector()
     devices.device = await ApproveDevice(
         devices=devices,
@@ -116,10 +113,10 @@ async def test_revocation_closes_only_hub_owned_connection_facts() -> None:
         clock=_Clock(),
         directory_projector=projector,
     ).execute(device_id="device-1", owner_id="owner-1", request_id="approval-1")
-    connections = _Connections()
+    sessions = _Sessions()
     use_case = RevokeDevice(
         devices=devices,
-        connections=connections,
+        sessions=sessions,
         events=events,
         clock=_Clock(),
         directory_projector=projector,
@@ -131,5 +128,5 @@ async def test_revocation_closes_only_hub_owned_connection_facts() -> None:
 
     assert revoked.revoked is True
     assert revoked.approved is False
-    assert connections.lease.is_active(NOW) is False
+    assert sessions.lease.is_active(NOW) is False
     assert projector.values[-1] == "device-1"

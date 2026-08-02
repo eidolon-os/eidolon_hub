@@ -14,10 +14,6 @@ class EnrollmentChallenge:
     client_nonce: str
     server_nonce: str
     expires_at: datetime
-    connector_id: str
-    connector_kind: str
-    signaling_ref: str
-    priority: int
     consumed: bool = False
 
 
@@ -34,7 +30,7 @@ class DeviceProofVerifier(Protocol):
 
 
 class CredentialIssuer(Protocol):
-    def issue_lease_token(self, *, connection_id: str, device_id: str) -> str: ...
+    def issue_lease_token(self, *, session_id: str, device_id: str) -> str: ...
 
 
 class Clock(Protocol):

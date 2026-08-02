@@ -9,10 +9,10 @@
 
 ## Decision
 
-Hub 不再连接 NATS/JetStream，也不安装 `nats-py`。它通过版本化 Connection、Device Management、Provider HTTP/MQTT 契约承担 Eidolon OS 的设备总线角色：
+Hub 不再连接 NATS/JetStream，也不安装 `nats-py`。它通过版本化 Device Access、Device Management 与 Provider HTTP 契约承担 Eidolon OS 的设备总线角色：
 
 - 设备事实、租约、命令、cursor、Directory 与事件写入 Hub 自有数据库；
-- MQTT5 仍只是一种 WAN Connection Connector；
+- WAN bootstrap 使用 Commissioned HTTPS Descriptor URI；
 - Provider control/data signaling 使用认证 HTTP Request/Reply；
 - 对外消费者使用 Hub API，不读取 Hub 内部数据库或 KV bucket。
 

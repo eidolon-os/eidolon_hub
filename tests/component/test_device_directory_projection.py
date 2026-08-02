@@ -10,10 +10,10 @@ from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import DirectoryRow
 from hub.adapters.persistence.repositories import SqlDeviceDirectoryRepository
 from hub.application.projections.device_directory import ProjectDeviceDirectory
-from hub.domain.connections.entities import ConnectionLease, ConnectorKind
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.domain.sessions.entities import DeviceSessionLease
 
 
 @pytest.fixture
@@ -44,7 +44,7 @@ class _Devices:
         return (self.device,)
 
 
-class _Connections:
+class _Sessions:
     def __init__(self, leases):
         self.leases = leases
 
@@ -67,12 +67,9 @@ async def test_directory_persists_metadata_without_signaling_or_channel_secrets(
         owner_id="owner-1",
         approved=True,
     )
-    lease = ConnectionLease(
-        connection_id="mqtt-1",
+    lease = DeviceSessionLease(
+        session_id="session-1",
         device_id="device-1",
-        connector_id="mqtt-cloud",
-        connector_kind=ConnectorKind.MQTT5,
-        signaling_ref="mqtt:private-device-topic",
         opened_at=now,
         renewed_at=now,
         expires_at=now + timedelta(seconds=45),
@@ -84,7 +81,7 @@ async def test_directory_persists_metadata_without_signaling_or_channel_secrets(
     repository = SqlDeviceDirectoryRepository(database)
     projector = ProjectDeviceDirectory(
         devices=_Devices(device),
-        connections=_Connections((lease,)),
+        sessions=_Sessions((lease,)),
         directory=repository,
         clock=_Clock(),
     )
@@ -95,7 +92,6 @@ async def test_directory_persists_metadata_without_signaling_or_channel_secrets(
         serialized = (await session.scalar(select(DirectoryRow))).payload_json.encode()
 
     assert entry.online and restored == entry
-    assert b"private-device-topic" not in serialized
     assert b"private-lease-token" not in serialized
     assert b"opaque_binding" not in serialized
 
@@ -114,7 +110,7 @@ async def test_owner_transfer_atomically_removes_old_scope_visibility(database) 
         approved=True,
         revoked=False,
         online=False,
-        connections=(),
+        sessions=(),
         registered_at=now,
         updated_at=now,
     )
@@ -129,7 +125,7 @@ async def test_owner_transfer_atomically_removes_old_scope_visibility(database) 
 
 
 @pytest.mark.asyncio
-async def test_reconcile_marks_naturally_expired_connection_offline(database) -> None:
+async def test_reconcile_marks_naturally_expired_session_offline(database) -> None:
     now = _Clock.value
     clock = _Clock()
     device = ManagedDevice(
@@ -142,12 +138,9 @@ async def test_reconcile_marks_naturally_expired_connection_offline(database) ->
         owner_id="owner-1",
         approved=True,
     )
-    lease = ConnectionLease(
-        connection_id="https-expiring",
+    lease = DeviceSessionLease(
+        session_id="session-expiring",
         device_id="device-expiry",
-        connector_id="https-local",
-        connector_kind=ConnectorKind.HTTPS,
-        signaling_ref="http-mailbox:device-expiry",
         opened_at=now,
         renewed_at=now,
         expires_at=now + timedelta(seconds=45),
@@ -159,7 +152,7 @@ async def test_reconcile_marks_naturally_expired_connection_offline(database) ->
     repository = SqlDeviceDirectoryRepository(database)
     projector = ProjectDeviceDirectory(
         devices=_Devices(device),
-        connections=_Connections((lease,)),
+        sessions=_Sessions((lease,)),
         directory=repository,
         clock=clock,
     )
@@ -170,7 +163,7 @@ async def test_reconcile_marks_naturally_expired_connection_offline(database) ->
 
     assert online.online is True
     assert projected[0].online is False
-    assert projected[0].connections == ()
+    assert projected[0].sessions == ()
     assert projected[0].revision == 2
 
 
@@ -191,7 +184,7 @@ async def test_unchanged_reconcile_does_not_advance_directory_revision(database)
     repository = SqlDeviceDirectoryRepository(database)
     projector = ProjectDeviceDirectory(
         devices=_Devices(device),
-        connections=_Connections(()),
+        sessions=_Sessions(()),
         directory=repository,
         clock=clock,
     )
