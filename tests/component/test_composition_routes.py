@@ -38,6 +38,7 @@ def test_public_contract_routes_exist_before_lifespan_start() -> None:
 def test_composition_starts_with_only_hub_owned_sqlite(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("EIDOLON_HUB_MANAGEMENT_JWT_SECRET", "m" * 32)
     monkeypatch.setenv("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN", "p" * 32)
+    monkeypatch.setenv("EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN", "r" * 32)
     config = HubConfig(
         discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
         persistence=PersistenceConfig(path=str(tmp_path / "runtime" / "hub.sqlite3")),

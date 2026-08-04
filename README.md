@@ -98,7 +98,7 @@ Owner 是 Eidolon OS 的根安全与命名空间主体，`owner_id` 是稳定、
 
 `eidolon_kernel` 拥有 Device Mount 与 OS Namespace。管理端/小程序依次编排 Approval 和 Mount；Kernel 通过 Hub 的 Owner-scoped Device Get 校验设备为 approved 且 Owner 匹配。Hub 不导入 Kernel package、不调用 Kernel，也不保存 `companion_id`，从而避免 Hub↔Kernel 循环依赖和双重 Mount 权威。Approved 但尚未 Mount 是安全、可重试的中间状态。
 
-当前 Kernel 已实现 Hub HTTP consumer 和跨 Owner fail-closed 的 Mount Core；真实 Companion Authority 尚未发布稳定契约，因此完整生产 Mount E2E 仍未完成。这个 blocker 不应让 Mount 或 Owner 业务语义回流 Hub。
+当前 Kernel 已实现 Hub 精确读取 consumer，并通过 `eidolon_data` 发布的独立 Companion Authority 精确读取校验 Companion。Kernel 周期回读两个 Authority；Device 被 Hub 吊销/移出 Owner scope，或 Companion 变为 inactive/缺失时，会用 CAS 把 active Mount 变为 tombstone。Authority 网络或认证故障只延后对账，不伪造吊销事实。
 
 ## 代码架构
 
@@ -150,7 +150,7 @@ Domain/Application 不导入 FastAPI、SQLAlchemy、HTTPX、Zeroconf 或具体 P
 | `POST /api/device-management/v1/devices/{device_id}/approval` | 人工审批并绑定 Owner |
 | `POST /api/device-management/v1/devices/{device_id}/revocation` | 终态吊销并通知 Provider |
 
-Kernel 只消费现有精确读取：`GET /api/device-management/v1/owners/{owner_scope}/devices/{device_id}`。Hub 不为 Kernel 新建第二套设备 DTO 或数据库访问通道。
+Kernel 只消费现有精确读取：`GET /api/device-management/v1/owners/{owner_scope}/devices/{device_id}`。它使用独立的 opaque reader token；该 token 只能调用这一个精确 GET，不能 List、读事件、Approve 或 Revoke。Hub 不为 Kernel 新建第二套设备 DTO 或数据库访问通道。
 
 ### Channel Provider Control
 
@@ -187,15 +187,16 @@ SQLite 使用 WAL，进程持有 `<database>.lock` 独占锁。空库按当前 O
 - `channel_provider.contract_url`：唯一 Provider 控制地址；
 - `persistence.path`：Hub 独占 SQLite 路径。
 
-`.env` 只保存两个 Secret：
+`.env` 只保存三个 Secret：
 
 - `EIDOLON_HUB_MANAGEMENT_JWT_SECRET`
+- `EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN`
 - `EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN`
 
 ```bash
 uv sync --all-groups
 cp config/.env.example config/.env
-# 填入两个至少 32 bytes 的 Secret
+# 填入三个至少 32 bytes 的随机 Secret
 uv run uvicorn hub.main:app --host 0.0.0.0 --port 8082
 ```
 
@@ -208,6 +209,7 @@ uv run python scripts/generate_contracts.py --check
 uv run lint-imports
 uv run ruff check hub tests scripts
 uv run pytest -q
+uv run pytest -q tests/integration
 ```
 
 从 [文档导航](docs/README.md) 开始阅读；实现归属以 [架构标尺](docs/architecture/device-control-subsystem.md) 为准，测试边界见 [测试策略](docs/testing/test-strategy.md) 和 [测试报告索引](docs/testing/reports/README.md)。

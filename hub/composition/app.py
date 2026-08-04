@@ -78,6 +78,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 provider=channel_provider,
                 hub_id=app_config.onboarding.hub_id,
                 management_jwt_secret=secrets.management_jwt,
+                device_registry_reader_token=secrets.device_registry_reader_token,
                 clock=resources.clock,
                 handoff_ttl=timedelta(
                     seconds=app_config.onboarding.retrieval_window_seconds

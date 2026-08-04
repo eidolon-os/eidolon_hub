@@ -26,7 +26,7 @@ from hub.contracts.mappers import (
 )
 from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.channels import ChannelProviderContractError
-from hub.ports.identity import ManagementAuthorizer
+from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 from hub.ports.management_events import DeviceManagementEventStream
 
 
@@ -62,7 +62,10 @@ def create_device_management_router(
         runtime = current()
         try:
             await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=owner_scope, device_id=None
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_LIST,
+                owner_scope=owner_scope,
+                device_id=None,
             )
             page = await runtime.list_devices.execute(
                 DeviceListQuery(
@@ -97,8 +100,9 @@ def create_device_management_router(
         try:
             await runtime.authorizer.authorize(
                 credential=authorization,
+                permission=ManagementPermission.DEVICE_GET,
                 owner_scope=owner_scope,
-                device_id=None,
+                device_id=device_id,
             )
             entry = await runtime.get_device.execute(
                 owner_scope=owner_scope,
@@ -120,7 +124,10 @@ def create_device_management_router(
         runtime = current()
         try:
             await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=owner_scope, device_id=None
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_EVENTS,
+                owner_scope=owner_scope,
+                device_id=None,
             )
             stored = await runtime.event_stream.list_after(
                 owner_scope=owner_scope,
@@ -145,7 +152,10 @@ def create_device_management_router(
         runtime = current()
         try:
             principal = await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=None, device_id=device_id
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_APPROVE,
+                owner_scope=None,
+                device_id=device_id,
             )
             device = await runtime.approve_device.execute(
                 device_id=device_id,
@@ -170,7 +180,10 @@ def create_device_management_router(
         runtime = current()
         try:
             principal = await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=None, device_id=device_id
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_REVOKE,
+                owner_scope=None,
+                device_id=device_id,
             )
             device = await runtime.revoke_device.execute(
                 device_id=device_id,

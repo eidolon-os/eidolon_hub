@@ -35,6 +35,10 @@ def _admin_credential(secret: str) -> str:
     return f"Bearer {token}"
 
 
+def _registry_reader_credential(token: str) -> str:
+    return f"Bearer {token}"
+
+
 def _device_enrollment():
     return {
         "operation": "device.enrollment",
@@ -72,8 +76,13 @@ def test_local_enrollment_handoff_and_directory_survive_restart(
 ) -> None:
     management_secret = "local-e2e-management-secret-0001"
     provider_token = "local-e2e-provider-secret-value-1"
+    registry_reader_token = "local-e2e-registry-reader-token-0001"
     monkeypatch.setenv("EIDOLON_HUB_MANAGEMENT_JWT_SECRET", management_secret)
     monkeypatch.setenv("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN", provider_token)
+    monkeypatch.setenv(
+        "EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN",
+        registry_reader_token,
+    )
 
     def provider_provision(request):
         body = request.get_json()
@@ -118,6 +127,7 @@ def test_local_enrollment_handoff_and_directory_survive_restart(
         persistence=PersistenceConfig(path=str(tmp_path / "hub-e2e.sqlite3")),
     )
     admin = _admin_credential(management_secret)
+    registry_reader = _registry_reader_credential(registry_reader_token)
 
     with TestClient(create_composed_app(config)) as client:
         receipt = client.post(
@@ -158,6 +168,43 @@ def test_local_enrollment_handoff_and_directory_survive_restart(
         assert detail.status_code == 200
         assert detail.json()["manifest"]["title"] == "E2E Device"
         assert "online" not in detail.json()
+
+        kernel_detail = client.get(
+            "/api/device-management/v1/owners/e2e-owner-1/devices/e2e-device-1",
+            headers={"Authorization": registry_reader},
+        )
+        assert kernel_detail.status_code == 200
+        assert kernel_detail.json()["lifecycle_state"] == "approved"
+
+        forbidden_requests = (
+            client.get(
+                "/api/device-management/v1/owners/e2e-owner-1/devices",
+                headers={"Authorization": registry_reader},
+            ),
+            client.get(
+                "/api/device-management/v1/owners/e2e-owner-1/events",
+                headers={"Authorization": registry_reader},
+            ),
+            client.post(
+                "/api/device-management/v1/devices/e2e-device-1/approval",
+                headers={"Authorization": registry_reader},
+                json={
+                    "operation": "device.approval",
+                    "request_id": "e2e-reader-approval-1",
+                    "owner_id": "e2e-owner-1",
+                },
+            ),
+            client.post(
+                "/api/device-management/v1/devices/e2e-device-1/revocation",
+                headers={"Authorization": registry_reader},
+                json={
+                    "operation": "device.revocation",
+                    "request_id": "e2e-reader-revocation-1",
+                    "reason": "must-not-run",
+                },
+            ),
+        )
+        assert all(response.status_code == 403 for response in forbidden_requests)
 
     with TestClient(create_composed_app(config)) as restarted:
         directory = restarted.get(

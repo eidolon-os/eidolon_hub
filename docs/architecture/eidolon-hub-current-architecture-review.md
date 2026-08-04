@@ -1,7 +1,7 @@
 # Eidolon Hub 当前完整架构 Review
 
 - 状态：Local-only 实现基线
-- 日期：2026-08-04
+- 日期：2026-08-05
 - 证据范围：当前 `eidolon_hub` 源码、配置、Schema 和自动化测试
 
 ## 1. 结论
@@ -67,7 +67,7 @@ ORM 是唯一 Schema，空库直接建表；旧结构 fail-fast，无 migration 
 
 ## 5. 配置与接口
 
-`settings.yaml` 只有 `persistence`、`discovery.mdns`、`onboarding` 和 `channel_provider`。`.env` 只有 Management JWT Secret 与 Provider Bearer Token。ASGI host/port、TLS、代理和 Nginx/Ingress 属于部署层。
+`settings.yaml` 只有 `persistence`、`discovery.mdns`、`onboarding` 和 `channel_provider`。`.env` 保存 Management JWT Secret、Kernel 精确读取 Token 与 Provider Bearer Token。ASGI host/port、TLS、代理和 Nginx/Ingress 属于部署层。
 
 Device API：
 
@@ -79,7 +79,7 @@ Management API：Owner-scoped Device Get/List、Event cursor、Approval 与 Revo
 
 ## 6. 已有与尚缺证据
 
-当前全量自动化回归为 `128 passed`，覆盖架构边界、状态不变量、Token hash、canonical 幂等 fingerprint、JWT subject 审计、Device+Audit 原子回滚/并发冲突、幂等投影修复、两表 SQLite、内存投影、HTTP 路由、Provider 控制和本地黑盒重启恢复。
+当前 Hub 全量自动化回归为 `130 passed`，并包含真实工作区 Hub→Kernel Approval/Get/Revocation/Reconcile 联合测试。Kernel 自身全量 `82 passed`，Data 自身全量 `55 passed`；各自事实仍由各自仓库拥有。
 
 它不证明以下外部事实：
 
@@ -87,8 +87,8 @@ Management API：Owner-scoped Device Get/List、Event cursor、Approval 与 Revo
 - 真实小程序的带外设备确认体验；
 - 真实设备固件 conformance；
 - `eidolon_channel`、`eidolon_admin`、`eidolon_agent` 已对接；
-- Kernel Hub consumer 已通过测试，但真实 Companion Authority 尚无稳定契约，production Mount 当前 fail closed；
+- 真实小程序/管理 ingress 尚未编排 Approval→Mount，真实设备与 `eidolon_channel` 仍未迁移；
 - 生产 TLS/DNS/VLAN、多接口 mDNS 和网络故障恢复；
 - Provider Revoke 的 credential 最终失效窗口。
 
-Owner 在 OS 中收敛为 Kernel 根 Security/Namespace principal；Hub 只拥有 Device→Owner Admission，Kernel 只拥有同一 Owner scope 内 Device→Companion Mount，两个项目都不复制 Owner profile。下一阶段不应向 Hub 加回 Session、Mount 或 data plane，而应先补充真实配网安全/体验协议、Companion Authority 和故障测试，再按 Provider Contract 对接 `eidolon_channel`。
+Owner 在 OS 中收敛为 Kernel 根 Security/Namespace principal；Hub 只拥有 Device→Owner Admission，Kernel 只拥有同一 Owner scope 内 Device→Companion Mount，两个项目都不复制 Owner profile。Companion Identity 由 Data 的窄 Authority 契约提供。下一阶段不应向 Hub 加回 Session、Mount 或 data plane，而应完成真实小程序 pairing/编排与 `eidolon_channel` Provider 对接。

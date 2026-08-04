@@ -80,7 +80,7 @@ Port 表示所有权和测试边界，不表示预埋多套实现。
 | `adapters/persistence/repositories.py` | SQL Device 只读 Repository、原子 Device+Audit Unit of Work 与 Management Event Ledger。 |
 | `adapters/persistence/memory.py` | 纯进程内 Device Directory，不做第二份持久化。 |
 | `adapters/security/enrollment_token.py` | SHA-256 Token hash 与 constant-time verify；明文不持久化。 |
-| `adapters/security/management_jwt.py` | 校验管理 JWT、audience、role、Owner scope 和 `sub`，返回不可伪造的操作 Principal。 |
+| `adapters/security/management_jwt.py` | 校验管理 JWT、audience、role、Owner scope 和 `sub`；另将独立 reader token 严格限制到精确 Device Get。 |
 | `adapters/channels/provider_client.py` | HTTP Request/Reply Provider Control；封装 Bearer、超时、网络和响应契约错误。 |
 | `adapters/discovery/zeroconf.py` | 在活跃 IPv4/IPv6 接口发布同链路 Descriptor/Enrollment URI，处理接口更新。 |
 | `adapters/runtime.py` | 系统 Clock、安全随机 ID 与 SQLite 本地独占文件锁。 |
@@ -93,10 +93,10 @@ Port 表示所有权和测试边界，不表示预埋多套实现。
 |---|---|
 | `interfaces/http/routers/device_onboarding.py` | 发布 Descriptor、Enrollment、Handoff，严格映射领域与 Provider 错误。 |
 | `interfaces/http/routers/device_management.py` | 发布 Owner-scoped Get/List/Events、Approval/Revocation，先授权再调用 Application。 |
-| `composition/resources.py` | 打开锁、SQLite、Repository、内存 Directory 与禁用环境代理的 HTTPX client；加载两个 Secret。 |
+| `composition/resources.py` | 打开锁、SQLite、Repository、内存 Directory 与禁用环境代理的 HTTPX client；加载三个 Secret。 |
 | `composition/channel_control.py` | 用 Provider URL、Token 和 HTTP client 创建 Provider Adapter。 |
 | `composition/device_onboarding.py` | 组装 Token Hasher、Enroll/Handoff/Provision、Descriptor 与可选 mDNS。 |
-| `composition/management.py` | 组装 Get/List、Approve/Revoke、JWT Authorizer 和事件流。 |
+| `composition/management.py` | 组装 Get/List、Approve/Revoke、management/reader Authorizer 和事件流。 |
 | `composition/app.py` | FastAPI factory/lifespan，启动重建 Directory，挂载 Router 和 `/health`。 |
 
 Composition Root 是唯一具体实现选择位置。Router 不读取 `app.state` 或数据库。
@@ -151,6 +151,8 @@ Use Case read immutable Device snapshot
 Hub 把 `owner_id` 作为稳定、不透明的 OS 根 principal ID，只保存 Device→Owner Admission。Owner profile、账号和 Persona 不进入 Hub。Kernel 读取 Hub 准入事实并拥有同一 Owner Namespace 内唯一的 Device→Companion Mount；Hub 不出现 `companion_id` 或 Kernel client。
 
 Hub 管理入口另保留最窄的操作审计身份：Authorizer 从 JWT `sub` 生成 `ManagementPrincipal.subject_id`，Router 只把它作为 Approval/Revocation 的 `principal_id` 传入 Application，事件与幂等 fingerprint 同时绑定该值。它回答“谁执行了管理操作”，不建立第二个 Owner namespace，也不能由 request payload 指定。
+
+Kernel 不使用可过期但无人刷新的管理 JWT。Hub 与 Kernel 分别配置同一个高熵 opaque reader token；接口权限枚举和 Router 联合测试证明它只能调用 Owner-scoped 精确 Device Get。Kernel 的 consumed Schema/mapper 与工作区 Integration Test 负责检测跨仓库契约漂移。
 
 ## 11. 无效代码判定规则
 

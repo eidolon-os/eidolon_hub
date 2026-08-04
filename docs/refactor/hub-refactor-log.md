@@ -2,6 +2,17 @@
 
 本日志记录逻辑改动、首先失败的测试、所有权迁移、依赖变化、反思和风险。本轮尚未提交的条目以 `N/A (working tree)` 标记；不会虚构 SHA。
 
+## 2026-08-05 — Kernel consumed contract、服务凭证与生命周期对账
+
+- 修改目标：把“Kernel 能读取 Hub”从 mock 兼容提升为真实跨仓库契约，并关闭 Device revoked 后 active Mount 继续可解析的生命周期缺口。
+- 首先失败：静态 Kernel token 与 Hub 强制过期 JWT 没有 issuer/refresh；Data 旧 CRUD API 无认证且返回完整 Companion 配置；Kernel 全量架构测试阻断 Adapter→Application 反向依赖；Data wheel 阻断重复 Schema force-include。
+- Hub：新增显式 `ManagementPermission`，独立 32-byte opaque Device Registry Reader token 只能调用 Owner-scoped 精确 Get；List/Events/Approval/Revocation 均 403。普通管理仍使用 JWT 和已验证 `sub`。
+- 跨项目所有权：Data 继续拥有 Companion Fact，只发布独立只读 Authority App；Kernel 用 consumed Schema/HTTP adapter 读取 ID、Owner 和 active/inactive，不导入 Data、不读共享 DB、不依赖 Admin。
+- 生命周期：Kernel 周期精确回读 active Mount 前置事实；权威 revoked/inactive/missing 通过 CAS 变为有序审计 tombstone，网络/认证/5xx 只 deferred。调度器依赖本地 Protocol，由 Composition 注入 use case。
+- 测试：Hub `130 passed`，Domain/Application branch `97.48%`；Kernel `82 passed`、branch coverage `94.74%`；Data `55 passed`。Hub 与 Data 各有真实响应→Kernel current consumer 的工作区联合测试。三仓全量 Ruff、Hub/Kernel Import Linter、Contract freshness、lock check 与三仓 wheel/sdist 构建通过；Data wheel 已确认包含 Companion Authority schema。
+- 未证明：小程序 pairing 与 Approval→Mount 编排、真实固件、`eidolon_channel` Provider、生产进程编排/TLS/复杂网络和 Provider credential 残余窗口。
+- Commit：本条目随对应代码提交；最终 SHA 以 `git log` 为准。
+
 ## 2026-08-04 — Hub 架构重构收尾：Device/Audit 原子性与 Kernel Owner Namespace
 
 - 修改目标：关闭最后一个 Hub 内部一致性缺口，并把 Device→Owner Admission 与 Kernel Device→Companion Mount 明确收敛到同一 OS Owner Namespace、两个单一权威。

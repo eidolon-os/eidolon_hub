@@ -1,12 +1,12 @@
 # 当前测试基线
 
-- 日期：2026-08-04
+- 日期：2026-08-05
 - Contract source：`hub/contracts/schemas`
-- 测试总数：128
-- Local-only 全量回归：`128 passed in 11.32s`，无 skip
-- Domain + Application branch coverage：97.30%（441 statements、114 branches）
+- 测试总数：130
+- Local-only 全量回归：`130 passed in 12.70s`，无 skip
+- Domain + Application branch coverage：97.48%（441 statements、114 branches）
 
-分层结果：Architecture 26、Unit 70、Contract 15、Component 12、Functional 4、E2E 1。
+分层结果：Architecture 26、Unit 71、Contract 15、Component 12、Functional 4、E2E 1、Workspace Integration 1。
 
 当前锁定的不变量：
 
@@ -23,5 +23,7 @@
 11. Hub 只拥有 Device→Owner Admission；Kernel 唯一拥有同一 Owner Namespace 内 Device→Companion Mount，Hub 不保存 `companion_id`。
 12. Approval/Revocation 审计主体来自已验证 JWT `sub`，不能由请求体指定；Owner scope 与操作主体保持正交。
 13. Enrollment/Approval/Revocation fingerprint 使用 canonical JSON + SHA-256，不依赖可碰撞的字符串分隔符。
+14. Kernel reader credential 只能调用 Owner-scoped 精确 Device Get，不能 List/Events/Approve/Revoke；它是独立 opaque service token，不依赖静态可过期 JWT。
+15. 真实 Hub Revocation 可由 Kernel 定向对账为 CAS tombstone；Authority outage 不被误判成 revocation。
 
-静态门禁：Contract generation check、Ruff、Import Linter 和 `uv lock --check` 全部通过。Clean wheel 构建通过，共 97 files，不含 NATS、LiveKit、MQTT、SDK、Data、PostgreSQL 或 OpenTelemetry 运行依赖。
+静态门禁：Contract generation check、Ruff、Import Linter 和 clean wheel 构建通过；运行依赖不含 NATS、LiveKit、MQTT、SDK、Data、PostgreSQL 或 OpenTelemetry。

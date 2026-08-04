@@ -174,6 +174,7 @@ def test_configuration_is_local_only_and_has_current_env_contract() -> None:
     environment_source = (ROOT / "config" / ".env.example").read_text(encoding="utf-8")
     required = {
         "EIDOLON_HUB_MANAGEMENT_JWT_SECRET",
+        "EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN",
         "EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN",
     }
     retired = {

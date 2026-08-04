@@ -23,6 +23,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 @dataclass(frozen=True, slots=True)
 class RuntimeSecrets:
     management_jwt: bytes
+    device_registry_reader_token: str
     provider_token: str
 
 
@@ -38,6 +39,9 @@ class RuntimeResources:
 def load_runtime_secrets() -> RuntimeSecrets:
     return RuntimeSecrets(
         management_jwt=_required_bytes("EIDOLON_HUB_MANAGEMENT_JWT_SECRET"),
+        device_registry_reader_token=_required_text(
+            "EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN"
+        ),
         provider_token=_required_text("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN"),
     )
 

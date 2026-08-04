@@ -15,7 +15,8 @@
 | Component | 两表 SQLite Repository、Device+Audit 原子回滚/expected 冲突、启动 Directory 重建、Composition 生命周期和公开 routes |
 | Functional | HTTPS Enrollment/Approval/Handoff，以及真实 HTTP Reference Provider Provision/Revoke |
 | E2E | 生产 Composition 黑盒完成 Enrollment、审批、opaque Handoff、查询/事件和 Hub 重启恢复 |
+| Integration | Kernel 当前真实 consumer 使用独立 exact-Get capability 解析 Hub response，并在 Hub Revocation 后以 CAS 对账 Mount tombstone |
 
-所有新 Domain/Application 分支覆盖率必须不低于 90%，所有状态转移和拒绝路径有明确用例。Passed 只证明 Hub-only reference 链路；真实小程序、设备、`eidolon_channel`、TLS/DNS/VLAN 和生产故障仍需独立 conformance。
+所有新 Domain/Application 分支覆盖率必须不低于 90%，所有状态转移和拒绝路径有明确用例。Integration 证明工作区当前 producer/consumer 契约，不证明真实进程编排。真实小程序、设备、`eidolon_channel`、TLS/DNS/VLAN 和生产故障仍需独立 conformance。
 
 Cloud、PostgreSQL、多实例、Session、online、Command 和设备 data plane 已从产品范围删除，不作为待补测试能力。

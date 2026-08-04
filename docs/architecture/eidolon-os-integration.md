@@ -1,6 +1,6 @@
 # Eidolon OS 项目边界与 Hub 集成
 
-本页只陈述当前 Hub 代码和契约能够证明的边界。兄弟项目未在本轮修改；目标使用方不等于已经完成真实对接。
+本页只陈述当前 Hub、Kernel 与 Data 代码和联合契约测试能够证明的边界。目标使用方仍不等于所有真实产品均已完成对接。
 
 ```mermaid
 flowchart TB
@@ -31,7 +31,7 @@ flowchart TB
 | 新设备 | Descriptor、Enrollment、Handoff；取得 opaque Assignment 后离开 Hub | Hub Functional/E2E reference client 已验证；真实设备未迁移 |
 | 小程序 / Admin | Approval、Revocation、Owner-scoped Directory 与管理事件 | JWT/Router/Contract 已验证；真实小程序和 `eidolon_admin` 未做 conformance |
 | Channel Provider | Hub 调用 Provision/Revoke；Provider 返回 opaque Assignment | Reference Provider Contract/Functional 已验证；`eidolon_channel` 未修改 |
-| `eidolon_kernel` | 按 Owner scope 精确读取 approved Device，持有 Device→Companion Mount | Kernel Hub HTTP consumer、consumed schema 和跨 Owner测试已存在；真实 Companion Authority 阻塞完整生产 Mount |
+| `eidolon_kernel` | 按 Owner scope 精确读取 Device，持有 Device→Companion Mount并对账 Authority lifecycle | 真实 Hub→Kernel Approval/Get/Revocation/Reconcile 联合测试；Kernel consumed schema、跨 Owner和故障延后测试 |
 | Agent / metadata consumer | 只读 Get/List/管理事件；设备业务 Data 由 Provider 提供 | Hub API 已存在；真实 consumer 调用未验证 |
 
 ## Channel Provider 最小要求
@@ -50,14 +50,19 @@ Hub 不配置 channel policy，不选择 backend，不解析或持久化 `opaque
 
 Hub 在自己的远端 Management Trust Boundary 内另记录经 JWT 验证的操作 `principal_id`，用于回答 Approval/Revocation 由谁执行；该值不改变 Owner scope，也不会复制到 Kernel 成为 Actor/第二 Owner。Kernel V1 只接收产品 ingress 已确定的单一 Owner context，避免 caller Owner 与 target Owner 两套可冲突输入。
 
+Kernel→Hub 携带独立 opaque reader credential，不是 Owner token，也不进入 Kernel Device Mount domain、SQLite 或审计。Hub 接口权限只允许它访问精确 Device Get；List、Events、Approval 和 Revocation 均拒绝。
+
+Kernel production composition 还通过 `eidolon_data` 的独立 Companion Authority V1 精确 GET 校验 Companion ID、Owner 和 `active/inactive`。该服务不发布 CRUD，不返回 profile/runtime metadata；Kernel 不导入 Data package、不读共享 SQLite，也不依赖上层 Admin。
+
+Kernel 周期精确回读 active Mount 的前置 Authority。Hub Device revoked/缺失/Owner 不匹配，或 Companion inactive/缺失时，Kernel 用当前 revision CAS 生成有审计的 inactive tombstone；网络、认证或 5xx 只计为 deferred，不被当作撤销。该逻辑是定向生命周期对账，不是通用事件总线。
+
 Approval 与 Mount 由管理端编排，不做跨服务分布式事务。Approved/Unmounted 是安全可重试状态；Kernel 必须回读 Hub Device Authority 并对 Owner 不匹配 fail closed。Hub 不反向调用 Kernel，两个项目也不互相导入源码。
 
 ## 推荐集成顺序
 
 1. 先保持 Hub Architecture、Unit、Contract、Component、Functional 与 E2E 门禁稳定。
-2. 发布稳定 Companion Authority 契约，让 Kernel production Mount 退出 fail-closed blocker。
-3. 为 `eidolon_channel` 实现 Provider Provision/Revoke 与 Kernel Mount Resolve conformance。
-4. 迁移一类真实设备，验证小程序的二维码/BLE/物理确认与 Enrollment 绑定。
-5. 分别为管理客户端和 metadata consumer 做契约 conformance。
+2. 为 `eidolon_channel` 实现 Provider Provision/Revoke 与 Kernel Mount Resolve conformance。
+3. 迁移一类真实设备，验证小程序的二维码/BLE/物理确认与 Enrollment 绑定。
+4. 分别为管理客户端和 metadata consumer 做契约 conformance。
 
 旧 Device Access、Session 或数据接口不双写兼容。

@@ -100,7 +100,7 @@ Provider 根据设备事实和自身配置决定 MQTT、WSS、LiveKit 或其他 
 
 Kernel 只消费 Hub 已有的 Owner-scoped 精确 Device Get，验证稳定 Device ID、`approved` 和 Owner 匹配。Hub 不新增 Kernel 专用设备副本、不保存 `companion_id`、不导入或调用 Kernel。Approved 但 Unmounted 是安全中间态；Mount 失败不得回滚 Hub Approval。
 
-Kernel 把 `owner_id` 当作稳定、不透明的根 principal，只拥有 Namespace/Security Context 语义，不拥有用户资料。当前真实 Companion Authority 契约尚未稳定，Kernel 生产 Mount fail closed；该 blocker 不改变 Hub 边界。
+Kernel 把 `owner_id` 当作稳定、不透明的根 principal，只拥有 Namespace/Security Context 语义，不拥有用户资料。Companion identity/lifecycle 由 Data 的独立窄 Authority 契约提供；Kernel 通过精确 GET 校验 Owner 和 `active/inactive`，不导入 Data、不读共享 SQLite，也不依赖 Admin。Kernel 周期重验 active Mount：权威 revoked/inactive/missing 以 CAS 变为 tombstone，Authority 基础设施故障只延后对账。该一致性责任不改变 Hub 边界，也不要求通用消息总线。
 
 Hub 管理审计仍需记录实际执行者，但它不形成第二套 Owner。Approval/Revocation 的 `principal_id` 由 Management Authorizer 从已验证 JWT `sub` 取得，回答“谁执行”；`owner_id` 回答“设备属于哪个 OS namespace”。两者都进入原子 Device Mutation，且前者不能由管理请求体指定。Kernel V1 的 trusted-local 调用代表单一 Owner context，不要求把 Hub 的远端管理 Principal 复制进 Mount Domain。
 

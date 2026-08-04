@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Protocol
 
 
@@ -24,6 +25,16 @@ class ManagementPrincipal:
             raise ValueError("management principal roles are invalid")
 
 
+class ManagementPermission(StrEnum):
+    """One HTTP management operation authorized at the interface boundary."""
+
+    DEVICE_LIST = "device:list"
+    DEVICE_GET = "device:get"
+    DEVICE_EVENTS = "device:events"
+    DEVICE_APPROVE = "device:approve"
+    DEVICE_REVOKE = "device:revoke"
+
+
 class RetrievalTokenHasher(Protocol):
     def hash(self, token: str) -> str: ...
     def verify(self, token: str, token_hash: str) -> bool: ...
@@ -39,5 +50,10 @@ class IdGenerator(Protocol):
 
 class ManagementAuthorizer(Protocol):
     async def authorize(
-        self, *, credential: str, owner_scope: str | None, device_id: str | None
+        self,
+        *,
+        credential: str,
+        permission: ManagementPermission,
+        owner_scope: str | None,
+        device_id: str | None,
     ) -> ManagementPrincipal: ...

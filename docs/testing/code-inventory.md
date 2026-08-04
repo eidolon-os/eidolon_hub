@@ -15,7 +15,7 @@
 | Application | Enroll/Handoff/Provision、Approve/Revoke、Get/List、Directory projection |
 | Ports | Device/Directory Repository、Token、授权、Provider Control、管理审计 |
 | Contracts | 13 个 Schema、严格 Binding、generated shape、Mapper、1 个 golden example |
-| Adapters | 两表 SQLite、内存 Directory、Provider HTTP、Zeroconf、Token hash/JWT、Clock/ID/锁 |
+| Adapters | 两表 SQLite、内存 Directory、Provider HTTP、Zeroconf、Token hash/JWT、exact-Get opaque capability、Clock/ID/锁 |
 | Interfaces | Device Onboarding 与 Device Management API |
 | Composition | Secret、资源、业务图与 ASGI 生命周期的唯一组装点 |
 
@@ -36,4 +36,4 @@
 
 ## 当前门禁
 
-Architecture、Import Linter、Contract freshness、Ruff、两表 Component、Functional/E2E 和 clean build 共同阻止已删逻辑回流。最近结果见 [当前测试基线](current-baseline.md)。
+Architecture、Import Linter、Contract freshness、Ruff、两表 Component、Functional/E2E、Kernel consumer Integration 和 clean build 共同阻止已删逻辑回流。最近结果见 [当前测试基线](current-baseline.md)。

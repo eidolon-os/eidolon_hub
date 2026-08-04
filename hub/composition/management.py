@@ -25,6 +25,7 @@ def build_device_management(
     provider: ChannelProviderControl,
     hub_id: str,
     management_jwt_secret: bytes,
+    device_registry_reader_token: str,
     clock: Clock,
     handoff_ttl: timedelta,
 ) -> DeviceManagementHttpServices:
@@ -49,6 +50,7 @@ def build_device_management(
         authorizer=JwtOwnerManagementAuthorizer(
             secret=management_jwt_secret,
             devices=repositories.devices,
+            device_registry_reader_token=device_registry_reader_token,
         ),
         event_stream=repositories.management_events,
     )
