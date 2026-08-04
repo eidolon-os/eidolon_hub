@@ -13,10 +13,10 @@ NOW = datetime(2026, 8, 2, tzinfo=UTC)
 class _ProviderTransport:
     async def request(self, route, payload, *, timeout):
         request = json.loads(payload)
-        assert request["operation"] == "channel.acquire-device"
+        assert request["operation"] == "channel.provision-device"
         return json.dumps(
             {
-                "operation": "channel.assignments",
+                "operation": "channel.provisioned-device",
                 "operation_id": request["operation_id"],
                 "device_id": request["device"]["device_id"],
                 "manifest_revision": request["device"]["manifest_revision"],
@@ -35,27 +35,22 @@ class _ProviderTransport:
         ).encode()
 
 
-async def test_channel_provider_adapter_conforms_to_acquisition_port() -> None:
+async def test_channel_provider_adapter_conforms_to_provision_port() -> None:
     client = ChannelProviderHttpClient(
         _ProviderTransport(), contract_url="https://provider.example/v1"
     )
     context = ProviderDeviceContext(
-        operation_id="acquire-1",
+        operation_id="enrollment-1",
         hub_id="hub-1",
         device_id="device-1",
-        public_key_fingerprint="p256:fingerprint",
-        tenant_id="default",
         owner_id="owner-1",
         display_name="Device",
         device_kind="generic",
         manifest_json='{"schema_version":1,"title":"Device"}',
         manifest_revision="sha256:manifest",
-        approved=True,
-        revoked=False,
-        connected=True,
     )
 
-    assignments = await client.acquire_channels(context)
+    assignments = await client.provision_channels(context)
 
     assert assignments.device_id == "device-1"
     assert assignments.grants[0].opaque_binding.relay_bytes() == b"provider-owned"

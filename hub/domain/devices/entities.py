@@ -1,36 +1,60 @@
-"""Device inventory entities and persistence transfer records."""
+"""Protocol-neutral device aggregates and public directory values."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
 
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
 
+class DeviceLifecycleState(StrEnum):
+    PENDING_APPROVAL = "pending-approval"
+    APPROVED = "approved"
+    REVOKED = "revoked"
+
+
 @dataclass(frozen=True, slots=True)
 class ManagedDevice:
-    """Protocol-neutral aggregate persisted through ``DeviceRepository``."""
+    """Authoritative onboarding, capability and policy aggregate."""
 
     identity: DeviceIdentity
+    enrollment_id: str
+    retrieval_token_hash: str = field(repr=False)
+    retrieval_expires_at: datetime
     display_name: str
     device_kind: str
     manifest: DeviceManifestDocument
-    registered_at: datetime
+    enrolled_at: datetime
     updated_at: datetime
-    last_registration_request_id: str = ""
+    last_enrollment_request_id: str = ""
+    last_enrollment_fingerprint: str = ""
     owner_id: str | None = None
-    approved: bool = False
-    revoked: bool = False
+    lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.PENDING_APPROVAL
     last_management_request_id: str = ""
     last_management_fingerprint: str = ""
 
     def __post_init__(self) -> None:
+        if not self.enrollment_id.strip() or not self.retrieval_token_hash.strip():
+            raise ValueError("enrollment_id and retrieval token hash are required")
         if not self.device_kind.strip():
             raise ValueError("device_kind is required")
-        if self.registered_at.tzinfo is None or self.updated_at.tzinfo is None:
+        if any(
+            value.tzinfo is None
+            for value in (self.retrieval_expires_at, self.enrolled_at, self.updated_at)
+        ):
             raise ValueError("device timestamps must be timezone-aware")
+        if self.owner_id is not None and not self.owner_id.strip():
+            raise ValueError("owner_id must be null or non-empty")
+        if self.lifecycle_state is DeviceLifecycleState.APPROVED and self.owner_id is None:
+            raise ValueError("approved device requires an owner")
+        if (
+            self.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
+            and self.owner_id is not None
+        ):
+            raise ValueError("pending device cannot already have an owner")
 
     @property
     def manifest_json(self) -> str:
@@ -42,8 +66,9 @@ class ManagedDevice:
 
 
 @dataclass(frozen=True, slots=True)
-class DeviceRegistrationIntent:
+class DeviceEnrollmentIntent:
     request_id: str
+    retrieval_token: str = field(repr=False)
     identity: DeviceIdentity
     display_name: str
     device_kind: str
@@ -51,31 +76,24 @@ class DeviceRegistrationIntent:
 
 
 @dataclass(frozen=True, slots=True)
-class DirectorySession:
-    session_id: str
-    expires_at: datetime
-
-    def __post_init__(self) -> None:
-        if not self.session_id.strip():
-            raise ValueError("directory session_id is required")
-        if self.expires_at.tzinfo is None:
-            raise ValueError("directory session expiry must be timezone-aware")
-
-
-@dataclass(frozen=True, slots=True)
 class DeviceDirectoryEntry:
-    """Provider-neutral public-blackboard value."""
+    """Safe, provider-neutral projection exposed to Eidolon OS consumers."""
 
     device_id: str
     owner_scope: str
     display_name: str
     device_kind: str
-    manifest_json: str
-    manifest_revision: str
-    approved: bool
-    revoked: bool
-    online: bool
-    sessions: tuple[DirectorySession, ...]
-    registered_at: datetime
+    manifest: DeviceManifestDocument
+    lifecycle_state: DeviceLifecycleState
+    enrolled_at: datetime
     updated_at: datetime
-    revision: int = 1
+
+    def __post_init__(self) -> None:
+        if not self.device_id.strip() or not self.owner_scope.strip():
+            raise ValueError("directory device_id and owner_scope are required")
+        if any(value.tzinfo is None for value in (self.enrolled_at, self.updated_at)):
+            raise ValueError("directory timestamps must be timezone-aware")
+
+    @property
+    def manifest_revision(self) -> str:
+        return self.manifest.revision

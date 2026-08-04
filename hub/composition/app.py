@@ -1,53 +1,44 @@
-"""Production composition root for Hub device access and management."""
+"""Production composition root for Hub device onboarding and management."""
 
 from __future__ import annotations
 
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
+from datetime import timedelta
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 
-from hub.adapters.devices.directory_worker import DeviceDirectoryProjectionWorker
-from hub.adapters.observability.opentelemetry import (
-    OpenTelemetryHttpMiddleware,
-    OpenTelemetryRuntime,
-    configure_opentelemetry,
-)
 from hub.application.projections.device_directory import ProjectDeviceDirectory
-from hub.composition.channel_control import build_channel_control
-from hub.composition.device_access import build_device_access
+from hub.composition.channel_control import build_channel_provider
+from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
-    load_runtime_environment,
     load_runtime_secrets,
     open_runtime_resources,
 )
 from hub.config import HubConfig, load_hub_config
-from hub.interfaces.http.routers.device_access import (
-    DeviceAccessHttpServices,
-    create_device_access_router,
-)
 from hub.interfaces.http.routers.device_management import (
     DeviceManagementHttpServices,
     create_device_management_router,
 )
-from hub.interfaces.http.routers.provider_gateway import (
-    ProviderGatewayHttpServices,
-    create_provider_gateway_router,
+from hub.interfaces.http.routers.device_onboarding import (
+    DeviceOnboardingHttpServices,
+    create_device_onboarding_router,
 )
 
 
 @dataclass(frozen=True, slots=True)
 class ComposedHttpRuntime:
-    device_access: DeviceAccessHttpServices
+    device_onboarding: DeviceOnboardingHttpServices
     management: DeviceManagementHttpServices
-    provider: ProviderGatewayHttpServices
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     app_config = config or load_hub_config()
     runtime: ComposedHttpRuntime | None = None
-    telemetry: OpenTelemetryRuntime | None = None
 
     def require_runtime() -> ComposedHttpRuntime:
         if runtime is None:
@@ -56,71 +47,54 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        nonlocal runtime, telemetry
+        nonlocal runtime
         secrets = load_runtime_secrets()
         stack = AsyncExitStack()
         await stack.__aenter__()
         try:
-            environment = load_runtime_environment(app_config)
-            telemetry = configure_opentelemetry(
-                enabled=app_config.observability.enabled,
-                service_name=app_config.observability.service_name,
-                endpoint=environment.otlp_endpoint,
-            )
-            stack.callback(telemetry.shutdown)
             resources = await open_runtime_resources(app_config, stack)
             projector = ProjectDeviceDirectory(
                 devices=resources.repositories.devices,
-                sessions=resources.repositories.sessions,
                 directory=resources.directory,
-                clock=resources.clock,
             )
-            channel_control = build_channel_control(
+            await projector.execute_all()
+            channel_provider = build_channel_provider(
                 config=app_config,
-                repositories=resources.repositories,
                 http_client=resources.http_client,
                 provider_token=secrets.provider_token,
-                clock=resources.clock,
             )
-            device_access = build_device_access(
+            device_onboarding = build_device_onboarding(
                 config=app_config,
                 repositories=resources.repositories,
                 projector=projector,
-                provider=channel_control.provider,
+                provider=channel_provider,
                 clock=resources.clock,
                 ids=resources.ids,
-                lease_secret=secrets.lease,
-                hub_instance_id=environment.hub_instance_id,
             )
             management = build_device_management(
                 repositories=resources.repositories,
                 directory=resources.directory,
                 projector=projector,
-                bridge=channel_control.bridge,
+                provider=channel_provider,
+                hub_id=app_config.onboarding.hub_id,
                 management_jwt_secret=secrets.management_jwt,
                 clock=resources.clock,
-                ids=resources.ids,
-            )
-            directory_worker = DeviceDirectoryProjectionWorker(
-                projector,
-                interval_seconds=app_config.device_directory.projection_interval_seconds,
+                handoff_ttl=timedelta(
+                    seconds=app_config.onboarding.retrieval_window_seconds
+                ),
             )
 
-            if device_access.mdns_advertiser is not None:
-                await device_access.mdns_advertiser.start()
-                stack.push_async_callback(device_access.mdns_advertiser.stop)
-            await directory_worker.start()
-            stack.push_async_callback(directory_worker.stop)
+            if device_onboarding.mdns_advertiser is not None:
+                await device_onboarding.mdns_advertiser.start()
+                stack.push_async_callback(device_onboarding.mdns_advertiser.stop)
 
             runtime = ComposedHttpRuntime(
-                device_access=device_access.http_services,
+                device_onboarding=device_onboarding.http_services,
                 management=management,
-                provider=channel_control.http_services,
             )
             yield
         finally:
             runtime = None
-            telemetry = None
             await stack.aclose()
 
     app = FastAPI(
@@ -128,12 +102,30 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
-    app.add_middleware(OpenTelemetryHttpMiddleware, runtime=lambda: telemetry)
-    app.include_router(create_device_access_router(lambda: require_runtime().device_access))
+
+    @app.exception_handler(RequestValidationError)
+    async def safe_request_validation_error(
+        _request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        # FastAPI's default 422 body includes the rejected raw input.  Device
+        # onboarding requests contain a retrieval secret, so no input value is
+        # safe to reflect or hand to an access-log collector.
+        errors = [
+            {key: value for key, value in error.items() if key not in {"input", "url"}}
+            for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(errors)},
+        )
+
+    app.include_router(
+        create_device_onboarding_router(lambda: require_runtime().device_onboarding)
+    )
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
     )
-    app.include_router(create_provider_gateway_router(lambda: require_runtime().provider))
 
     @app.get("/health")
     async def health() -> dict[str, str]:

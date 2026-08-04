@@ -7,22 +7,25 @@ from datetime import UTC, datetime
 from typing import Protocol
 
 import httpx
+from pydantic import ValidationError
 
 from hub.contracts.bindings.channel import (
-    ProviderChannelAcquisitionRequest,
-    ProviderChannelAcquisitionResponse,
     ProviderChannelDevice,
+    ProviderChannelProvisionRequest,
+    ProviderChannelProvisionResponse,
+    ProviderChannelRevocationRequest,
+    ProviderChannelRevocationResponse,
 )
 from hub.contracts.bindings.device import DeviceManifest
 from hub.domain.channels.entities import (
     ChannelAssignmentSet,
     ChannelGrant,
     ChannelKind,
-    ChannelLease,
-    ChannelState,
     OpaqueChannelBinding,
+    ProviderChannelRevocation,
     ProviderDeviceContext,
 )
+from hub.ports.channels import ChannelProviderContractError
 
 
 class RequestReplyClient(Protocol):
@@ -63,35 +66,31 @@ class ChannelProviderHttpClient:
         if not contract_url.startswith(("http://", "https://")):
             raise ValueError("Channel Provider contract_url must be HTTP(S)")
         self._client = client
-        self._route = f"{contract_url.rstrip('/')}/device-channels/acquire"
+        base_url = contract_url.rstrip("/")
+        self._provision_route = f"{base_url}/device-channels/provision"
+        self._revoke_route = f"{base_url}/device-channels/revoke"
         self._timeout = timeout_seconds
 
-    async def acquire_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet:
-        request = ProviderChannelAcquisitionRequest(
+    async def provision_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet:
+        request = ProviderChannelProvisionRequest(
             operation_id=context.operation_id,
             hub_id=context.hub_id,
             device=ProviderChannelDevice(
                 device_id=context.device_id,
-                public_key_fingerprint=context.public_key_fingerprint,
-                tenant_id=context.tenant_id,
                 owner_id=context.owner_id,
                 display_name=context.display_name,
                 device_kind=context.device_kind,
                 manifest=DeviceManifest.model_validate_json(context.manifest_json),
                 manifest_revision=context.manifest_revision,
-                approved=context.approved,
-                revoked=context.revoked,
-                connected=context.connected,
             ),
         )
         payload = request.model_dump_json().encode()
-        response = ProviderChannelAcquisitionResponse.model_validate_json(
-            await self._client.request(self._route, payload, timeout=self._timeout)
-        )
-        grants = tuple(
-            ChannelGrant(
-                operation_id=response.operation_id,
-                lease=ChannelLease(
+        try:
+            response = ProviderChannelProvisionResponse.model_validate_json(
+                await self._client.request(self._provision_route, payload, timeout=self._timeout)
+            )
+            grants = tuple(
+                ChannelGrant(
                     channel_id=item.channel_id,
                     device_id=response.device_id,
                     purpose=item.purpose,
@@ -99,17 +98,42 @@ class ChannelProviderHttpClient:
                     binding_format=item.binding_format,
                     issued_at=datetime.fromtimestamp(item.issued_at_ms / 1000, tz=UTC),
                     expires_at=datetime.fromtimestamp(item.expires_at_ms / 1000, tz=UTC),
-                    state=ChannelState.PENDING,
-                ),
-                opaque_binding=OpaqueChannelBinding(
-                    base64.b64decode(item.opaque_binding, validate=True)
-                ),
+                    opaque_binding=OpaqueChannelBinding(
+                        base64.b64decode(item.opaque_binding, validate=True)
+                    ),
+                )
+                for item in response.channels
             )
-            for item in response.channels
-        )
+        except (ValidationError, ValueError) as exc:
+            raise ChannelProviderContractError("invalid Provider provision response") from exc
         return ChannelAssignmentSet(
             operation_id=response.operation_id,
             device_id=response.device_id,
             manifest_revision=response.manifest_revision,
             grants=grants,
         )
+
+    async def revoke_channels(self, revocation: ProviderChannelRevocation) -> None:
+        request = ProviderChannelRevocationRequest(
+            operation_id=revocation.operation_id,
+            hub_id=revocation.hub_id,
+            device_id=revocation.device_id,
+            reason=revocation.reason,
+        )
+        try:
+            response = ProviderChannelRevocationResponse.model_validate_json(
+                await self._client.request(
+                    self._revoke_route,
+                    request.model_dump_json().encode(),
+                    timeout=self._timeout,
+                )
+            )
+        except ValidationError as exc:
+            raise ChannelProviderContractError("invalid Provider revocation response") from exc
+        if (
+            response.operation_id != revocation.operation_id
+            or response.device_id != revocation.device_id
+        ):
+            raise ChannelProviderContractError(
+                "Provider revocation response does not match request"
+            )

@@ -6,14 +6,9 @@ and domain code only receive the small repository ports.
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
-from alembic.runtime.migration import MigrationContext
-from alembic.script import ScriptDirectory
-from sqlalchemy import event
+from sqlalchemy import event, inspect
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -21,8 +16,7 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-_MIGRATIONS = Path(__file__).with_name("migrations")
-_SCHEMA_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+from hub.adapters.persistence.models import Base
 
 
 class HubDatabase:
@@ -52,87 +46,82 @@ class HubDatabase:
 
         return cls(engine)
 
-    @classmethod
-    def postgresql(
-        cls,
-        dsn: str,
-        *,
-        pool_size: int = 10,
-        max_overflow: int = 20,
-        pool_timeout_seconds: float = 10.0,
-        pool_recycle_seconds: int = 1800,
-        echo: bool = False,
-        search_path: str | None = None,
-    ) -> HubDatabase:
-        normalized = dsn.strip()
-        if normalized.startswith("postgresql://"):
-            normalized = "postgresql+asyncpg://" + normalized.removeprefix("postgresql://")
-        if not normalized.startswith("postgresql+asyncpg://"):
-            raise ValueError("PostgreSQL DSN must use the postgresql scheme")
-        if search_path is not None and not _SCHEMA_NAME.fullmatch(search_path):
-            raise ValueError("PostgreSQL search_path must be one schema identifier")
-        connect_args = (
-            {"server_settings": {"search_path": search_path}} if search_path is not None else {}
-        )
-        return cls(
-            create_async_engine(
-                normalized,
-                pool_pre_ping=True,
-                pool_size=pool_size,
-                max_overflow=max_overflow,
-                pool_timeout=pool_timeout_seconds,
-                pool_recycle=pool_recycle_seconds,
-                echo=echo,
-                connect_args=connect_args,
-            )
-        )
-
-    async def migrate(self) -> None:
-        """Upgrade the database to the packaged, versioned schema head."""
+    async def initialize_schema(self) -> None:
+        """Create the one current schema or reject an incompatible database."""
 
         async with self.engine.begin() as connection:
-            await connection.run_sync(self._upgrade)
-
-    async def assert_schema_current(self) -> None:
-        """Fail startup when an out-of-band migration job has not reached head."""
-
-        async with self.engine.connect() as connection:
-            await connection.run_sync(self._assert_at_head)
-
-    async def assert_no_migration_drift(self) -> None:
-        """CI helper: ensure current ORM metadata needs no unversioned operation."""
-
-        async with self.engine.connect() as connection:
-            await connection.run_sync(self._check)
+            await connection.run_sync(self._initialize_schema)
 
     @staticmethod
-    def _upgrade(connection) -> None:
-        config = HubDatabase._alembic_config()
-        config.attributes["connection"] = connection
-        command.upgrade(config, "head")
+    def _initialize_schema(connection) -> None:
+        schema = inspect(connection)
+        actual_tables = set(schema.get_table_names())
+        expected_tables = set(Base.metadata.tables)
 
-    @staticmethod
-    def _assert_at_head(connection) -> None:
-        config = HubDatabase._alembic_config()
-        expected = set(ScriptDirectory.from_config(config).get_heads())
-        current = set(MigrationContext.configure(connection).get_current_heads())
-        if current != expected:
+        if not actual_tables:
+            Base.metadata.create_all(connection)
+            return
+
+        problems: list[str] = []
+        if actual_tables != expected_tables:
+            missing = sorted(expected_tables - actual_tables)
+            unexpected = sorted(actual_tables - expected_tables)
+            problems.append(f"tables missing={missing}, unexpected={unexpected}")
+
+        for table_name in sorted(actual_tables & expected_tables):
+            table = Base.metadata.tables[table_name]
+            reflected_columns = schema.get_columns(table_name)
+            actual_columns = {value["name"] for value in reflected_columns}
+            expected_columns = set(table.columns.keys())
+            if actual_columns != expected_columns:
+                missing = sorted(expected_columns - actual_columns)
+                unexpected = sorted(actual_columns - expected_columns)
+                problems.append(f"{table_name} columns missing={missing}, unexpected={unexpected}")
+                continue
+
+            actual_contract = {
+                value["name"]: (
+                    value["type"].compile(dialect=connection.dialect).upper(),
+                    bool(value["nullable"]),
+                    bool(value["primary_key"]),
+                )
+                for value in reflected_columns
+            }
+            expected_contract = {
+                column.name: (
+                    column.type.compile(dialect=connection.dialect).upper(),
+                    bool(column.nullable),
+                    bool(column.primary_key),
+                )
+                for column in table.columns
+            }
+            if actual_contract != expected_contract:
+                problems.append(f"{table_name} column definitions differ")
+
+            actual_indexes = {
+                (
+                    value["name"],
+                    tuple(value["column_names"]),
+                    bool(value["unique"]),
+                )
+                for value in schema.get_indexes(table_name)
+            }
+            expected_indexes = {
+                (
+                    index.name,
+                    tuple(column.name for column in index.columns),
+                    bool(index.unique),
+                )
+                for index in table.indexes
+            }
+            if actual_indexes != expected_indexes:
+                problems.append(f"{table_name} indexes differ")
+
+        if problems:
             raise RuntimeError(
-                f"Hub database schema is not current: current={sorted(current)}, "
-                f"expected={sorted(expected)}"
+                "Hub database does not match the current ORM schema; "
+                "remove the dedicated database and restart. " + "; ".join(problems)
             )
-
-    @staticmethod
-    def _check(connection) -> None:
-        config = HubDatabase._alembic_config()
-        config.attributes["connection"] = connection
-        command.check(config)
-
-    @staticmethod
-    def _alembic_config() -> Config:
-        config = Config()
-        config.set_main_option("script_location", str(_MIGRATIONS))
-        return config
 
     async def close(self) -> None:
         await self.engine.dispose()

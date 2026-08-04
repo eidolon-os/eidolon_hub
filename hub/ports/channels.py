@@ -6,23 +6,15 @@ from typing import Protocol
 
 from hub.domain.channels.entities import (
     ChannelAssignmentSet,
-    ChannelLifecycle,
+    ProviderChannelRevocation,
     ProviderDeviceContext,
 )
-from hub.domain.commands.entities import DeviceCommand
+
+
+class ChannelProviderContractError(ValueError):
+    """The Provider returned a response that violates the control contract."""
 
 
 class ChannelProviderControl(Protocol):
-    async def acquire_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet: ...
-
-
-class CommandChannelSender(Protocol):
-    async def send_command(self, command: DeviceCommand) -> None: ...
-
-
-class DataEnvelopeIngress(Protocol):
-    async def ingest_raw(self, raw: bytes) -> bool: ...
-
-
-class ChannelLifecycleIngress(Protocol):
-    async def execute(self, lifecycle: ChannelLifecycle) -> None: ...
+    async def provision_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet: ...
+    async def revoke_channels(self, revocation: ProviderChannelRevocation) -> None: ...

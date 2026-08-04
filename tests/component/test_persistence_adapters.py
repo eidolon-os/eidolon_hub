@@ -4,233 +4,101 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from hub.adapters.persistence.database import HubDatabase
-from hub.adapters.persistence.repositories import AuthorityLeaseHeld, SqlHubRepositories
-from hub.domain.channels.entities import (
-    ChannelKind,
-    ChannelLease,
-    ChannelState,
-)
-from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
+from hub.adapters.persistence.repositories import SqlHubRepositories
+from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
-from hub.domain.sessions.entities import DeviceSessionLease
-from hub.ports.event_bus import DomainEvent
-from hub.ports.identity import EnrollmentChallenge
+from hub.ports.management_events import DeviceManagementEventRecord
 
-NOW = datetime(2026, 8, 1, tzinfo=UTC)
+NOW = datetime(2026, 8, 4, tzinfo=UTC)
 
 
 @pytest.fixture
 async def database(tmp_path):
     value = HubDatabase.sqlite(tmp_path / "hub.sqlite3")
-    await value.migrate()
+    await value.initialize_schema()
     try:
         yield value
     finally:
         await value.close()
 
 
-def _device() -> ManagedDevice:
+def _device(device_id="device-1", enrollment_id="enrollment-1"):
     return ManagedDevice(
-        identity=DeviceIdentity("device-1", "p256:fingerprint", "tenant-1"),
+        identity=DeviceIdentity(device_id),
+        enrollment_id=enrollment_id,
+        retrieval_token_hash="a" * 64,
+        retrieval_expires_at=NOW + timedelta(minutes=30),
         display_name="Generic Sensor",
         device_kind="environment-sensor",
         manifest=DeviceManifestDocument.from_mapping(
-            {
-                "actions": [],
-                "events": [],
-                "media": [],
-                "properties": [],
-                "schema_version": 1,
-                "title": "Generic Sensor",
-            }
+            {"schema_version": 1, "title": "Generic Sensor"}
         ),
-        registered_at=NOW,
+        enrolled_at=NOW,
         updated_at=NOW,
     )
 
 
-def _session(*, fencing_token: int = 1) -> DeviceSessionLease:
-    return DeviceSessionLease(
-        session_id="session-1",
-        device_id="device-1",
-        opened_at=NOW,
-        renewed_at=NOW,
-        expires_at=NOW + timedelta(seconds=45),
-        lease_token="private-token",
-        identity_fingerprint="p256:fingerprint",
-        hub_instance_id="hub-1",
-        fencing_token=fencing_token,
-    )
-
-
-async def test_device_and_command_round_trip_are_idempotent(database) -> None:
-    repositories = SqlHubRepositories(database)
+async def test_device_round_trip_and_enrollment_lookup(database) -> None:
+    repository = SqlHubRepositories(database).devices
     device = _device()
-    command = DeviceCommand(
-        command_id="command-1",
-        device_id="device-1",
-        operation="sensor.calibrate",
-        payload_json='{"offset":1}',
-        state=CommandState.QUEUED,
-        created_at=NOW,
-        expires_at=NOW + timedelta(seconds=30),
-        updated_at=NOW,
-    )
+    await repository.upsert(device)
+    await repository.upsert(device)
 
-    await repositories.devices.upsert(device)
-    await repositories.devices.upsert(device)
-    await repositories.commands.upsert(command)
-
-    assert await repositories.devices.get("device-1") == device
-    assert await repositories.devices.list_all() == (device,)
-    assert await repositories.commands.get("command-1") == command
+    assert await repository.get("device-1") == device
+    assert await repository.get_by_enrollment_id("enrollment-1") == device
+    assert await repository.get_by_enrollment_id("missing") is None
+    assert await repository.list_all() == (device,)
 
 
-async def test_session_repository_enforces_fencing_and_queries_active(database) -> None:
-    repository = SqlHubRepositories(database).sessions
-    lease = _session(fencing_token=2)
-    await repository.upsert(lease)
+async def test_enrollment_id_is_unique_across_devices(database) -> None:
+    repository = SqlHubRepositories(database).devices
+    await repository.upsert(_device())
 
-    assert await repository.active_for_device("device-1", now=NOW) == (lease,)
-    with pytest.raises(PermissionError, match="stale"):
-        await repository.upsert(_session(fencing_token=1))
+    with pytest.raises(IntegrityError):
+        await repository.upsert(_device("device-2", "enrollment-1"))
 
 
-async def test_authority_lease_fences_takeover_after_expiry(database) -> None:
-    repository = SqlHubRepositories(database).authority
-    first = await repository.acquire(
-        device_id="device-1",
-        hub_instance_id="hub-1",
-        now=NOW,
-        ttl=timedelta(seconds=30),
-    )
-    with pytest.raises(AuthorityLeaseHeld):
-        await repository.acquire(
-            device_id="device-1",
-            hub_instance_id="hub-2",
-            now=NOW,
-            ttl=timedelta(seconds=30),
-        )
-    second = await repository.acquire(
-        device_id="device-1",
-        hub_instance_id="hub-2",
-        now=NOW + timedelta(seconds=31),
-        ttl=timedelta(seconds=30),
-    )
-
-    assert first.fencing_token == 1
-    assert second.fencing_token == 2
-
-
-async def test_challenge_consumption_is_durable_and_single_use(database) -> None:
-    repository = SqlHubRepositories(database).challenges
-    challenge = EnrollmentChallenge(
-        challenge_id="challenge-1",
-        device_id="device-1",
-        client_nonce="client",
-        server_nonce="server",
-        expires_at=NOW + timedelta(seconds=30),
-    )
-    await repository.create(challenge)
-
-    assert (await repository.consume("challenge-1")).consumed
-    with pytest.raises(PermissionError, match="already consumed"):
-        await repository.consume("challenge-1")
-
-
-async def test_directory_channel_and_cursor_runtime_state_survives_reopen(database) -> None:
+async def test_management_event_stream_is_owner_scoped_and_idempotent(database) -> None:
     repositories = SqlHubRepositories(database)
-    directory = DeviceDirectoryEntry(
-        device_id="device-1",
-        owner_scope="owner-1",
-        display_name="Device",
-        device_kind="generic",
-        manifest_json="{}",
-        manifest_revision="sha256:manifest",
-        approved=True,
-        revoked=False,
-        online=False,
-        sessions=(),
-        registered_at=NOW,
-        updated_at=NOW,
+    approved = replace(
+        _device(), owner_id="owner-1", lifecycle_state=DeviceLifecycleState.APPROVED
     )
-    channel = ChannelLease(
-        channel_id="channel-1",
-        device_id="device-1",
-        purpose="management",
-        kinds=frozenset({ChannelKind.RELIABLE_DATA}),
-        binding_format="application/eidolon-test+json",
-        issued_at=NOW,
-        expires_at=NOW + timedelta(minutes=5),
-        state=ChannelState.ACTIVE,
-    )
-
-    first = await repositories.directory.upsert(directory)
-    second = await repositories.directory.upsert(
-        replace(directory, online=True, updated_at=NOW + timedelta(seconds=1))
-    )
-    await repositories.channel_leases.upsert(channel)
-    assert await repositories.channel_cursors.next_outbound("channel-1") == 1
-    assert await repositories.channel_cursors.next_outbound("channel-1") == 2
-    assert await repositories.channel_cursors.accept_inbound(
-        channel_id="channel-1", sequence=1, envelope_id="envelope-1"
-    )
-    assert not await repositories.channel_cursors.accept_inbound(
-        channel_id="channel-1", sequence=1, envelope_id="envelope-1"
-    )
-    with pytest.raises(PermissionError, match="reused"):
-        await repositories.channel_cursors.accept_inbound(
-            channel_id="channel-1", sequence=1, envelope_id="another-envelope"
-        )
-    assert await repositories.channel_cursors.accept_inbound(
-        channel_id="channel-1", sequence=2, envelope_id="envelope-2"
-    )
-    with pytest.raises(PermissionError, match="stale"):
-        await repositories.channel_cursors.accept_inbound(
-            channel_id="channel-1", sequence=1, envelope_id="envelope-1"
-        )
-
-    assert first.revision == 1 and second.revision == 2
-    assert await repositories.directory.list(owner_scope="owner-1") == (second,)
-    assert await repositories.channel_leases.active_for_device(
-        "device-1", now=NOW, purpose="management"
-    ) == (channel,)
-
-
-async def test_domain_event_stream_is_owner_scoped_and_idempotent(database) -> None:
-    repositories = SqlHubRepositories(database)
-    await repositories.devices.upsert(replace(_device(), owner_id="owner-1"))
-    domain_event = DomainEvent(
-        event_id="event-domain",
-        event_type="eidolon.device.registered",
-        source="/eidolon-hub",
+    await repositories.devices.upsert(approved)
+    event = DeviceManagementEventRecord(
+        event_id="event-1",
+        event_type="eidolon.device.approved.v1",
+        source="eidolon-hub/device-management",
         subject="device-1",
         occurred_at=NOW,
-        data_json='{"ok":true}',
+        data={"owner_id": "owner-1"},
     )
-    transferred_event = replace(
-        domain_event,
-        event_id="event-after-transfer",
-        event_type="eidolon.device.transferred",
-        data_json='{"owner":"owner-2"}',
-    )
-    await repositories.events.publish(domain_event)
-    await repositories.events.publish(domain_event)
-    await repositories.devices.upsert(replace(_device(), owner_id="owner-2"))
-    await repositories.events.publish(transferred_event)
+    await repositories.management_events.publish(event)
+    await repositories.management_events.publish(event)
 
-    stream = await repositories.events.list_after(
+    stream = await repositories.management_events.list_after(
         owner_scope="owner-1", stream_position=0, limit=100
     )
-    assert [item.event for item in stream] == [domain_event]
-    assert stream[0].stream_position >= 1
-    assert [
-        item.event
-        for item in await repositories.events.list_after(
-            owner_scope="owner-2", stream_position=0, limit=100
-        )
-    ] == [transferred_event]
+    assert [item.event for item in stream] == [event]
+    assert await repositories.management_events.list_after(
+        owner_scope="owner-2", stream_position=0, limit=100
+    ) == ()
+
+
+async def test_management_event_id_cannot_be_reused_with_other_content(database) -> None:
+    repositories = SqlHubRepositories(database)
+    await repositories.devices.upsert(_device())
+    event = DeviceManagementEventRecord(
+        event_id="event-1",
+        event_type="eidolon.device.enrolled.v1",
+        source="eidolon-hub/device-management",
+        subject="device-1",
+        occurred_at=NOW,
+        data={"ok": True},
+    )
+    await repositories.management_events.publish(event)
+    with pytest.raises(ValueError, match="reused"):
+        await repositories.management_events.publish(replace(event, data={"ok": False}))

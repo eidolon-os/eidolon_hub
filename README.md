@@ -1,57 +1,187 @@
 # eidolon-hub
 
-Eidolon Hub 是 Eidolon OS 的设备接入与管理控制面，也是对外契约化的 Device Bus。它拥有设备身份、认证会话、能力目录、审批/吊销、命令账本、通用 Channel 元数据和事件流；它不拥有设备通信后端或媒体资源。
+Eidolon Hub 是 Eidolon OS 的 **Device Onboarding、Registry 与 Policy Authority**：它是新设备加入系统的入口，保存设备身份和能力，等待人工审批，并把已批准设备安全交接给外部 Channel Provider。
 
-当前边界：
+交接完成后，设备不再连接 Hub。Hub 不是长期设备连接服务、在线状态服务、Device Bus、Channel 或媒体服务器。
 
-- Device Access：mDNS 只发布 HTTPS Descriptor URI；设备通过 HTTPS 建立认证 `DeviceSessionLease`、注册、心跳和关闭。WAN 设备在 Commissioning 时保存同一个固定 URI。
-- Device Management：公开 Owner scoped Device Directory、审批/吊销、Command/Ack/Result 和持久事件流。
-- Channel Contract：设备注册并获批后主动 Acquire。Hub 把必要设备上下文交给外部 Channel Provider，并把 Provider 返回的 opaque binding 直接返回设备。
-- Provider Bridge：Provider 承载 WSS、MQTT、LiveKit 或未来后端，并通过标准 `DataEnvelope` 与 Hub 交换普通管理数据；音视频不进入 Hub。
+```mermaid
+flowchart LR
+    Device["新设备"]
+    Intro["发现入口<br/>mDNS / 配网 URI"]
+    Enroll["Enrollment<br/>Identity + Manifest + retrieval token"]
+    Pending["pending-approval"]
+    App["小程序 / 管理端<br/>人工 Approve"]
+    Handoff["Provider Handoff"]
+    Provider["外部 Channel Provider<br/>WSS / MQTT / LiveKit 等"]
+    Directory["Memory-hot Device Directory"]
+    SQLite["Hub SQLite<br/>设备事实 + 管理审计"]
+    OS["Admin / Agent / OS 服务"]
 
-Hub 没有 MQTT、LiveKit、NATS、`eidolon_data` 或 `eidolon_sdk` 运行时依赖。MQTT 若被采用，是外部 Channel Provider 的可靠数据后端，不是 Hub 的发现、注册或在线协议。
+    Device --> Intro --> Enroll --> Pending
+    App -->|"Approve + Owner"| Pending
+    Pending --> Handoff
+    Handoff -->|"Provision"| Provider
+    Provider -->|"opaque assignment"| Handoff --> Device
+    Device -. "后续连接、心跳、数据和媒体" .-> Provider
+    Enroll --> SQLite
+    App --> SQLite
+    SQLite -->|"启动重建"| Directory --> OS
+```
 
-完整设计见 [Hub 架构](docs/architecture/hub-three-plane.md)、[ADR 0011](docs/architecture/decisions/0011-device-session-and-direct-channel-acquisition.md) 和 [测试报告](docs/testing/reports/README.md)。Wire Contract 的源位于 `hub/contracts/schemas`。
+## 一分钟理解边界
 
-## 运行
+| Hub 负责 | Hub 不负责 |
+|---|---|
+| mDNS 发布 HTTPS Onboarding Descriptor | 跨 VLAN 泛洪 mDNS、WAN transport |
+| 接收 Device ID、Manifest 和短期 retrieval token | 长期 Device Session、Heartbeat、Lease |
+| `pending-approval / approved / revoked` 策略 | 设备 `online`、Channel presence |
+| Owner、人工审批和终态吊销 | Command、State、Event、Audio、Video |
+| Device Directory 与管理审计 | MQTT/WSS/LiveKit backend 和协议转换 |
+| 向单一 Provider 发起 Provision/Revoke | 解析或持久化 `opaque_binding` |
+
+当前产品形态刻意收敛为 **Local-only、单进程、Hub 独占 SQLite**，没有 Cloud、PostgreSQL、多实例、NATS、MQTT、LiveKit 或 OpenTelemetry 运行时分支。
+
+## 最小设备流程
+
+```mermaid
+sequenceDiagram
+    participant D as Device
+    participant H as Hub
+    participant A as Mini App
+    participant P as Channel Provider
+
+    D->>H: POST /enrollments<br/>Identity + Manifest + retrieval_token
+    H-->>D: enrollment_id + pending-approval
+    loop 有界等待审批
+        D->>H: POST /enrollments/{id}/handoff
+        H-->>D: 202 pending-approval
+    end
+    A->>H: Approve(device_id, owner_id)
+    D->>H: POST /enrollments/{id}/handoff
+    H->>P: Provision(enrollment_id + device context)
+    P-->>H: opaque Channel Assignment
+    H-->>D: approved + Assignment
+    D->>P: 直接建立长期 Channel
+    Note over D,H: 设备不再访问 Hub
+```
+
+人工 Approval 负责授权；随机 retrieval token 只负责把审批结果交给原始 Enrollment 发起者。Hub 只保存 Token 的 SHA-256 hash，Token 不进入 Directory、Provider 请求、事件或日志。审批会重新打开一个有限 Handoff 窗口；窗口内重复请求使用稳定的 `enrollment_id` 作为 Provider operation ID，可安全重试。
+
+小程序必须通过二维码、短码、BLE/SoftAP 或设备物理确认识别用户正在添加的真实设备。Hub 不使用自声明公钥的 Challenge/Proof 冒充这一步初始信任。
+
+当前 Hub 尚未接收或校验该带外确认结果，因此 Approval 只能交给受信 `hub-admin`。在小程序对接前，必须先选定二维码/BLE/物理确认协议并扩展 Approval Contract；不能让普通 Owner 仅凭设备自声明 ID 认领设备。
+
+## 设备状态
+
+```mermaid
+stateDiagram-v2
+    [*] --> PendingApproval: Enrollment
+    PendingApproval --> Approved: Human approval + Owner
+    PendingApproval --> Revoked: Revoke
+    Approved --> Revoked: Revoke
+    Revoked --> [*]
+```
+
+`approved` 只表示“获准进入 Eidolon OS”，不表示设备在线。设备在线、Channel 续约、重连和 Provider credential 生命周期全部由 Channel Provider 管理。
+
+## 代码架构
+
+```text
+hub/
+├── domain/          # Device、Manifest、请求级 Channel 值对象与不变量
+├── application/     # Enroll/Handoff/Approve/Revoke、Get/List、Directory 投影
+├── ports/           # Repository、retrieval token、Provider、授权和审计接口
+├── contracts/       # JSON Schema、生成 shape、严格 DTO、Mapper、golden example
+├── adapters/        # SQLite、内存 Directory、Provider HTTP、mDNS、JWT、Token hash
+├── interfaces/      # Device Onboarding 与 Device Management HTTP Router
+├── composition/     # 唯一依赖注入、基础设施选择和生命周期组装点
+├── config.py        # 严格 Local-only Settings Model
+└── main.py          # ASGI 稳定入口
+```
+
+真实 import 方向如下（`A -> B` 表示 A 可以导入 B）：
+
+```text
+domain
+ports       -> domain
+application -> ports + domain
+contracts   -> ports + domain
+adapters    -> contracts + ports + domain
+interfaces  -> contracts + application + ports + domain
+composition -> interfaces + adapters + contracts + application + ports
+main        -> composition
+```
+
+Domain/Application 不导入 FastAPI、SQLAlchemy、HTTPX、Zeroconf 或具体 Provider；Router 只调用 Application；SQLAlchemy 只存在于 Persistence Adapter 和 Composition 边界。逐目录与逐文件说明见 [代码架构与完整代码导览](docs/code-architecture.md)。
+
+## 对外契约
+
+### Device Onboarding
+
+| API | 作用 |
+|---|---|
+| `GET /api/device-onboarding/v1/descriptor` | 公布 Hub ID、协议版本和 Enrollment URI |
+| `POST /api/device-onboarding/v1/enrollments` | 创建或幂等重试短期 Enrollment |
+| `POST /api/device-onboarding/v1/enrollments/{enrollment_id}/handoff` | 等待审批；Approved 后获取 Provider Assignment |
+
+### Device Management
+
+| API | 作用 |
+|---|---|
+| `GET /api/device-management/v1/owners/{owner_scope}/devices/{device_id}` | 按稳定 ID 获取设备元数据 |
+| `GET /api/device-management/v1/owners/{owner_scope}/devices` | 结构化过滤、搜索与 cursor 分页 |
+| `GET /api/device-management/v1/owners/{owner_scope}/events` | 按 stream position 增量读取管理事件 |
+| `POST /api/device-management/v1/devices/{device_id}/approval` | 人工审批并绑定 Owner |
+| `POST /api/device-management/v1/devices/{device_id}/revocation` | 终态吊销并通知 Provider |
+
+### Channel Provider Control
+
+Hub 固定调用：
+
+- `POST {contract_url}/device-channels/provision`
+- `POST {contract_url}/device-channels/revoke`
+
+Hub 只验证 Assignment 通用 Envelope 并原样转交 opaque binding。MQTT、WSS、LiveKit 等是 Provider backend。当前控制调用低频且 payload 小，没有真实证据支持增加 gRPC 工具链。
+
+FastAPI 同时发布 `/openapi.json` 和 `/docs`。JSON Schema 是正式 Wire Contract 源，位于 [`hub/contracts/schemas`](hub/contracts/schemas)；生成模型禁止手工编辑。
+
+## 存储与内存热路径
+
+默认数据库为 `/Users/manson/eidolon/data/eidolon-hub.sqlite3`，只包含：
+
+| 表 | 作用 |
+|---|---|
+| `hub_devices` | Enrollment、Token hash/窗口、Identity、Manifest、Owner 与生命周期权威事实 |
+| `hub_events` | 有序、Owner-scoped 的低频设备管理审计 |
+
+公共 Device Directory 是 `hub_devices` 的安全内存投影：启动时从 SQLite 重建，Get/List 走内存；设备事实先写数据库再更新投影。没有重复的 Directory 表，也没有 Session、Challenge、Channel 或 Command 表。
+
+SQLite 使用 WAL，进程持有 `<database>.lock` 独占锁。空库按当前 ORM 建表；旧结构直接拒绝，不提供 migration、兼容、多实例或网络文件系统支持。
+
+## 配置与运行
+
+[`config/settings.yaml`](config/settings.yaml) 只包含：
+
+- `onboarding`：Hub ID、设备真正可访问的 TLS 基址、短期 retrieval/handoff 窗口；
+- `discovery.mdns`：是否发布同链路 Descriptor；
+- `channel_provider.contract_url`：唯一 Provider 控制地址；
+- `persistence.path`：Hub 独占 SQLite 路径。
+
+`.env` 只保存两个 Secret：
+
+- `EIDOLON_HUB_MANAGEMENT_JWT_SECRET`
+- `EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN`
 
 ```bash
 uv sync --all-groups
 cp config/.env.example config/.env
-export EIDOLON_HUB_PROFILE=local
+# 填入两个至少 32 bytes 的 Secret
 uv run uvicorn hub.main:app --host 0.0.0.0 --port 8082
 ```
 
-ASGI 监听地址、端口、TLS 和可信代理由 Uvicorn/Gunicorn、Nginx、Ingress 等部署层管理，不属于 Hub 行为配置。`public_base_url` 必须指向设备真正可访问的 TLS 终止地址；上面的 Uvicorn 命令只启动内部 HTTP upstream，不能直接满足设备 HTTPS 契约。
+ASGI 监听、TLS、可信代理和 Nginx/Ingress 属于部署层。`onboarding.public_base_url` 必须是设备真正可访问的 HTTPS 地址。默认读取 `config/settings.yaml`；可通过 `EIDOLON_HUB_SETTINGS_YAML=/absolute/path/settings.yaml` 覆盖。
 
-`EIDOLON_HUB_PROFILE=local|cloud` 选择 `config/settings.local.yaml` 或 `config/settings.cloud.yaml`，未指定时为 Local。部署需要自定义完整配置时，使用 `EIDOLON_HUB_SETTINGS_YAML=/path/settings.yaml` 覆盖。`.env` 只方便本地开发；Cloud 可直接注入环境变量，不要求磁盘存在 `.env`。启动需要三个至少 32 字节的凭据：
-
-- `EIDOLON_HUB_LEASE_SECRET`
-- `EIDOLON_HUB_MANAGEMENT_JWT_SECRET`
-- `EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN`
-
-Local 使用 Hub 自有 SQLite 并在启动时执行版本化迁移。Cloud 的非秘密 PostgreSQL DSN（host、port、database 和 SSL query）位于 `persistence.dsn`，DSN 禁止包含凭据；用户名和密码分别由 `EIDOLON_HUB_POSTGRES_USER`、`EIDOLON_HUB_POSTGRES_PASSWORD` 注入。发布前以独立 Job 执行 `uv run eidolon-hub-migrate`；应用实例只校验 Schema revision，不自行改表。每个 Cloud 副本还必须注入唯一的 `EIDOLON_HUB_INSTANCE_ID`。
-
-Observability 是真实的 OpenTelemetry OTLP/gRPC 接口：当前导出 HTTP Trace、请求计数/延迟 Metric 和 Python Log。Local profile 明确关闭；Cloud profile 启用并要求 `OTEL_EXPORTER_OTLP_ENDPOINT`，缺失时启动失败而不是静默降级。
-
-## 生产 API
-
-- `/api/device-access/v1/descriptor|hello|proof|register|heartbeat|close`：HTTPS Device Access Contract。
-- `/api/device-access/v1/channels/acquire`：认证设备主动获取 Provider channel binding。
-- `/api/device-management/v1/directory/{owner_scope}`：公共设备目录。
-- `/api/device-management/v1/events/{owner_scope}`：按 stream position 增量读取设备事件。
-- `/api/device-management/v1/devices/{device_id}/approval|revocation`：设备审批与吊销。
-- `/api/device-management/v1/devices/{device_id}/commands` 与 `/commands/{command_id}`：命令闭环。
-- `/api/provider/v1/data/inbound`：Provider 回送标准 `DataEnvelope`。
-- `/api/provider/v1/channels/lifecycle`：Provider 报告 Channel active/closed/failed。
-
-Hub 只配置 `channel_provider.contract_url`，固定调用 Provider 的 `/device-channels/acquire` 和 `/data/envelopes` 契约。Hub 不解析、不持久化 opaque binding。只有 loopback Provider 可使用 HTTP，远端地址必须使用 HTTPS。
-
-## 发现与跨子网
-
-mDNS 仅用于同链路发布 Descriptor URI，并覆盖活跃 IPv4/IPv6 接口。复杂 VLAN/子网不泛洪 mDNS；设备使用 Commissioning 保存的显式 HTTPS URI。Unicast DNS-SD、RFC 8766 Discovery Proxy 和 SRP 属于设备/网络侧发现能力，不由 Hub 实现，也不会让标准 mDNS SDK 无感知地跨子网工作。
-
-## 验证
+## 验证与文档
 
 ```bash
 uv run python scripts/generate_contracts.py --check
@@ -59,6 +189,8 @@ uv run lint-imports
 uv run ruff check hub tests scripts
 uv run pytest -q
 ```
+
+从 [文档导航](docs/README.md) 开始阅读；实现归属以 [架构标尺](docs/architecture/device-control-subsystem.md) 为准，测试边界见 [测试策略](docs/testing/test-strategy.md) 和 [测试报告索引](docs/testing/reports/README.md)。
 
 ## License
 

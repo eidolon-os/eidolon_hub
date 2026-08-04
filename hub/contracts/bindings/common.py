@@ -15,5 +15,3 @@ class ContractModel(BaseModel):
 
 class DeviceIdentity(ContractModel):
     device_id: str = Field(min_length=1, max_length=128)
-    public_key_fingerprint: str = Field(min_length=1, max_length=160)
-    tenant_id: str = Field(default="local", min_length=1, max_length=64)

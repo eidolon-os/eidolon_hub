@@ -1,7 +1,8 @@
-# ADR 0012: 部署层拥有 API 监听，Hub 使用严格 Local/Cloud Profile
+# ADR 0012: 部署层拥有 API 监听，Hub 使用严格配置
 
-- 状态：Accepted
+- 状态：Accepted；Device Access 命名和 Directory 写入模型由 ADR 0018 修订
 - 日期：2026-08-02
+- 修订：2026-08-03，内置 OpenTelemetry 决策由 ADR 0014 取代；Local/Cloud Profile、PostgreSQL 和多实例条目由 ADR 0015 取代；Schema migration 条目由当前 Device Control Subsystem 标尺取代
 
 ## 背景
 
@@ -10,18 +11,15 @@ Uvicorn 的内部监听地址与设备访问的公开 HTTPS 地址不是同一�
 ## 决策
 
 1. ASGI host/port、TLS、forwarded-header trust 和反向代理由部署命令管理，Hub Settings 不包含 `api`。
-2. `device_access.public_base_url` 是设备契约的唯一公开地址，必须为 HTTPS。mDNS hostname/port 从该 URL 派生，service type 固定，instance name 从稳定 `hub_id` 派生。
-3. `EIDOLON_HUB_PROFILE=local|cloud` 选择两份完整配置；显式 YAML 路径只作为部署覆盖。Settings 使用 frozen、strict、extra-forbid 的 Pydantic Model。
-4. `.env` 只在显式指定或默认文件存在时加载；Cloud 可只使用平台注入的环境变量。
-5. `hub_id` 属于共享行为配置；Cloud `hub_instance_id` 必须由每副本唯一的 `EIDOLON_HUB_INSTANCE_ID` 提供。
-6. Device Directory 始终为 DB-authoritative + in-memory write-through。在线投影和跨实例 cache refresh 使用独立周期；Local 不执行无意义的 cache DB polling。
-7. Schema 使用 packaged Alembic revision。Local 可启动迁移；Cloud 由独立 Job 迁移，应用启动只检查 revision head。
-8. OpenTelemetry 使用标准 `OTEL_EXPORTER_OTLP_ENDPOINT`。启用但 endpoint 缺失时启动失败，不静默关闭。
-9. PostgreSQL 连接目标以 credential-free `persistence.dsn` 配置；用户名和密码使用固定环境变量。URL 由 SQLAlchemy 结构化合成，不拼接字符串。连接池显式配置 size、overflow、timeout 和 recycle。
+2. `onboarding.public_base_url` 是设备契约的唯一公开地址，必须为 HTTPS。mDNS hostname/port 从该 URL 派生，service type 固定，instance name 从稳定 `hub_id` 派生。
+3. Settings 使用单一 `settings.yaml` 和 frozen、strict、extra-forbid 的 Pydantic Model；显式 YAML 路径只作为本地部署覆盖。
+4. `.env` 只在显式指定或默认文件存在时加载，并只保存 Secret，不选择运行 Profile。
+5. Device Directory 是由 DB-authoritative `hub_devices` 重建的内存投影；启动 hydrate，不运行跨实例 cache polling，也不持久化第二份投影。
+6. 当前 ORM 是唯一 Schema；空库直接建表，非空库严格校验，不提供 migration 或旧结构转换。
+7. Persistence 只配置 SQLite 文件路径；进程必须先获取对应文件锁。
 
 ## 后果
 
-- 同一 Hub artifact 可通过 Profile 切换 Local/Cloud，HTTP/OpenAPI 契约不变。
 - Nginx/Ingress 的内部端口不再泄漏到 Descriptor 或 mDNS。
-- Cloud 发布流程必须先运行 migration Job，并为每个副本注入唯一 instance ID。
-- 当前 Directory cache refresh 仍是周期性全量恢复；大规模目录应进一步采用 revision watermark 增量读取，但不引入 NATS 作为 Hub 内部正确性依赖。
+- 未知配置和已废弃的 Profile/PostgreSQL/instance 字段会 fail closed，不会被静默忽略。
+- 本地 SQLite 启动路径简单、事实唯一；代价是明确不支持 Hub 多实例共享数据库。

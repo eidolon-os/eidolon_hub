@@ -1,0 +1,17 @@
+# Local Hub behavior and public contracts. ASGI listen/TLS are deployment concerns.
+
+onboarding:
+  hub_id: eidolon-hub-local
+  public_base_url: https://eidolon-hub.local
+  retrieval_window_seconds: 1800
+
+discovery:
+  mdns:
+    enabled: true
+
+channel_provider:
+  contract_url: http://127.0.0.1:8090/v1
+
+persistence:
+  # Hub owns this database file; it does not share the legacy eidolon.sqlite3.
+  path: /Users/manson/eidolon/data/eidolon-hub.sqlite3

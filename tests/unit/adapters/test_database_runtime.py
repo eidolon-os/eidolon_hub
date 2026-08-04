@@ -1,95 +1,66 @@
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 
 from hub.adapters.persistence.database import HubDatabase
-from hub.composition.resources import create_database
-from hub.config import (
-    DeploymentConfig,
-    DeviceAccessConfig,
-    DiscoveryConfig,
-    HubConfig,
-    MdnsDiscoveryConfig,
-    PostgresqlPersistenceConfig,
-)
+from hub.composition.resources import create_database, resolve_database_path
+from hub.config import HubConfig, PersistenceConfig
 
 
-async def test_postgresql_factory_selects_asyncpg_without_leaking_into_ports() -> None:
-    database = HubDatabase.postgresql("postgresql://user:secret@db.example/eidolon_hub")
+async def test_local_database_factory_selects_sqlite_and_resolves_path(tmp_path) -> None:
+    config = HubConfig(persistence=PersistenceConfig(path=str(tmp_path / "hub.sqlite3")))
+    database = create_database(config)
     try:
-        assert database.engine.url.drivername == "postgresql+asyncpg"
-        assert database.engine.url.render_as_string(hide_password=True) == (
-            "postgresql+asyncpg://user:***@db.example/eidolon_hub"
-        )
+        assert database.engine.url.drivername == "sqlite+aiosqlite"
+        assert resolve_database_path(config) == (tmp_path / "hub.sqlite3").resolve()
     finally:
         await database.close()
 
 
-def test_postgresql_factory_rejects_an_unrelated_driver() -> None:
-    with pytest.raises(ValueError, match="postgresql scheme"):
-        HubDatabase.postgresql("sqlite:///hub.sqlite3")
-
-
-def _cloud_config() -> HubConfig:
-    return HubConfig(
-        deployment=DeploymentConfig(mode="cloud"),
-        discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
-        device_access=DeviceAccessConfig(public_base_url="https://hub.example.com"),
-        persistence=PostgresqlPersistenceConfig(
-            dsn="postgresql://db.internal:5432/eidolon_hub",
-            pool_size=3,
-            max_overflow=4,
-            pool_timeout_seconds=7,
-            pool_recycle_seconds=900,
-        ),
-    )
-
-
-async def test_postgresql_target_and_environment_credentials_are_safely_combined(
-    monkeypatch,
-) -> None:
-    monkeypatch.setenv("EIDOLON_HUB_POSTGRES_USER", "hub user")
-    monkeypatch.setenv("EIDOLON_HUB_POSTGRES_PASSWORD", "p@ss:/word")
-
-    database = create_database(_cloud_config())
-    try:
-        assert database.engine.url.host == "db.internal"
-        assert database.engine.url.database == "eidolon_hub"
-        assert database.engine.url.username == "hub user"
-        assert database.engine.url.password == "p@ss:/word"
-        assert database.engine.pool._timeout == 7
-        assert database.engine.pool._recycle == 900
-    finally:
-        await database.close()
-
-
-def test_postgresql_credentials_are_required_separately(monkeypatch) -> None:
-    monkeypatch.delenv("EIDOLON_HUB_POSTGRES_USER", raising=False)
-    monkeypatch.delenv("EIDOLON_HUB_POSTGRES_PASSWORD", raising=False)
-
-    with pytest.raises(RuntimeError, match="POSTGRES_USER"):
-        create_database(_cloud_config())
-
-
-async def test_sqlite_migration_is_versioned_and_idempotent(tmp_path) -> None:
+async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_path) -> None:
     database = HubDatabase.sqlite(tmp_path / "hub.sqlite3")
     try:
-        await database.migrate()
-        await database.migrate()
-        await database.assert_schema_current()
-        await database.assert_no_migration_drift()
+        await database.initialize_schema()
+        await database.initialize_schema()
+
+        def table_names(connection) -> set[str]:
+            return set(inspect(connection).get_table_names())
+
         async with database.engine.connect() as connection:
-            revision = await connection.scalar(text("SELECT version_num FROM alembic_version"))
-        assert revision == "0001"
+            actual = await connection.run_sync(table_names)
+
+        assert actual == {
+            "hub_devices",
+            "hub_events",
+        }
+        assert "hub_channel_assignments" not in actual
+        assert "alembic_version" not in actual
     finally:
         await database.close()
 
 
-async def test_unmigrated_database_is_rejected(tmp_path) -> None:
-    database = HubDatabase.sqlite(tmp_path / "hub.sqlite3")
+async def test_legacy_schema_is_rejected_instead_of_upgraded(tmp_path) -> None:
+    database = HubDatabase.sqlite(tmp_path / "legacy.sqlite3")
     try:
-        with pytest.raises(RuntimeError, match="schema is not current"):
-            await database.assert_schema_current()
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "CREATE TABLE hub_devices ("
+                    "device_id VARCHAR(255) PRIMARY KEY, "
+                    "tenant_id VARCHAR(255) NOT NULL, "
+                    "approved BOOLEAN NOT NULL, "
+                    "revoked BOOLEAN NOT NULL)"
+                )
+            )
+
+        with pytest.raises(RuntimeError, match="does not match the current ORM schema"):
+            await database.initialize_schema()
+
+        async with database.engine.connect() as connection:
+            columns = {
+                row[1] for row in await connection.execute(text("PRAGMA table_info(hub_devices)"))
+            }
+        assert columns == {"device_id", "tenant_id", "approved", "revoked"}
     finally:
         await database.close()

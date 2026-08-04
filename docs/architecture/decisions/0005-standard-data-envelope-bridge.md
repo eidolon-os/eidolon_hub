@@ -1,9 +1,12 @@
 # ADR 0005: Provider 通过标准 DataEnvelope Bridge 接入 Core
 
-- Status: accepted
+- Status: superseded by ADR 0013
 - Date: 2026-08-01
 
 ## Decision
+
+> 本方案只保留为决策历史。当前 Hub 不再拥有 Command、DataEnvelope、cursor
+> 或 Provider Bridge；所有 Device Data 由设备、Provider 及其 consumer 直接交换。
 
 外部 Provider 在设备侧终止实际 Channel，并把普通管理数据转换成统一 `DataEnvelope`。Hub 只提供有方向、可认证的 Provider Bridge；当前 Binding 是 HTTP，由 Hub/Provider OpenAPI 描述。Provider 内部可以使用 WSS、MQTT、LiveKit 或其他后端，Hub 不感知。
 

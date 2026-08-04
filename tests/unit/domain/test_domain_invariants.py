@@ -6,26 +6,43 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from hub.domain.channels.entities import (
-    ChannelDataEnvelope,
+    ChannelGrant,
     ChannelKind,
-    ChannelLease,
-    ChannelLifecycle,
-    ChannelState,
-    DeviceEventData,
     OpaqueChannelBinding,
+    ProviderChannelRevocation,
     ProviderDeviceContext,
 )
-from hub.domain.commands.entities import CommandState, DeviceCommand
-from hub.domain.devices.entities import DeviceRegistrationIntent, ManagedDevice
+from hub.domain.devices.entities import (
+    DeviceEnrollmentIntent,
+    DeviceLifecycleState,
+    ManagedDevice,
+)
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
-from hub.domain.sessions.entities import DeviceAuthorityLease, DeviceSessionLease
 
 NOW = datetime(2026, 8, 1, tzinfo=UTC)
 
 
-def _channel_lease() -> ChannelLease:
-    return ChannelLease(
+def _manifest() -> DeviceManifestDocument:
+    return DeviceManifestDocument.from_mapping({"schema_version": 1, "title": "Device"})
+
+
+def _device() -> ManagedDevice:
+    return ManagedDevice(
+        identity=DeviceIdentity("device-1"),
+        enrollment_id="enrollment-1",
+        retrieval_token_hash="a" * 64,
+        retrieval_expires_at=NOW + timedelta(minutes=30),
+        display_name="Device",
+        device_kind="generic",
+        manifest=_manifest(),
+        enrolled_at=NOW,
+        updated_at=NOW,
+    )
+
+
+def _channel_grant() -> ChannelGrant:
+    return ChannelGrant(
         channel_id="channel-1",
         device_id="device-1",
         purpose="management",
@@ -33,30 +50,11 @@ def _channel_lease() -> ChannelLease:
         binding_format="application/eidolon-test+json",
         issued_at=NOW,
         expires_at=NOW + timedelta(minutes=1),
+        opaque_binding=OpaqueChannelBinding(b"encrypted"),
     )
 
 
-def _session(**changes) -> DeviceSessionLease:
-    values = {
-        "session_id": "session-1",
-        "device_id": "device-1",
-        "opened_at": NOW,
-        "renewed_at": NOW,
-        "expires_at": NOW + timedelta(seconds=45),
-        "lease_token": "lease-token-device-1",
-        "identity_fingerprint": "p256:fingerprint",
-        "hub_instance_id": "hub-1",
-        "fencing_token": 1,
-    }
-    values.update(changes)
-    return DeviceSessionLease(**values)
-
-
-def _manifest() -> DeviceManifestDocument:
-    return DeviceManifestDocument.from_mapping({"schema_version": 1, "title": "Device"})
-
-
-def test_channel_binding_and_lease_invariants() -> None:
+def test_channel_binding_and_grant_invariants() -> None:
     with pytest.raises(ValueError, match="required"):
         OpaqueChannelBinding(b"")
     with pytest.raises(ValueError, match="64KiB"):
@@ -64,9 +62,7 @@ def test_channel_binding_and_lease_invariants() -> None:
     binding = OpaqueChannelBinding(b"encrypted")
     assert binding.relay_bytes() == b"encrypted"
 
-
-def test_channel_lease_envelope_and_lifecycle_invariants() -> None:
-    lease = _channel_lease()
+    grant = _channel_grant()
     for changes, message in (
         ({"channel_id": ""}, "required"),
         ({"kinds": frozenset()}, "at least one"),
@@ -75,134 +71,34 @@ def test_channel_lease_envelope_and_lifecycle_invariants() -> None:
         ({"expires_at": NOW}, "after issued_at"),
     ):
         with pytest.raises(ValueError, match=message):
-            replace(lease, **changes)
+            replace(grant, **changes)
 
-    envelope = ChannelDataEnvelope(
-        envelope_id="envelope-1",
-        channel_id="channel-1",
-        device_id="device-1",
-        sequence=1,
-        occurred_at=NOW,
-        payload=DeviceEventData("event-1", "button", "{}"),
-    )
-    for changes, message in (
-        ({"envelope_id": ""}, "identifiers"),
-        ({"sequence": 0}, "positive"),
-        ({"occurred_at": NOW.replace(tzinfo=None)}, "timezone-aware"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            replace(envelope, **changes)
 
-    lifecycle = ChannelLifecycle("channel-1", "device-1", ChannelState.ACTIVE, NOW)
-    assert lease.transition(ChannelState.ACTIVE, occurred_at=NOW).state is ChannelState.ACTIVE
-    with pytest.raises(ValueError, match="before channel issuance"):
-        lease.transition(ChannelState.ACTIVE, occurred_at=NOW - timedelta(seconds=1))
-    with pytest.raises(ValueError, match="pending"):
-        replace(lifecycle, state=ChannelState.PENDING)
-    with pytest.raises(ValueError, match="timezone-aware"):
-        replace(lifecycle, occurred_at=NOW.replace(tzinfo=None))
-
+def test_provider_control_values_are_bounded() -> None:
     context = ProviderDeviceContext(
-        "channel-sync:sha256:desired",
-        "hub-1",
-        "device-1",
-        "p256:fingerprint",
-        "default",
-        "owner-1",
-        "Device",
-        "generic",
-        '{"schema_version":1}',
-        "sha256:manifest",
-        True,
-        False,
-        True,
+        operation_id="enrollment-1",
+        hub_id="hub-1",
+        device_id="device-1",
+        owner_id="owner-1",
+        display_name="Device",
+        device_kind="generic",
+        manifest_json='{"schema_version":1}',
+        manifest_revision="sha256:manifest",
     )
     with pytest.raises(ValueError, match="identifiers"):
         replace(context, hub_id="")
     with pytest.raises(ValueError, match="owner_id"):
         replace(context, owner_id="")
+    revocation = ProviderChannelRevocation("revoke-1", "hub-1", "device-1", "operator")
+    with pytest.raises(ValueError, match="identifiers"):
+        replace(revocation, device_id="")
+    with pytest.raises(ValueError, match="reason"):
+        replace(revocation, reason="")
 
 
-def test_authority_and_session_invariants_and_renewal_guards() -> None:
-    authority = DeviceAuthorityLease("device-1", "hub-1", 1, NOW + timedelta(seconds=45))
-    for changes, message in (
-        ({"device_id": ""}, "required"),
-        ({"fencing_token": 0}, "positive"),
-        ({"expires_at": NOW.replace(tzinfo=None)}, "timezone-aware"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            replace(authority, **changes)
-
-    lease = _session()
-    for field_name in (
-        "session_id",
-        "device_id",
-        "lease_token",
-        "identity_fingerprint",
-        "hub_instance_id",
-    ):
-        with pytest.raises(ValueError, match=field_name):
-            replace(lease, **{field_name: ""})
-    for field_name in ("opened_at", "renewed_at", "expires_at"):
-        with pytest.raises(ValueError, match="timezone-aware"):
-            replace(lease, **{field_name: NOW.replace(tzinfo=None)})
-    for changes, message in (
-        ({"fencing_token": 0}, "positive"),
-        ({"heartbeat_sequence": -1}, "negative"),
-        ({"expires_at": NOW}, "after renewed_at"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            replace(lease, **changes)
-
-    with pytest.raises(ValueError, match="closed"):
-        lease.close().renew(
-            now=NOW,
-            ttl=timedelta(seconds=1),
-            lease_token=lease.lease_token,
-            sequence=1,
-        )
-    with pytest.raises(PermissionError, match="mismatch"):
-        lease.renew(now=NOW, ttl=timedelta(seconds=1), lease_token="wrong", sequence=1)
-    with pytest.raises(ValueError, match="positive"):
-        lease.renew(now=NOW, ttl=timedelta(0), lease_token=lease.lease_token, sequence=1)
-    sequenced = lease.renew(
-        now=NOW + timedelta(seconds=1),
-        ttl=timedelta(seconds=10),
-        lease_token=lease.lease_token,
-        sequence=2,
-    )
-    with pytest.raises(ValueError, match="stale"):
-        sequenced.renew(
-            now=NOW, ttl=timedelta(seconds=1), lease_token=lease.lease_token, sequence=1
-        )
-    assert (
-        sequenced.renew(
-            now=NOW, ttl=timedelta(seconds=1), lease_token=lease.lease_token, sequence=2
-        )
-        is sequenced
-    )
-
-
-@pytest.mark.parametrize(
-    "changes",
-    [
-        {"device_id": ""},
-        {"public_key_fingerprint": ""},
-        {"tenant_id": ""},
-    ],
-)
-def test_device_identity_requires_stable_nonempty_values(changes) -> None:
-    values = {
-        "device_id": "device-1",
-        "public_key_fingerprint": "p256:fingerprint",
-        "tenant_id": "local",
-    }
-    values.update(changes)
-    with pytest.raises(ValueError):
-        DeviceIdentity(**values)
-
-
-def test_manifest_document_is_canonical_and_content_addressed() -> None:
+def test_identity_manifest_and_enrollment_values() -> None:
+    with pytest.raises(ValueError, match="device_id"):
+        DeviceIdentity("")
     manifest = _manifest()
     assert manifest.canonical_json == '{"schema_version":1,"title":"Device"}'
     with pytest.raises(ValueError, match="object"):
@@ -213,37 +109,22 @@ def test_manifest_document_is_canonical_and_content_addressed() -> None:
         DeviceManifestDocument.from_mapping({"schema_version": 2})
     with pytest.raises(ValueError, match="revision"):
         DeviceManifestDocument(manifest.canonical_json, "sha256:bad")
+    DeviceEnrollmentIntent(
+        "request-1", "device-generated-random-token-000001", DeviceIdentity("device-1"),
+        "Device", "generic", manifest,
+    )
 
 
-def test_managed_device_registration_and_command_values() -> None:
-    identity = DeviceIdentity("device-1", "p256:fingerprint")
-    manifest = _manifest()
-    device = ManagedDevice(identity, "Device", "generic", manifest, NOW, NOW)
-    assert device.manifest_json == manifest.canonical_json
-    assert device.manifest_revision == manifest.revision
-    DeviceRegistrationIntent("request-1", identity, "Device", "generic", manifest)
+def test_managed_device_policy_invariants() -> None:
+    device = _device()
+    assert device.manifest_json == device.manifest.canonical_json
+    with pytest.raises(ValueError, match="enrollment_id"):
+        replace(device, enrollment_id="")
     with pytest.raises(ValueError, match="device_kind"):
         replace(device, device_kind="")
     with pytest.raises(ValueError, match="timezone-aware"):
         replace(device, updated_at=NOW.replace(tzinfo=None))
-
-    command = DeviceCommand(
-        "command-1",
-        "device-1",
-        "display.render",
-        "{}",
-        CommandState.QUEUED,
-        NOW,
-        NOW + timedelta(seconds=1),
-        NOW,
-    )
-    assert command.terminal is False
-    for changes, message in (
-        ({"command_id": ""}, "required"),
-        ({"updated_at": NOW.replace(tzinfo=None)}, "timezone-aware"),
-        ({"expires_at": NOW}, "expire after"),
-    ):
-        with pytest.raises(ValueError, match=message):
-            replace(command, **changes)
-    same = command.with_state(CommandState.SENT, at=NOW, error="", result_json=None)
-    assert same.state is CommandState.SENT
+    with pytest.raises(ValueError, match="requires an owner"):
+        replace(device, lifecycle_state=DeviceLifecycleState.APPROVED)
+    with pytest.raises(ValueError, match="pending device"):
+        replace(device, owner_id="owner-1")

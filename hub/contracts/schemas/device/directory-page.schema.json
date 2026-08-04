@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/directory-page.schema.json",
+  "title": "Device Directory Page",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "next_cursor", "devices"],
+  "properties": {
+    "operation": {"const": "device.directory-page"},
+    "next_cursor": {"type": ["string", "null"], "maxLength": 128},
+    "devices": {
+      "type": "array",
+      "maxItems": 100,
+      "items": {"$ref": "directory.schema.json"}
+    }
+  }
+}

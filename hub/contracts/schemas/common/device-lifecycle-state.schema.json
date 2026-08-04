@@ -1,0 +1,7 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/common/device-lifecycle-state.schema.json",
+  "title": "Device Lifecycle State",
+  "type": "string",
+  "enum": ["pending-approval", "approved", "revoked"]
+}

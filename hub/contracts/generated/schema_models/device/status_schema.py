@@ -5,21 +5,12 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from ..common import device_lifecycle_state_schema
 
 
-class RegistrationStatus(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    operation: Literal["device.registration-status"]
-    device_id: Annotated[str, Field(max_length=128, min_length=1)]
-    manifest_revision: Annotated[str, Field(max_length=128, min_length=1)]
-    approved: bool
-
-
-class LifecycleStatus(BaseModel):
+class DeviceLifecycleStatus(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
         frozen=True,
@@ -27,41 +18,4 @@ class LifecycleStatus(BaseModel):
     operation: Literal["device.lifecycle-status"]
     device_id: Annotated[str, Field(max_length=128, min_length=1)]
     owner_id: Annotated[str | None, Field(max_length=64)] = None
-    approved: bool
-    revoked: bool
-
-
-class CommandStatus(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    operation: Literal["device.command-status"]
-    command_id: Annotated[str, Field(max_length=128, min_length=1)]
-    device_id: Annotated[str, Field(max_length=128, min_length=1)]
-    command_name: Annotated[str, Field(max_length=128, min_length=1)]
-    state: Literal[
-        "queued",
-        "sent",
-        "accepted",
-        "running",
-        "succeeded",
-        "failed",
-        "rejected",
-        "expired",
-    ]
-    created_at: AwareDatetime
-    updated_at: AwareDatetime
-    expires_at: AwareDatetime
-    error: Annotated[str, Field(max_length=4096)]
-    result_json: Annotated[str | None, Field(max_length=262144)] = None
-
-
-class DeviceStatus(RootModel[RegistrationStatus | LifecycleStatus | CommandStatus]):
-    model_config = ConfigDict(
-        frozen=True,
-    )
-    root: Annotated[
-        RegistrationStatus | LifecycleStatus | CommandStatus,
-        Field(title="Device Status"),
-    ]
+    lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState

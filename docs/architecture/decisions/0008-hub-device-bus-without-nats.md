@@ -1,6 +1,6 @@
 # ADR 0008: Hub 是契约化 Device Bus，不依赖 NATS
 
-- Status: accepted
+- Status: superseded by ADR 0013
 - Date: 2026-08-01
 
 ## Context
@@ -8,6 +8,9 @@
 代码核查显示，Hub 原有 NATS subjects 只有 Hub 自己的 publisher/subscriber；`eidolon_channel` 没有对应 responder 或 DataEnvelope bridge。Admin、Vision 与 Agent 的 Hub 对接路径均已有 HTTP 边界。Agent 当前读取的旧 NATS KV blackboard key/value 又与新 Device Directory 不兼容，因此保留 NATS 不能形成可工作的兼容链路。
 
 ## Decision
+
+> “Hub 不依赖 NATS”仍然有效；“Hub 是 Device Bus”以及命令、cursor 和 data
+> signaling 结论已被 ADR 0013 取代。当前 Hub 是 Device Manager。
 
 Hub 不再连接 NATS/JetStream，也不安装 `nats-py`。它通过版本化 Device Access、Device Management 与 Provider HTTP 契约承担 Eidolon OS 的设备总线角色：
 

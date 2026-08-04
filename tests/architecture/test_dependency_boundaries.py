@@ -91,6 +91,18 @@ def test_hub_has_no_nats_or_eidolon_data_dependency() -> None:
     assert violations == []
 
 
+def test_hub_has_no_opentelemetry_runtime_or_configuration() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["dependencies"]).lower()
+    assert "opentelemetry" not in dependencies
+    assert not (ROOT / "hub" / "adapters" / "observability").exists()
+    settings = "\n".join(
+        path.read_text(encoding="utf-8") for path in (ROOT / "config").glob("settings.*.yaml")
+    ).lower()
+    assert "observability" not in settings
+    assert "otel_" not in (ROOT / "config" / ".env.example").read_text().lower()
+
+
 def test_production_configuration_has_no_nats_setting() -> None:
     paths = [ROOT / "hub" / "config.py", *sorted((ROOT / "config").glob("*.yaml"))]
     violations = [
@@ -152,28 +164,68 @@ def test_production_config_contains_no_provider_or_hardware_details() -> None:
     assert {value for value in forbidden if value in settings_source} == set()
 
 
-def test_configuration_has_two_explicit_profiles_and_current_env_contract() -> None:
-    assert (ROOT / "config" / "settings.local.yaml").is_file()
-    assert (ROOT / "config" / "settings.cloud.yaml").is_file()
-    assert not (ROOT / "config" / "settings.yaml").exists()
+def test_configuration_is_local_only_and_has_current_env_contract() -> None:
+    assert (ROOT / "config" / "settings.yaml").is_file()
+    assert not (ROOT / "config" / "settings.local.yaml").exists()
+    assert not (ROOT / "config" / "settings.cloud.yaml").exists()
     assert not (ROOT / "config" / "settings.example.yaml").exists()
     assert not (ROOT / ".env.example").exists()
 
     environment_source = (ROOT / "config" / ".env.example").read_text(encoding="utf-8")
     required = {
-        "EIDOLON_HUB_LEASE_SECRET",
         "EIDOLON_HUB_MANAGEMENT_JWT_SECRET",
         "EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN",
     }
-    postgresql_credentials = {
+    retired = {
+        "EIDOLON_HUB_PROFILE",
+        "EIDOLON_HUB_INSTANCE_ID",
         "EIDOLON_HUB_POSTGRES_USER",
         "EIDOLON_HUB_POSTGRES_PASSWORD",
+        "LIVEKIT_API_KEY",
+        "LIVEKIT_API_SECRET",
+        "LIVEKIT_API_URL",
+        "MDNS_CONFIG_PATH",
+        "EIDOLON_HUB_LEASE_SECRET",
     }
-    retired = {"LIVEKIT_API_KEY", "LIVEKIT_API_SECRET", "LIVEKIT_API_URL", "MDNS_CONFIG_PATH"}
 
     assert all(f"{name}=" in environment_source for name in required)
-    assert all(f"{name}=" in environment_source for name in postgresql_credentials)
     assert all(name not in environment_source for name in retired)
+
+
+def test_hub_contains_no_cloud_postgresql_or_multi_instance_runtime() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["dependencies"]).lower()
+    assert "asyncpg" not in dependencies
+    retired_source = {
+        "PostgresqlPersistenceConfig",
+        "DeviceAuthorityLease",
+        "DeviceAuthorityRepository",
+        "hub_instance_id",
+        "fencing_token",
+        "EIDOLON_HUB_PROFILE",
+        "EIDOLON_HUB_INSTANCE_ID",
+    }
+    violations = []
+    for path in (ROOT / "hub").rglob("*.py"):
+        source = path.read_text(encoding="utf-8")
+        found = sorted(value for value in retired_source if value in source)
+        if found:
+            violations.append(f"{path.relative_to(ROOT)}: {found}")
+    assert violations == []
+
+
+def test_hub_contains_no_database_migration_or_legacy_schema_runtime() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["dependencies"]).lower()
+    assert "alembic" not in dependencies
+    assert not (ROOT / "hub" / "adapters" / "persistence" / "migrations").exists()
+    sources = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (ROOT / "hub" / "adapters" / "persistence").rglob("*.py")
+    )
+    assert "tenant_id" not in sources
+    assert "approved: Mapped[bool]" not in sources
+    assert "revoked: Mapped[bool]" not in sources
 
 
 def test_hub_has_no_legacy_channel_profile_or_device_negotiation_source() -> None:
@@ -191,6 +243,108 @@ def test_hub_has_no_legacy_channel_profile_or_device_negotiation_source() -> Non
         if found:
             violations.append(f"{path.relative_to(ROOT)}: {found}")
     assert violations == []
+
+
+def test_hub_does_not_own_provider_channel_lifecycle_or_persistence() -> None:
+    retired_source_names = {
+        "record_channel_lifecycle.py",
+        "provider_gateway.py",
+    }
+    assert not any(path.name in retired_source_names for path in (ROOT / "hub").rglob("*.py"))
+    assert not (
+        ROOT / "hub" / "contracts" / "schemas" / "channel" / "lifecycle.schema.json"
+    ).exists()
+
+    sources = "\n".join(
+        path.read_text(encoding="utf-8") for path in (ROOT / "hub").rglob("*.py")
+    )
+    for retired in (
+        "ChannelLeaseRepository",
+        "ChannelLifecycle",
+        "ChannelState",
+        "hub_channel_assignments",
+        "/api/provider/v1",
+    ):
+        assert retired not in sources
+
+
+def test_hub_has_no_long_lived_device_session_or_presence_runtime() -> None:
+    retired_files = {
+        "close_session.py",
+        "renew_session.py",
+        "session_proof.py",
+        "directory_worker.py",
+    }
+    assert not any(path.name in retired_files for path in (ROOT / "hub").rglob("*.py"))
+    assert not any((ROOT / "hub" / "domain" / "sessions").rglob("*.py"))
+    persistence = (ROOT / "hub" / "adapters" / "persistence" / "models.py").read_text()
+    assert "DeviceSessionRow" not in persistence
+    assert "ChallengeRow" not in persistence
+    settings = (ROOT / "config" / "settings.yaml").read_text().lower()
+    for retired in ("session_lease", "heartbeat", "projection_interval"):
+        assert retired not in settings
+
+
+def test_device_directory_does_not_persist_duplicate_projection_or_presence() -> None:
+    models = (ROOT / "hub" / "adapters" / "persistence" / "models.py").read_text()
+    assert "DirectoryRow" not in models
+    schema = (ROOT / "hub" / "contracts" / "schemas" / "device" / "directory.schema.json")
+    contents = schema.read_text()
+    for forbidden in ("online", "session", "heartbeat"):
+        assert forbidden not in contents
+
+
+def test_hub_contains_no_device_bus_or_channel_payload_runtime() -> None:
+    retired_source_names = {
+        "send_command.py",
+        "get_command.py",
+        "ingest_data_envelope.py",
+        "data_bridge.py",
+    }
+    assert not any(path.name in retired_source_names for path in (ROOT / "hub").rglob("*.py"))
+    assert not any((ROOT / "hub" / "domain" / "commands").glob("*.py"))
+    assert not (ROOT / "hub" / "contracts" / "schemas" / "device" / "command.schema.json").exists()
+    assert not (
+        ROOT / "hub" / "contracts" / "schemas" / "channel" / "data-envelope.schema.json"
+    ).exists()
+    persistence = (ROOT / "hub" / "adapters" / "persistence" / "models.py").read_text()
+    assert "hub_commands" not in persistence
+    assert "hub_channel_cursors" not in persistence
+
+
+def test_internal_device_management_events_are_not_named_as_a_system_bus() -> None:
+    assert not (ROOT / "hub" / "ports" / "event_bus.py").exists()
+    assert (ROOT / "hub" / "ports" / "management_events.py").is_file()
+    sources = "\n".join(path.read_text(encoding="utf-8") for path in (ROOT / "hub").rglob("*.py"))
+    assert "EventBus" not in sources
+    assert "SqlEventBus" not in sources
+
+
+def test_device_management_query_contract_does_not_add_grpc_tooling() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    dependencies = "\n".join(project["project"]["dependencies"]).lower()
+    assert "grpcio" not in dependencies
+    assert "protobuf" not in dependencies
+    assert not any((ROOT / "hub").rglob("*.proto"))
+
+
+def test_generated_build_cache_cannot_reintroduce_deleted_hub_files() -> None:
+    """An incremental setuptools build must not silently ship retired files."""
+
+    cached_hub = ROOT / "build" / "lib" / "hub"
+    if not cached_hub.exists():
+        return
+    source_files = {
+        path.relative_to(ROOT)
+        for path in (ROOT / "hub").rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    cached_files = {
+        Path("hub") / path.relative_to(cached_hub)
+        for path in cached_hub.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts
+    }
+    assert sorted(str(path) for path in cached_files - source_files) == []
 
 
 def test_opaque_channel_bindings_cannot_be_persisted() -> None:

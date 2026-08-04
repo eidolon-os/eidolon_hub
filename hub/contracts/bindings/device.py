@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from typing import Literal
 
 from pydantic import Field, field_validator
 
-from hub.contracts.bindings.common import ContractModel, DeviceIdentity, JsonObject
+from hub.contracts.bindings.common import ContractModel, JsonObject
+
+DeviceLifecycleState = Literal["pending-approval", "approved", "revoked"]
 
 
 class PropertyAffordance(ContractModel):
@@ -56,34 +57,6 @@ class DeviceManifest(ContractModel):
         return tuple(value) if isinstance(value, list) else value
 
 
-class DeviceRegistration(ContractModel):
-    operation: Literal["device.registration"] = "device.registration"
-    request_id: str = Field(min_length=1, max_length=96)
-    identity: DeviceIdentity
-    manifest: DeviceManifest
-    display_name: str = Field(default="", max_length=128)
-    device_kind: str = Field(default="unknown", min_length=1, max_length=96)
-
-
-class DeviceCommandRequest(ContractModel):
-    operation: Literal["device.command"] = "device.command"
-    request_id: str = Field(min_length=1, max_length=96)
-    command_name: str = Field(min_length=1, max_length=128)
-    arguments_json: str = Field(min_length=2, max_length=262_144, repr=False)
-    ttl_ms: int = Field(default=30_000, ge=1_000, le=300_000)
-
-    @field_validator("arguments_json")
-    @classmethod
-    def _arguments_are_object(cls, value: str) -> str:
-        try:
-            decoded = json.loads(value)
-        except json.JSONDecodeError as exc:
-            raise ValueError("arguments_json must contain valid JSON") from exc
-        if not isinstance(decoded, dict):
-            raise ValueError("arguments_json must contain a JSON object")
-        return value
-
-
 class DeviceApprovalRequest(ContractModel):
     operation: Literal["device.approval"] = "device.approval"
     request_id: str = Field(min_length=1, max_length=96)
@@ -96,24 +69,11 @@ class DeviceRevocationRequest(ContractModel):
     reason: str = Field(default="operator-request", min_length=1, max_length=256)
 
 
-class DeviceRegistrationStatus(ContractModel):
-    operation: Literal["device.registration-status"] = "device.registration-status"
-    device_id: str = Field(min_length=1, max_length=128)
-    manifest_revision: str = Field(min_length=1, max_length=128)
-    approved: bool
-
-
 class DeviceLifecycleStatus(ContractModel):
     operation: Literal["device.lifecycle-status"] = "device.lifecycle-status"
     device_id: str = Field(min_length=1, max_length=128)
     owner_id: str | None = Field(default=None, max_length=64)
-    approved: bool
-    revoked: bool
-
-
-class DirectorySession(ContractModel):
-    session_id: str = Field(min_length=1, max_length=128)
-    expires_at: datetime
+    lifecycle_state: DeviceLifecycleState
 
 
 class DeviceDirectoryEntry(ContractModel):
@@ -122,52 +82,39 @@ class DeviceDirectoryEntry(ContractModel):
     owner_scope: str = Field(min_length=1, max_length=64)
     display_name: str = Field(default="", max_length=128)
     device_kind: str = Field(min_length=1, max_length=96)
-    manifest_json: str = Field(min_length=2, max_length=262_144, repr=False)
+    manifest: DeviceManifest
     manifest_revision: str = Field(min_length=1, max_length=128)
-    approved: bool
-    revoked: bool
-    online: bool
-    sessions: tuple[DirectorySession, ...] = Field(default=(), max_length=32)
-    registered_at: datetime
+    lifecycle_state: DeviceLifecycleState
+    enrolled_at: datetime
     updated_at: datetime
-    revision: int = Field(ge=1)
 
-    @field_validator("sessions", mode="before")
+
+class DeviceDirectoryPage(ContractModel):
+    operation: Literal["device.directory-page"] = "device.directory-page"
+    next_cursor: str | None = Field(default=None, max_length=128)
+    devices: tuple[DeviceDirectoryEntry, ...] = Field(default=(), max_length=100)
+
+    @field_validator("devices", mode="before")
     @classmethod
-    def _session_arrays(cls, value):
+    def _device_arrays(cls, value):
         return tuple(value) if isinstance(value, list) else value
 
 
-class DeviceCommandStatus(ContractModel):
-    operation: Literal["device.command-status"] = "device.command-status"
-    command_id: str = Field(min_length=1, max_length=128)
-    device_id: str = Field(min_length=1, max_length=128)
-    command_name: str = Field(min_length=1, max_length=128)
-    state: Literal[
-        "queued", "sent", "accepted", "running", "succeeded", "failed", "rejected", "expired"
-    ]
-    created_at: datetime
-    updated_at: datetime
-    expires_at: datetime
-    error: str = Field(default="", max_length=4096)
-    result_json: str | None = Field(default=None, max_length=262_144, repr=False)
-
-
-class DeviceBusEvent(ContractModel):
-    operation: Literal["device.bus-event"] = "device.bus-event"
+class DeviceManagementEvent(ContractModel):
+    operation: Literal["device.management-event"] = "device.management-event"
     stream_position: int = Field(ge=1)
     event_id: str = Field(min_length=1, max_length=255)
     event_type: str = Field(min_length=1, max_length=255)
     source: str = Field(min_length=1, max_length=512)
     device_id: str = Field(min_length=1, max_length=255)
     occurred_at: datetime
-    data_json: str = Field(min_length=2, max_length=262_144, repr=False)
+    data: JsonObject
 
 
-class DeviceBusEventPage(ContractModel):
-    operation: Literal["device.bus-event-page"] = "device.bus-event-page"
+class DeviceManagementEventPage(ContractModel):
+    operation: Literal["device.management-event-page"] = "device.management-event-page"
     next_stream_position: int = Field(ge=0)
-    events: tuple[DeviceBusEvent, ...] = Field(default=(), max_length=500)
+    events: tuple[DeviceManagementEvent, ...] = Field(default=(), max_length=500)
 
     @field_validator("events", mode="before")
     @classmethod

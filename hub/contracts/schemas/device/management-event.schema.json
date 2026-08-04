@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/management-event.schema.json",
+  "title": "DeviceManagementEventContract",
+  "oneOf": [
+    {"$ref": "#/$defs/event"},
+    {"$ref": "#/$defs/page"}
+  ],
+  "$defs": {
+    "event": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "stream_position", "event_id", "event_type", "source", "device_id", "occurred_at", "data"],
+      "properties": {
+        "operation": {"const": "device.management-event"},
+        "stream_position": {"type": "integer", "minimum": 1},
+        "event_id": {"type": "string", "minLength": 1, "maxLength": 255},
+        "event_type": {"type": "string", "minLength": 1, "maxLength": 255},
+        "source": {"type": "string", "minLength": 1, "maxLength": 512},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 255},
+        "occurred_at": {"type": "string", "format": "date-time"},
+        "data": {"type": "object"}
+      }
+    },
+    "page": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "next_stream_position", "events"],
+      "properties": {
+        "operation": {"const": "device.management-event-page"},
+        "next_stream_position": {"type": "integer", "minimum": 0},
+        "events": {"type": "array", "maxItems": 500, "items": {"$ref": "#/$defs/event"}}
+      }
+    }
+  }
+}

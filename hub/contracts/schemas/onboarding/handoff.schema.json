@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/onboarding/handoff.schema.json",
+  "title": "DeviceHandoffContract",
+  "oneOf": [
+    {"$ref": "#/$defs/DeviceHandoffRequest"},
+    {"$ref": "#/$defs/DeviceHandoffOutcome"}
+  ],
+  "$defs": {
+    "DeviceHandoffRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id", "retrieval_token"],
+      "properties": {
+        "operation": {"const": "device.handoff"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "retrieval_token": {"type": "string", "minLength": 32, "maxLength": 256}
+      }
+    },
+    "DeviceHandoffOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id", "enrollment_id", "device_id", "manifest_revision", "lifecycle_state", "channels"],
+      "properties": {
+        "operation": {"const": "device.handoff-outcome"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "enrollment_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "manifest_revision": {"type": "string", "minLength": 1, "maxLength": 96},
+        "lifecycle_state": {"$ref": "../common/device-lifecycle-state.schema.json"},
+        "channels": {"type": "array", "maxItems": 16, "items": {"$ref": "../channel/assignment.schema.json"}}
+      }
+    }
+  }
+}

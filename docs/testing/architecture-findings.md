@@ -2,9 +2,12 @@
 
 1. mDNS advertiser 与 MQTT client 只有 start/stop 形似，能力并不相同；共同 `ConnectionConnector` Port 是伪抽象，已删除。
 2. WAN bootstrap 用稳定 HTTPS URI 已足够；MQTT 的 QoS/长连接价值属于实际 Channel backend，不属于 Hub 注册。
-3. 进程内 grant mailbox 在 Cloud 多实例无法恢复或定向；直接 Acquire request/reply 更短、更一致。
-4. 后台 desired-state worker/SQL claim 把 Provider 资源策略带入 Hub。设备主动 Acquire 后，Hub 只保留授权与通用 assignment 门禁。
-5. Channel active 不能定义设备在线；否则 Provider presence 会重新污染 Device Management。Session 与 Channel 双门禁由测试锁定。
-6. Directory cache 必须 DB-first、启动恢复并周期对账；它只优化热读，不能承担授权或 fencing。
-7. PostgreSQL 并发测试证明同一 device authority 只能由一个 Hub instance 获取；SQLite 只用于单节点 Local。
+3. 进程内 grant mailbox 无法恢复且增加状态；审批后的有界 Handoff 直接返回 Provider assignment 更短、更一致。
+4. 后台 desired-state worker/SQL claim 把 Provider 资源策略带入 Hub。Hub 改为只透传必要设备事实，并保留通用 assignment 契约校验。
+5. Channel Assignment metadata 和 Lifecycle callback 在代码中只有写入、没有任何设备管理消费者；它们复制 Provider 状态机，已连同表、Repository、Use Case、Schema 和入站 Router 整体删除。
+6. Directory cache 必须 DB-first、启动恢复；它只优化热读，不能承担授权。投影可直接由 `hub_devices` 重建，不需要第二张持久 Directory 表。
+7. 同时维护 SQLite/PostgreSQL、Profile、authority fencing 和跨实例 cache refresh，会把所有兄弟项目拖入尚不需要的部署复杂度。保留 Repository Port，但运行 Adapter 收敛为 SQLite，并用文件锁明确单进程所有权。
 8. `eidolon_channel` 尚未实现新 Provider 契约，本轮没有修改兄弟项目，不能声称 Eidolon OS 整栈已切换。
+9. SQLite 不提供行级 `SELECT FOR UPDATE`；未参与条件更新的 `version` 字段是虚假并发保障。旧 Challenge 曾改用条件原子更新，随后该认证流程已因 ADR 0018 整体删除。
+10. 人工 Approval 后设备立即由 Provider 接管，Hub 的 Challenge/Proof、持久 Session、Heartbeat/Lease、online 和周期投影没有剩余授权消费者，是重复连接生命周期，已整体删除。
+11. retrieval token 只能关联 Enrollment 调用方，不能证明设备物理真实性。小程序配网必须有二维码、近场或物理确认；这是一项产品安全契约，不能靠增加 Hub Session 状态机替代。

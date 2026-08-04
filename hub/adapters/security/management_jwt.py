@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from jose import JWTError, jwt
 
+from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.repositories import DeviceRepository
 
 
@@ -60,7 +61,6 @@ class JwtOwnerManagementAuthorizer:
             if not is_admin and (
                 not claim_owner
                 or device.owner_id != claim_owner
-                or not device.approved
-                or device.revoked
+                or device.lifecycle_state is not DeviceLifecycleState.APPROVED
             ):
                 raise PermissionError("management credential cannot access device")

@@ -1,1 +1,0 @@
-"""Authenticated device-session domain."""

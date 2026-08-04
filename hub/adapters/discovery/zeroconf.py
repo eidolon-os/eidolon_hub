@@ -45,7 +45,7 @@ class ZeroconfHubAdvertiser:
         hostname: str,
         port: int,
         descriptor_uri: str,
-        registration_uri: str,
+        enrollment_uri: str,
         addresses: tuple[str, ...] | None = None,
         refresh_seconds: float = 10.0,
     ) -> None:
@@ -55,7 +55,7 @@ class ZeroconfHubAdvertiser:
         self._hostname = hostname
         self._port = port
         self._descriptor_uri = descriptor_uri
-        self._registration_uri = registration_uri
+        self._enrollment_uri = enrollment_uri
         self._addresses = addresses
         self._refresh_seconds = refresh_seconds
         self._aiozc: AsyncZeroconf | None = None
@@ -73,7 +73,7 @@ class ZeroconfHubAdvertiser:
             properties={
                 "txtvers": "1",
                 "descriptor_uri": self._descriptor_uri,
-                "register_uri": self._registration_uri,
+                "enrollment_uri": self._enrollment_uri,
             },
             server=f"{self._hostname.rstrip('.')}.local.",
         )

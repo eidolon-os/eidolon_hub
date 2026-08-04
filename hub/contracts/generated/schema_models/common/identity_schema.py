@@ -14,5 +14,3 @@ class DeviceIdentity(BaseModel):
         frozen=True,
     )
     device_id: Annotated[str, Field(max_length=128, min_length=1)]
-    public_key_fingerprint: Annotated[str, Field(max_length=160, min_length=1)]
-    tenant_id: Annotated[str | None, Field(max_length=64, min_length=1)] = "local"

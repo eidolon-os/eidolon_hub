@@ -1,10 +1,10 @@
-"""Relational schema owned by Eidolon Hub."""
+"""Relational schema owned by the local Eidolon Hub."""
 
 from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -16,119 +16,26 @@ class DeviceRow(Base):
     __tablename__ = "hub_devices"
 
     device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    public_key_fingerprint: Mapped[str] = mapped_column(String(512))
-    tenant_id: Mapped[str] = mapped_column(String(255), index=True)
+    enrollment_id: Mapped[str] = mapped_column(String(255))
+    retrieval_token_hash: Mapped[str] = mapped_column(String(64))
+    retrieval_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     display_name: Mapped[str] = mapped_column(String(512))
     device_kind: Mapped[str] = mapped_column(String(255), index=True)
     manifest_json: Mapped[str] = mapped_column(Text)
     manifest_revision: Mapped[str] = mapped_column(String(80))
-    registered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    last_registration_request_id: Mapped[str] = mapped_column(String(255), default="")
+    last_enrollment_request_id: Mapped[str] = mapped_column(String(255), default="")
+    last_enrollment_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     owner_id: Mapped[str | None] = mapped_column(String(255), index=True)
-    approved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
-    revoked: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    lifecycle_state: Mapped[str] = mapped_column(String(32), index=True)
     last_management_request_id: Mapped[str] = mapped_column(String(255), default="")
     last_management_fingerprint: Mapped[str] = mapped_column(String(128), default="")
 
-
-class CommandRow(Base):
-    __tablename__ = "hub_commands"
-
-    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    operation: Mapped[str] = mapped_column(String(255))
-    payload_json: Mapped[str] = mapped_column(Text)
-    state: Mapped[str] = mapped_column(String(32), index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    error: Mapped[str] = mapped_column(Text, default="")
-    result_json: Mapped[str | None] = mapped_column(Text)
+    __table_args__ = (Index("ix_hub_devices_enrollment", "enrollment_id", unique=True),)
 
 
-class DeviceSessionRow(Base):
-    __tablename__ = "hub_device_sessions"
-
-    session_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    renewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    lease_token: Mapped[str] = mapped_column(Text)
-    identity_fingerprint: Mapped[str] = mapped_column(String(512))
-    hub_instance_id: Mapped[str] = mapped_column(String(255), index=True)
-    fencing_token: Mapped[int] = mapped_column(Integer)
-    heartbeat_sequence: Mapped[int] = mapped_column(Integer, default=0)
-    state: Mapped[str] = mapped_column(String(32), index=True)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-
-    __table_args__ = (Index("ix_hub_sessions_active", "device_id", "state", "expires_at"),)
-
-
-class DeviceAuthorityRow(Base):
-    __tablename__ = "hub_device_authorities"
-
-    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    hub_instance_id: Mapped[str] = mapped_column(String(255), index=True)
-    fencing_token: Mapped[int] = mapped_column(Integer)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-
-
-class ChallengeRow(Base):
-    __tablename__ = "hub_enrollment_challenges"
-
-    challenge_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    client_nonce: Mapped[str] = mapped_column(Text)
-    server_nonce: Mapped[str] = mapped_column(Text)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    consumed: Mapped[bool] = mapped_column(Boolean, default=False)
-    version: Mapped[int] = mapped_column(Integer, default=1)
-
-
-class DirectoryRow(Base):
-    __tablename__ = "hub_device_directory"
-
-    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    owner_scope: Mapped[str] = mapped_column(String(255), index=True)
-    payload_json: Mapped[str] = mapped_column(Text)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    revision: Mapped[int] = mapped_column(Integer, default=1)
-
-    __table_args__ = (Index("ix_hub_directory_owner_device", "owner_scope", "device_id"),)
-
-
-class ChannelLeaseRow(Base):
-    __tablename__ = "hub_channel_assignments"
-
-    channel_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    purpose: Mapped[str] = mapped_column(String(255), index=True)
-    kinds: Mapped[str] = mapped_column(Text)
-    binding_format: Mapped[str] = mapped_column(String(128))
-    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    state: Mapped[str] = mapped_column(String(32), index=True)
-    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-
-    __table_args__ = (
-        Index("ix_hub_channels_active", "device_id", "purpose", "state", "expires_at"),
-    )
-
-
-class ChannelCursorRow(Base):
-    __tablename__ = "hub_channel_cursors"
-
-    channel_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    outbound_sequence: Mapped[int] = mapped_column(Integer, default=0)
-    inbound_sequence: Mapped[int] = mapped_column(Integer, default=0)
-    inbound_envelope_id: Mapped[str] = mapped_column(String(255), default="")
-    version: Mapped[int] = mapped_column(Integer, default=1)
-
-
-class EventRow(Base):
+class DeviceManagementEventRow(Base):
     __tablename__ = "hub_events"
 
     stream_position: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

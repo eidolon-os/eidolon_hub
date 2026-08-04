@@ -1,0 +1,1 @@
+{"operation":"device.enrollment","request_id":"enroll-1","retrieval_token":"device-generated-random-token-000001","identity":{"device_id":"device-1"},"manifest":{"schema_version":1,"title":"Generic Device","properties":[],"actions":[],"events":[],"media":[]},"display_name":"Generic Device","device_kind":"generic"}

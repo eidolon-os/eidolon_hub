@@ -8,7 +8,7 @@ import pytest
 from jose import jwt
 
 from hub.adapters.security.management_jwt import JwtOwnerManagementAuthorizer
-from hub.domain.devices.entities import ManagedDevice
+from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
@@ -19,14 +19,17 @@ NOW = datetime(2026, 8, 1, tzinfo=UTC)
 class _Devices:
     def __init__(self):
         self.device = ManagedDevice(
-            identity=DeviceIdentity("device-1", "p256:fingerprint", "local"),
+            identity=DeviceIdentity("device-1"),
+            enrollment_id="enrollment-1",
+            retrieval_token_hash="a" * 64,
+            retrieval_expires_at=NOW,
             display_name="Device",
             device_kind="generic",
             manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),
-            registered_at=NOW,
+            enrolled_at=NOW,
             updated_at=NOW,
             owner_id="owner-1",
-            approved=True,
+            lifecycle_state=DeviceLifecycleState.APPROVED,
         )
 
     async def get(self, device_id):
@@ -57,7 +60,11 @@ async def test_device_manager_is_limited_to_its_owner_and_approved_devices() -> 
 
     with pytest.raises(PermissionError, match="owner scope"):
         await authorizer.authorize(credential=_credential(), owner_scope="owner-2", device_id=None)
-    devices.device = replace(devices.device, approved=False)
+    devices.device = replace(
+        devices.device,
+        owner_id=None,
+        lifecycle_state=DeviceLifecycleState.PENDING_APPROVAL,
+    )
     with pytest.raises(PermissionError, match="cannot access"):
         await authorizer.authorize(credential=_credential(), owner_scope=None, device_id="device-1")
 

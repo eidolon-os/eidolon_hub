@@ -1,36 +1,14 @@
-"""Authentication and challenge persistence ports."""
+"""Onboarding token, runtime and management authorization ports."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
 
 
-@dataclass(frozen=True, slots=True)
-class EnrollmentChallenge:
-    challenge_id: str
-    device_id: str
-    client_nonce: str
-    server_nonce: str
-    expires_at: datetime
-    consumed: bool = False
-
-
-class ChallengeRepository(Protocol):
-    async def get(self, challenge_id: str) -> EnrollmentChallenge | None: ...
-    async def create(self, challenge: EnrollmentChallenge) -> None: ...
-    async def consume(self, challenge_id: str) -> EnrollmentChallenge: ...
-
-
-class DeviceProofVerifier(Protocol):
-    async def verify(
-        self, *, challenge: EnrollmentChallenge, public_key: str, signature: str
-    ) -> str: ...
-
-
-class CredentialIssuer(Protocol):
-    def issue_lease_token(self, *, session_id: str, device_id: str) -> str: ...
+class RetrievalTokenHasher(Protocol):
+    def hash(self, token: str) -> str: ...
+    def verify(self, token: str, token_hash: str) -> bool: ...
 
 
 class Clock(Protocol):

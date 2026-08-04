@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/channel/provider-provision.schema.json",
+  "title": "ProviderChannelControlContract",
+  "$defs": {
+    "device": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "owner_id", "display_name", "device_kind", "manifest", "manifest_revision"],
+      "properties": {
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "owner_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "display_name": {"type": "string", "maxLength": 256},
+        "device_kind": {"type": "string", "minLength": 1, "maxLength": 96},
+        "manifest": {"$ref": "../device/manifest.schema.json"},
+        "manifest_revision": {"type": "string", "minLength": 1, "maxLength": 96}
+      }
+    },
+    "provisionRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "operation_id", "hub_id", "device"],
+      "properties": {
+        "operation": {"const": "channel.provision-device"},
+        "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "hub_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device": {"$ref": "#/$defs/device"}
+      }
+    },
+    "provisionResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "operation_id", "device_id", "manifest_revision", "channels"],
+      "properties": {
+        "operation": {"const": "channel.provisioned-device"},
+        "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "manifest_revision": {"type": "string", "minLength": 1, "maxLength": 96},
+        "channels": {"type": "array", "maxItems": 16, "items": {"$ref": "assignment.schema.json"}}
+      }
+    },
+    "revokeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "operation_id", "hub_id", "device_id", "reason"],
+      "properties": {
+        "operation": {"const": "channel.revoke-device"},
+        "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "hub_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "reason": {"type": "string", "minLength": 1, "maxLength": 256}
+      }
+    },
+    "revokeResponse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "operation_id", "device_id"],
+      "properties": {
+        "operation": {"const": "channel.revoked-device"},
+        "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128}
+      }
+    }
+  }
+}

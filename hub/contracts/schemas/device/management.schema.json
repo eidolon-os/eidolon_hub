@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://eidolon.ai/contracts/device/management.schema.json",
+  "$id": "https://eidolon.dev/contracts/device/management.schema.json",
   "title": "Device Management Mutations",
   "oneOf": [
     { "$ref": "#/$defs/DeviceApprovalRequest" },

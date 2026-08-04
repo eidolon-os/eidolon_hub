@@ -3,8 +3,8 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from hub.adapters.discovery.zeroconf import ZeroconfHubAdvertiser
-from hub.composition.device_access import _hub_descriptor, _mdns_advertiser
-from hub.config import DeviceAccessConfig, HubConfig
+from hub.composition.device_onboarding import _hub_descriptor, _mdns_advertiser
+from hub.config import HubConfig, OnboardingConfig
 
 
 async def test_zeroconf_advertises_the_https_descriptor_on_all_addresses() -> None:
@@ -20,8 +20,8 @@ async def test_zeroconf_advertises_the_https_descriptor_on_all_addresses() -> No
             service_name="Hub._eidolon-hub._tcp.local.",
             hostname="eidolon-hub",
             port=8443,
-            descriptor_uri="https://eidolon-hub.local:8443/api/device-access/v1/descriptor",
-            registration_uri="https://eidolon-hub.local:8443/api/device-access/v1/register",
+            descriptor_uri="https://eidolon-hub.local:8443/api/device-onboarding/v1/descriptor",
+            enrollment_uri="https://eidolon-hub.local:8443/api/device-onboarding/v1/enrollments",
             addresses=("192.168.10.5", "2001:db8::5"),
         )
 
@@ -31,6 +31,7 @@ async def test_zeroconf_advertises_the_https_descriptor_on_all_addresses() -> No
 
     assert set(info.parsed_addresses()) == {"192.168.10.5", "2001:db8::5"}
     assert info.properties[b"descriptor_uri"].startswith(b"https://")
+    assert info.properties[b"enrollment_uri"].endswith(b"/enrollments")
     assert b"config_url" not in info.properties
 
 
@@ -47,8 +48,8 @@ async def test_zeroconf_start_is_idempotent_and_stop_releases_runtime() -> None:
             service_name="Hub._eidolon-hub._tcp.local.",
             hostname="eidolon-hub",
             port=8443,
-            descriptor_uri="https://eidolon-hub.local:8443/api/device-access/v1/descriptor",
-            registration_uri="https://eidolon-hub.local:8443/api/device-access/v1/register",
+            descriptor_uri="https://eidolon-hub.local:8443/api/device-onboarding/v1/descriptor",
+            enrollment_uri="https://eidolon-hub.local:8443/api/device-onboarding/v1/enrollments",
             addresses=("192.168.10.5",),
         )
 
@@ -63,7 +64,7 @@ async def test_zeroconf_start_is_idempotent_and_stop_releases_runtime() -> None:
 
 def test_mdns_identity_and_port_derive_from_public_contract() -> None:
     config = HubConfig(
-        device_access=DeviceAccessConfig(
+        onboarding=OnboardingConfig(
             hub_id="living-room-hub",
             public_base_url="https://living-room.local:8443",
         )

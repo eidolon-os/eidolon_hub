@@ -3,18 +3,12 @@
 
 from __future__ import annotations
 
-from typing import Annotated, List, Literal
+from typing import Annotated, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-
-class Session(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    session_id: Annotated[str, Field(max_length=128, min_length=1)]
-    expires_at: AwareDatetime
+from ..common import device_lifecycle_state_schema
+from . import manifest_schema
 
 
 class DeviceDirectoryEntry(BaseModel):
@@ -27,12 +21,8 @@ class DeviceDirectoryEntry(BaseModel):
     owner_scope: Annotated[str, Field(max_length=64, min_length=1)]
     display_name: Annotated[str, Field(max_length=128)]
     device_kind: Annotated[str, Field(max_length=96, min_length=1)]
-    manifest_json: Annotated[str, Field(max_length=262144, min_length=2)]
+    manifest: manifest_schema.DeviceManifest
     manifest_revision: Annotated[str, Field(max_length=128, min_length=1)]
-    approved: bool
-    revoked: bool
-    online: bool
-    sessions: Annotated[List[Session], Field(max_length=32)]
-    registered_at: AwareDatetime
+    lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState
+    enrolled_at: AwareDatetime
     updated_at: AwareDatetime
-    revision: Annotated[int, Field(ge=1)]

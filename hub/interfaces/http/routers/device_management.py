@@ -1,46 +1,43 @@
-"""HTTP interface for the provider-neutral device bus."""
+"""HTTP interface for the Hub device-management control plane."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import Callable
 
 from fastapi import APIRouter, Header, HTTPException
 
+from hub.application.queries.get_device import GetDevice
+from hub.application.queries.list_devices import DeviceListQuery, ListDevices
 from hub.application.use_cases.approve_device import ApproveDevice
-from hub.application.use_cases.get_command import GetCommand
 from hub.application.use_cases.revoke_device import RevokeDevice
-from hub.application.use_cases.send_command import SendCommand
 from hub.contracts.bindings.device import (
     DeviceApprovalRequest,
-    DeviceBusEventPage,
-    DeviceCommandRequest,
-    DeviceCommandStatus,
     DeviceDirectoryEntry,
+    DeviceDirectoryPage,
     DeviceLifecycleStatus,
+    DeviceManagementEventPage,
     DeviceRevocationRequest,
 )
 from hub.contracts.mappers import (
-    command_status_to_wire,
     directory_entry_to_wire,
     lifecycle_status_to_wire,
     stored_event_to_wire,
 )
-from hub.ports.event_bus import EventStreamReader
+from hub.domain.devices.entities import DeviceLifecycleState
+from hub.ports.channels import ChannelProviderContractError
 from hub.ports.identity import ManagementAuthorizer
-from hub.ports.repositories import DeviceDirectoryRepository
+from hub.ports.management_events import DeviceManagementEventStream
 
 
 @dataclass(frozen=True, slots=True)
 class DeviceManagementHttpServices:
-    directory: DeviceDirectoryRepository
-    send_command: SendCommand
-    get_command: GetCommand
+    get_device: GetDevice
+    list_devices: ListDevices
     approve_device: ApproveDevice
     revoke_device: RevokeDevice
     authorizer: ManagementAuthorizer
-    event_stream: EventStreamReader
+    event_stream: DeviceManagementEventStream
 
 
 def create_device_management_router(
@@ -51,27 +48,75 @@ def create_device_management_router(
     def current() -> DeviceManagementHttpServices:
         return services() if callable(services) else services
 
-    @router.get("/directory/{owner_scope}", response_model=list[DeviceDirectoryEntry])
-    async def list_directory(owner_scope: str, authorization: str = Header(alias="Authorization")):
+    @router.get("/owners/{owner_scope}/devices", response_model=DeviceDirectoryPage)
+    async def list_directory(
+        owner_scope: str,
+        lifecycle_state: DeviceLifecycleState | None = None,
+        device_kind: str | None = None,
+        capability: str | None = None,
+        q: str | None = None,
+        after: str | None = None,
+        limit: int = 50,
+        authorization: str = Header(alias="Authorization"),
+    ) -> DeviceDirectoryPage:
         runtime = current()
         try:
             await runtime.authorizer.authorize(
                 credential=authorization, owner_scope=owner_scope, device_id=None
             )
+            page = await runtime.list_devices.execute(
+                DeviceListQuery(
+                    owner_scope=owner_scope,
+                    lifecycle_state=lifecycle_state,
+                    device_kind=device_kind,
+                    capability=capability,
+                    q=q,
+                    after=after,
+                    limit=limit,
+                )
+            )
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
-        return [
-            directory_entry_to_wire(entry)
-            for entry in await runtime.directory.list(owner_scope=owner_scope)
-        ]
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return DeviceDirectoryPage(
+            next_cursor=page.next_cursor,
+            devices=tuple(directory_entry_to_wire(entry) for entry in page.entries),
+        )
 
-    @router.get("/events/{owner_scope}", response_model=DeviceBusEventPage)
+    @router.get(
+        "/owners/{owner_scope}/devices/{device_id}",
+        response_model=DeviceDirectoryEntry,
+    )
+    async def get_directory_entry(
+        owner_scope: str,
+        device_id: str,
+        authorization: str = Header(alias="Authorization"),
+    ) -> DeviceDirectoryEntry:
+        runtime = current()
+        try:
+            await runtime.authorizer.authorize(
+                credential=authorization,
+                owner_scope=owner_scope,
+                device_id=None,
+            )
+            entry = await runtime.get_device.execute(
+                owner_scope=owner_scope,
+                device_id=device_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="device not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        return directory_entry_to_wire(entry)
+
+    @router.get("/owners/{owner_scope}/events", response_model=DeviceManagementEventPage)
     async def list_device_events(
         owner_scope: str,
         after_stream_position: int = 0,
         limit: int = 100,
         authorization: str = Header(alias="Authorization"),
-    ) -> DeviceBusEventPage:
+    ) -> DeviceManagementEventPage:
         runtime = current()
         try:
             await runtime.authorizer.authorize(
@@ -86,55 +131,10 @@ def create_device_management_router(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return DeviceBusEventPage(
+        return DeviceManagementEventPage(
             next_stream_position=(stored[-1].stream_position if stored else after_stream_position),
             events=tuple(stored_event_to_wire(item) for item in stored),
         )
-
-    @router.post("/devices/{device_id}/commands", response_model=DeviceCommandStatus)
-    async def send_device_command(
-        device_id: str,
-        payload: DeviceCommandRequest,
-        authorization: str = Header(alias="Authorization"),
-    ):
-        runtime = current()
-        try:
-            await runtime.authorizer.authorize(
-                credential=authorization, owner_scope=None, device_id=device_id
-            )
-            command = await runtime.send_command.execute(
-                device_id=device_id,
-                operation=payload.command_name,
-                payload_json=payload.arguments_json,
-                ttl=timedelta(milliseconds=payload.ttl_ms),
-                request_id=payload.request_id,
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="device not found") from exc
-        except (ValueError, ConnectionError) as exc:
-            raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return command_status_to_wire(command)
-
-    @router.get("/commands/{command_id}", response_model=DeviceCommandStatus)
-    async def get_device_command(
-        command_id: str,
-        authorization: str = Header(alias="Authorization"),
-    ):
-        runtime = current()
-        try:
-            command = await runtime.get_command.execute(command_id)
-            await runtime.authorizer.authorize(
-                credential=authorization,
-                owner_scope=None,
-                device_id=command.device_id,
-            )
-        except KeyError as exc:
-            raise HTTPException(status_code=404, detail="command not found") from exc
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
-        return command_status_to_wire(command)
 
     @router.post("/devices/{device_id}/approval", response_model=DeviceLifecycleStatus)
     async def approve_registered_device(
@@ -180,6 +180,10 @@ def create_device_management_router(
             raise HTTPException(status_code=404, detail="device not found") from exc
         except PermissionError as exc:
             raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ChannelProviderContractError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ConnectionError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         return lifecycle_status_to_wire(device)

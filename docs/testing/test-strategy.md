@@ -4,18 +4,18 @@
 
 ```text
 失败测试 → 最小实现 → Unit → Contract → Component/Functional
-→ Local/Cloud parity → Black-box E2E → 架构反思 → 全量回归
+→ Local-only runtime → Black-box E2E → 架构反思 → 全量回归
 ```
 
-| 层级 | 目标 |
+| 层级 | 当前目标 |
 |---|---|
-| Architecture | 禁止 Connector/MQTT/NATS/SDK/Data/LiveKit 依赖和跨层基础设施泄漏；禁止持久化 opaque binding |
-| Unit | Session/Authority、注册/审批/吊销、Acquire 校验、Channel 状态机、Command、Envelope、安全 Adapter、严格 Profile、OTEL 语义和 Migration head check |
-| Contract | 全部 JSON Schema、生成 DTO、新 Session/Acquire golden examples、Provider acquisition/lifecycle/data binding |
-| Component | Alembic 初始化后的 SQLite Repository、Directory memory+DB、Composition 生命周期与发布 routes |
-| Local Functional | HTTPS Device Access 与 Reference Provider 的 acquire→active→command→ack/result |
-| Cloud Functional | 隔离空 PostgreSQL Schema migration、真实 round-trip 与并发 Hub authority fencing |
-| Deployment Mode | Local SQLite/mDNS 与 Cloud PostgreSQL/no-mDNS 发布完全相同 API/Schema，仅 Adapter 配置不同 |
-| Contract E2E | 生产 Composition 黑盒完成 P-256 Session、注册/审批、Acquire、Provider Bridge、重启恢复 |
+| Architecture | 禁止 Session/online/data plane 复活；禁止 MQTT/NATS/SDK/Data/LiveKit 和跨层基础设施泄漏；禁止重复 Directory/Channel persistence |
+| Unit | Enrollment/Token/窗口、三态 policy、Handoff/Provision/Revoke、Get/List、JWT、mDNS、SQLite schema/锁、严格配置 |
+| Contract | 13 个 JSON Schema、生成模型 freshness、Enrollment golden example、Onboarding 与 Provider Provision/Revoke binding |
+| Component | 两表 SQLite Repository、启动 Directory 重建、Composition 生命周期和公开 routes |
+| Functional | HTTPS Enrollment/Approval/Handoff，以及真实 HTTP Reference Provider Provision/Revoke |
+| E2E | 生产 Composition 黑盒完成 Enrollment、审批、opaque Handoff、查询/事件和 Hub 重启恢复 |
 
-外部 `eidolon_channel`、生产 TLS、DNS/VLAN、网络分区、DB/Provider restart 和 rolling upgrade 不在当前 Hub-only 证据范围内，不得由本地 Reference Provider 测试推导为已通过。
+所有新 Domain/Application 分支覆盖率必须不低于 90%，所有状态转移和拒绝路径有明确用例。Passed 只证明 Hub-only reference 链路；真实小程序、设备、`eidolon_channel`、TLS/DNS/VLAN 和生产故障仍需独立 conformance。
+
+Cloud、PostgreSQL、多实例、Session、online、Command 和设备 data plane 已从产品范围删除，不作为待补测试能力。

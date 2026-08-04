@@ -1,6 +1,6 @@
 # ADR 0011: HTTPS Device Session 与直接 Channel Acquisition
 
-- 状态：Accepted
+- 状态：Superseded by ADR 0013、0015、0017 and 0018
 - 日期：2026-08-02
 
 ## 背景
@@ -32,3 +32,7 @@ WAN 设备在 Commissioning 时可以直接保存稳定 HTTPS Descriptor URI，�
 Provider 故障只使 Acquire 显式失败，不回滚注册事实；设备按 request/operation ID 重试。Hub 不再负责 Provider 资源的后台创建、续期或回收策略，因此 Provider 必须使用有限期 credential/lease，并自行处理过期资源。Hub 对 revoked/expired Session 的命令与上行数据立即拒绝。
 
 Local/Cloud 发布完全相同的 API 和 Schema。Cloud 多实例依靠 PostgreSQL authority fencing、幂等 ID、持久 cursor/event log，不依赖进程内 mailbox、NATS 或 MQTT bootstrap。
+
+## 取代说明
+
+ADR 0013 将 Hub 从 Device Bus 收敛为 Device Manager；ADR 0015 删除 Cloud/多实例；ADR 0017 删除 Channel metadata；ADR 0018 最终删除长期 Session/online，改为 Enrollment/Approval/Handoff。本 ADR 只保留“mDNS 只是 Introduction、WAN 使用 HTTPS URI、MQTT 属于 Channel backend”等仍有效结论；其实现清单不描述当前代码。

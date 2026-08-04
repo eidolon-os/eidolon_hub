@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/onboarding/enrollment.schema.json",
+  "title": "DeviceEnrollmentContract",
+  "oneOf": [
+    {"$ref": "#/$defs/DeviceEnrollment"},
+    {"$ref": "#/$defs/DeviceEnrollmentReceipt"}
+  ],
+  "$defs": {
+    "DeviceEnrollment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id", "retrieval_token", "identity", "manifest", "display_name", "device_kind"],
+      "properties": {
+        "operation": {"const": "device.enrollment"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "retrieval_token": {"type": "string", "minLength": 32, "maxLength": 256},
+        "identity": {"$ref": "../common/identity.schema.json"},
+        "manifest": {"$ref": "../device/manifest.schema.json"},
+        "display_name": {"type": "string", "maxLength": 128, "default": ""},
+        "device_kind": {"type": "string", "minLength": 1, "maxLength": 96, "default": "unknown"}
+      }
+    },
+    "DeviceEnrollmentReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["operation", "request_id", "enrollment_id", "device_id", "lifecycle_state", "retrieval_expires_at_ms"],
+      "properties": {
+        "operation": {"const": "device.enrollment-received"},
+        "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
+        "enrollment_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "lifecycle_state": {"$ref": "../common/device-lifecycle-state.schema.json"},
+        "retrieval_expires_at_ms": {"type": "integer", "minimum": 0}
+      }
+    }
+  }
+}

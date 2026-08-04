@@ -1,42 +1,49 @@
 # Eidolon OS 项目边界与 Hub 集成
 
-本页记录 Hub-only 重构后的目标契约。兄弟项目未在本轮修改，不能把 Reference Provider E2E 当作整栈已经兼容的证据。
+本页只陈述当前 Hub 代码和契约能够证明的边界。兄弟项目未在本轮修改；目标使用方不等于已经完成真实对接。
 
 ```mermaid
 flowchart TB
-    Devices["Physical / Mobile / Web devices"]
-    Hub["eidolon_hub<br/>device sessions + directory + control"]
+    Devices["New Devices"]
+    Hub["eidolon_hub<br/>onboarding + registry + policy + directory"]
     Provider["eidolon_channel or another provider<br/>WSS / MQTT / LiveKit"]
-    Agent["eidolon_agent"]
-    Memory["eidolon_memory"]
-    Vision["eidolon_vision"]
-    Admin["eidolon_admin"]
-    HubDB["Hub DB<br/>SQLite / PostgreSQL"]
+    Management["Mini App / eidolon_admin"]
+    Consumers["eidolon_agent / metadata consumers"]
+    DB["Hub-owned SQLite"]
 
-    Devices -->|"HTTPS access contract"| Hub
-    Devices -. "Data / Audio / Video" .-> Provider
-    Hub -->|"channel acquire + DataEnvelope"| Provider
-    Provider --> Agent
-    Agent <--> Memory
-    Vision -->|"sense contract"| Hub
-    Admin -->|"management API"| Hub
-    Hub --> HubDB
+    Devices -->|"Enroll / Handoff"| Hub
+    Management -->|"Approve / Revoke / Directory"| Hub
+    Hub -->|"Provision / Revoke"| Provider
+    Provider -->|"opaque assignment"| Hub --> Devices
+    Devices -. "all long-lived connection, data and media" .-> Provider
+    Consumers -->|"Get / List / audit cursor"| Hub
+    Hub --> DB
 ```
 
-| 项目 | 与 Hub 的目标关系 |
-|---|---|
-| `eidolon_channel` | 可实现外部 Channel Provider。接收 Acquire device context，自主选择 WSS/MQTT/LiveKit，独占设备 URL、凭据、TURN、Codec 和媒体资源；转换普通 `DataEnvelope` |
-| `eidolon_agent` | 通过 Hub Device Management/API 或 Provider 标准事件使用设备能力，不读取 Hub DB/KV，不要求 Hub 保留 NATS |
-| `eidolon_admin` | 使用 management JWT 调用 `/health` 与 `/api/device-management/v1/*`，不复制 Device/Channel 领域逻辑 |
-| `eidolon_vision` | 使用 Hub Sense Schema 提交 bounded facts；像素不经过 Hub |
-| `eidolon_memory` | 保持 Agent 业务依赖，不进入 Hub 在线或 Channel 边界 |
-| `eidolon_data` / `eidolon_sdk` | 不是 Hub 运行时依赖；其他项目现有依赖不由 Hub 隐式共享 |
-| Devices | 保存 Commissioned Descriptor URI；用 HTTPS 建立 Session/注册/心跳；获批后主动 Acquire，并把 opaque binding 交给对应 Provider SDK |
+## 契约使用方
 
-Provider 最小接口：
+| 使用方 | 使用的 Hub 契约 | 当前证据 |
+|---|---|---|
+| 新设备 | Descriptor、Enrollment、Handoff；取得 opaque Assignment 后离开 Hub | Hub Functional/E2E reference client 已验证；真实设备未迁移 |
+| 小程序 / Admin | Approval、Revocation、Owner-scoped Directory 与管理事件 | JWT/Router/Contract 已验证；真实小程序和 `eidolon_admin` 未做 conformance |
+| Channel Provider | Hub 调用 Provision/Revoke；Provider 返回 opaque Assignment | Reference Provider Contract/Functional 已验证；`eidolon_channel` 未修改 |
+| Agent / metadata consumer | 只读 Get/List/管理事件；设备业务 Data 由 Provider 提供 | Hub API 已存在；真实 consumer 调用未验证 |
 
-- `POST {contract_url}/device-channels/acquire`：接收 operation、Hub ID 和必要设备上下文，返回通用 Assignment 与 base64 opaque binding。
-- `POST {contract_url}/data/envelopes`：接收 Hub outbound Command envelope。
-- 回调 Hub `/api/provider/v1/channels/lifecycle` 和 `/api/provider/v1/data/inbound`。
+## Channel Provider 最小要求
 
-后续 consumer 迁移顺序必须独立推进：先稳定 Hub 单元/契约/Local/Cloud/模式切换/E2E 门禁，再为 `eidolon_channel` 实现 Provider Contract，随后迁移一类设备、Admin、Agent/Vision 和其他终端。旧契约不双写兼容。
+- `POST {contract_url}/device-channels/provision`：接收稳定 operation ID、Hub ID 和批准后的必要设备事实，按自身配置生成 Channel Assignment。
+- `POST {contract_url}/device-channels/revoke`：按 operation ID 幂等吊销该设备的 Channel 与 credential。
+- Provision 必须按 `operation_id=enrollment_id` 幂等，重复请求返回等价有效结果。
+- Provider 完全拥有 MQTT/WSS/LiveKit backend、长期认证、连接、心跳、重连、online 和业务数据。
+- Provider 不向 Hub 回调 Channel lifecycle，也不向 Hub发送 Command、State、Event 或 DataEnvelope。
+
+Hub 不配置 channel policy，不选择 backend，不解析或持久化 `opaque_binding`。设备数据如何标准化并交给 Agent，是 Provider 与 consumer 的契约。
+
+## 推荐集成顺序
+
+1. 先保持 Hub Architecture、Unit、Contract、Component、Functional 与 E2E 门禁稳定。
+2. 为 `eidolon_channel` 实现 Provider Provision/Revoke conformance。
+3. 迁移一类真实设备，验证小程序的二维码/BLE/物理确认与 Enrollment 绑定。
+4. 分别为管理客户端和 metadata consumer 做契约 conformance。
+
+旧 Device Access、Session 或数据接口不双写兼容。

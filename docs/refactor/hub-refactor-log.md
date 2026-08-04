@@ -2,6 +2,21 @@
 
 本日志记录逻辑改动、首先失败的测试、所有权迁移、依赖变化、反思和风险。本轮尚未提交的条目以 `N/A (working tree)` 标记；不会虚构 SHA。
 
+## 2026-08-04 — Hub 收敛为 Device Onboarding 与 Provider Handoff
+
+- 修改目标：人工 Approval 后由 Provider 完全接管，Hub 不再重复维护长期设备连接、在线状态或 Channel lifecycle。
+- 修改前行为：设备先完成 P-256 Challenge/Proof，Hub 持久化 Session、Heartbeat/Lease/Close，并以有效 Session 推导 Directory `online`；审批后通过 Register retry Provision。
+- 首先失败：大范围删除后首次全量回归为 `119 passed, 2 failed`；失败分别是架构测试把已无源码的空 `sessions` 目录视为遗留，以及 Query fixture 的 kind 与过滤断言不一致。修正门禁为检查源码文件、修正 fixture 后全量通过。
+- 领域变化：生命周期改为 `pending-approval / approved / revoked`；新增有界 Enrollment、retrieval token hash/window 和 Handoff；approved 明确不代表 online。
+- 安全反思：retrieval token 只关联 Enrollment 创建方，不是物理设备认证。小程序必须通过二维码、短码、BLE/SoftAP 或物理确认完成带外识别，人工 Approval 才是授权边界。复查还发现 FastAPI 默认 422 会反射无效 Token 原文；Production App 现统一移除校验错误的 `input/url`，并由 Component 测试锁定。
+- 代码/契约：删除 Challenge/Proof/Session/Heartbeat/Close/online/Directory Worker；Registration Schema 改为 Descriptor/Enrollment/Handoff；Provider Assignment 仍为请求级 opaque relay。
+- Persistence：从 Device/Session/Challenge/Directory/Event 五表收敛为 `hub_devices` 与 `hub_events` 两表；内存 Directory 直接由设备事实重建，无 migration 或兼容。真实旧库再次确认 0 设备、0 事件后移动到 `/private/tmp/eidolon-hub-before-onboarding-handoff.sqlite3`，当前 ORM 已重建新库并确认 WAL。
+- 配置/依赖：`device_access` 改为 `onboarding`；删除 Session Lease Secret、直接 `cryptography` 和旧配置；保留 Management JWT 与 Provider Token。
+- 测试：Architecture `25 passed`；Unit `67 passed`；Contract `15 passed`；Component `9 passed`；Functional `4 passed`；E2E `1 passed`；最终全量 `121 passed in 4.28s`、无 skip。Domain/Application branch `97%`（432 statements、114 branches）。Contract generation、Ruff、Import Linter、lock check 全部通过；clean wheel 为 96 files，不含已删除 runtime。
+- 未证明：真实小程序带外确认、真实设备/兄弟项目 conformance、生产 TLS/DNS/VLAN、Provider/DB restart、网络分区和 Provider credential 撤销窗口。
+- ADR：新增 0018，修订 0013/0015/0016/0017 的长期 Session、online 和 Register retry 结论。
+- Commit SHA：`N/A (working tree)`。
+
 ## 2026-08-01 — Characterization baseline
 
 - 目标：在改变入口前固定设备审批、注册、命令、Guard/Sense、blackboard 与 mDNS 的有价值行为。
@@ -175,4 +190,94 @@
 - 测试：Runtime Adapter Unit `2 passed`；Unit `92 passed`；Architecture `15 passed`；Import Linter `108 files / 179 dependencies / 3 contracts kept`；原 Composition/Deployment/E2E `6 passed`；本机 PostgreSQL 18/Mosquitto Cloud Infrastructure `3 passed`；注入基础设施的全量回归 `158 passed in 10.77s`、无 skip；全 Hub branch coverage `78%`。
 - 架构反思：把装配逻辑拆成工厂并不会创建多个 Composition Root；具体实现仍只在 `create_composed_app` 所有的生命周期内被选择一次。后续不应为了减少文件行数继续抽象，只有子系统依赖图或测试边界发生变化时才增加新的装配结构。
 - 风险：本次没有扩大生产基础设施证据；MQTT TLS/ACL、Broker/DB/Provider restart、网络分区和 rolling restart 仍是部署环境门禁。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-02 — Hub 收敛为纯 Device Manager
+
+- 修改目标：Hub 不再承担 Device Bus/data plane；全部 Command/State/Event/Data/Audio/Video 归属外部 Channel Provider。Hub 只保留设备管理和低频 Provision/Revoke/Lifecycle control。
+- 修改前行为：设备审批后调用独立 `/channels/acquire`；Hub 保存 Command Ledger，通过 Provider Data Bridge 双向中转 DataEnvelope，并用 Channel Cursor 做顺序/去重。
+- 首先失败与推动：删除实现后，旧 Unit/Functional/E2E 在 collection 直接引用 Command/DataEnvelope；这些测试不是兼容需求，而是错误所有权的证据，因此按新边界删除或重写。Provider 异常测试进一步暴露非法响应、设备幂等冲突都映射成 409，新增 `ChannelProviderContractError` 后分别映射 502/409，不可达保持 503。
+- Domain/Application：删除 commands domain、Send/Get/Ingest use case；`ProvisionDeviceChannels` 只验证通用对应关系/时间/状态，不要求 management purpose 或 kind。`RegisterDeviceAndProvision` 实现 pending approval 与审批后 Register retry。
+- Contract/API：删除 Channel Acquisition、Device Command、DataEnvelope Schema/DTO/example；注册响应新增 typed `DeviceRegistrationOutcome`；Provider 固定 Provision/Revoke，Gateway 只保留 Lifecycle。管理事件由 `DeviceBusEvent` 更名为 `DeviceManagementEvent` 并补充 JSON Schema。
+- Persistence：删除 `hub_commands`、`hub_channel_cursors`、对应 SQL Model/Repository/初始迁移；只保存 Channel Assignment metadata，opaque binding 仍不可持久化。
+- 安全状态机：首次注册返回 `approved=false, channels=[]`；未审批不向 Provider 请求可用 binding。审批后设备用新 request ID 在有效 Session 上重试注册，binding 只在该认证响应中转交。吊销先持久化 fail-closed 并关闭 Session/Channel metadata，再调用 Provider；Provider outage 时相同 operation ID 可重试。
+- 删除：Data Bridge、Command/Cursor runtime 与全部专用测试；无遗留兼容 Router、Schema 或表。
+- 分层测试：Unit `77 passed`；Architecture `16 passed`；Contract `12 passed`；Component `13 passed`；Local Functional `3 passed`；Deployment parity `2 passed`；TCP Contract E2E `1 passed`。
+- 覆盖率：Domain + Application branch suite `96.22%`（629 statements、192 branches），超过 90% 门禁。
+- 全量回归：默认 `124 passed, 2 skipped in 4.49s`；注入本机 PostgreSQL 18 DSN 后最终 `126 passed in 4.59s`，无 skip。Cloud isolation tests `2 passed in 0.47s`。
+- 工具门禁：Contract generation check、Ruff、Import Linter 和 dead-reference audit 纳入最终验收。
+- 架构反思：Hub↔Provider 是低频控制面，没有代码证据支持 gRPC stream；HTTP JSON 保持最小复杂度且可在 Adapter 替换。当前同步 revocation 没有 durable outbox，Provider 不可达期间旧 credential 的残余窗口必须由 Provider lease 上限约束，并留给后续故障注入验证，不能臆造为已解决。
+- ADR：新增 0013，取代 ADR 0005/0008 的 Device Bus/DataEnvelope 结论和 ADR 0011 的独立 Acquire 流程。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-03 — 删除内置 OpenTelemetry 集成
+
+- 修改目标：当前未确定 telemetry 平台和运行要求，不在 Hub 内提前集成第三方 Observability runtime。
+- 修改前行为：Composition 启动 OTLP/gRPC Trace、Metric、Log exporter 和 HTTP middleware；Cloud 配置必须提供 OTLP endpoint，并直接依赖 OpenTelemetry SDK/exporter、gRPC 和 protobuf。
+- 代码与配置：删除 `adapters/observability`、middleware 和 lifecycle；删除 Settings/YAML/环境变量；不添加 no-op Port。Hub 只保留 Python/Uvicorn 标准输出日志。
+- 依赖结果：`uv lock` 移除 OpenTelemetry 全族、`grpcio`、`protobuf` 和 `googleapis-common-protos`；`uv tree --frozen --depth 1 --no-dev` 只保留 Hub 实际运行依赖。
+- 防回归：Architecture 门禁断言 Observability 目录不存在、Settings 不含该字段、环境示例无 OTEL 变量且 Package Metadata 无 OpenTelemetry 直接依赖。
+- 测试：Unit `73 passed`；Architecture `17 passed`；Contract `12 passed`；Component `12 passed`；Functional `5 passed, 2 skipped`；E2E `1 passed`。默认全量 `120 passed, 2 skipped in 5.68s`；注入本机 PostgreSQL 18 DSN 后 `122 passed in 5.27s`，无 skip。
+- 覆盖率：Domain + Application branch `96.34%`（627 statements、192 branches），超过 90% 门禁。Contract generation、Ruff、Import Linter 和依赖锁检查均通过。
+- 架构反思：没有真实 consumer 和服务等级目标时，telemetry abstraction 只会增加虚假的可替换性。未来必须先明确平台、信号、采样、脱敏、失败语义和验收，再通过独立 ADR 重新引入。
+- ADR：0014 取代 ADR 0012 的内置 OpenTelemetry 条目。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-03 — 运行形态收敛为 Local-only 单进程 SQLite
+
+- 修改目标：保留 Contract/Domain/Application/Port/Adapter/Composition 分层，删除尚无真实产品证据的 Cloud/PostgreSQL/多实例分支，避免 Eidolon OS 所有兄弟项目被双模式复杂度绑架。
+- 修改前行为：`EIDOLON_HUB_PROFILE` 选择 Local/Cloud YAML；Persistence 同时支持 SQLite 与 asyncpg/PostgreSQL；Cloud 启动只检查 migration head；`DeviceAuthorityLease`、instance ID 和 fencing token 处理多实例设备竞争；Directory 周期全量 refresh 观察其他实例写入。
+- 首先失败：新增 Local-only Architecture characterization 后，测试首先因缺少单一 `config/settings.yaml`、Package Metadata 仍含 `asyncpg` 而失败，证明删除目标可被自动化观察；随后才修改生产代码。
+- 配置：合并为唯一严格 `config/settings.yaml`；删除 `settings.local.yaml`、`settings.cloud.yaml`、Profile/instance/PostgreSQL 环境变量。`.env` 只保存 Lease、Management JWT 和 Provider Token 三个 Secret。
+- Persistence：Composition 只创建 Hub 独占 SQLite，默认 `/Users/manson/eidolon/data/eidolon-hub.sqlite3`，启动执行 packaged Alembic migration；删除 PostgreSQL factory/pool、asyncpg、独立 migration CLI 和 Cloud Functional/Parity tests。初始迁移只保留六张当前业务表。
+- 单进程所有权：新增 `LocalProcessLock`，打开数据库前非阻塞独占 `<database>.lock`；第二个 Hub 进程共享同一路径时 fail closed。锁文件存在不等于锁被持有，正常退出释放内核锁。
+- Domain/Application：删除 Authority Entity/Repository、`hub_instance_id`、`fencing_token`、authority acquire/renew 和按最大 fence 过滤 Session；在线只由本进程持久 active Session 与 expiry 推导。
+- 热路径：Device Directory 仍为 SQLite authoritative + in-memory write-through，启动 hydrate、DB-first 更新；删除跨实例 background refresh，保留显式 refresh 与时间派生投影周期。
+- 身份边界：`tenant_id` 保留为本地逻辑 Realm。Cloud 删除不自动授权改变设备身份 Wire Contract；是否移除需另立契约决策。
+- 发布门禁：首次增量 wheel 构建暴露历史 `build/lib` 会重新打包已删 Data Bridge、Command、Acquire、Observability、旧 Schema 和 migration CLI。删除精确生成目录并 clean rebuild 后，wheel 为 `110 files`，只含单一 `config/settings.yaml`；METADATA 无 asyncpg/PostgreSQL。新增 Architecture 测试禁止现存 build cache 含有源码树已删除文件。
+- 测试：Architecture `19 passed`；Unit `68 passed`；Contract `12 passed`；Component `11 passed`；Local Functional `3 passed`；Contract E2E `1 passed`；全量 `114 passed in 4.48s`，无 skip。Domain + Application branch coverage `96.19%`（604 statements、184 branches）。
+- 架构反思：Repository Port 的价值是上层所有权隔离、Fake 行为测试和避免 SQL 泄漏，不代表当前承诺多数据库。若未来出现真实 HA/远程需求，必须先定义容量、故障模型、一致性和部署验收，再以新 ADR 重新设计，不能只恢复一个 Profile 分支。
+- ADR：新增 0015，取代 0006，并取代 0009/0012 中 PostgreSQL、Local/Cloud Profile、多实例和 fencing 条目。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-03 — Device Control Subsystem 状态、存储与查询契约收敛
+
+- 修改目标：以 Device Control Subsystem 标尺统一设备生命周期、Local 持久化和 OS 项目查询方式，避免把认证、在线、审批和 Channel 可用性塞进万能状态机。
+- 首先失败：新增 Contract test 在 collection 时缺少 `SessionCloseRequest`；Wire Identity 仍接受设备提交的 `tenant_id`；Directory 仍暴露 Session ID 和二次编码 Manifest。新增 Route/Query tests 同时冻结 Owner-scoped Get/List 和旧路径删除。
+- 状态模型：持久设备生命周期只保留 `pending-approval -> active -> revoked`，revoked 为终态；认证 Session、由有效 Lease 派生的 online 和 Provider Channel lifecycle 分开建模。删除 `approved + revoked` 双布尔组合。
+- 身份和 Provider 边界：删除设备可提交的 Authority Scope；Provider Provision 只传 device/hub/operation、fingerprint、Owner、display/kind、Manifest/revision。active + authenticated 已由调用资格表达，不再重复发送 approved/revoked/connected。
+- Persistence：SQLite 继续是 Local 单进程权威源，Device Directory 是 DB-first、in-memory write-through 热投影。新增 Alembic 0002，将 0001 的 tenant/双布尔无损转换为 lifecycle，并将旧 Directory JSON 转成 typed Manifest、Session count/expiry，删除公共 Session ID；真实配置库已从 0001 升到 0002，迁移前后均为 0 个设备。
+- Query/Application：新增 `GetDevice` 和 `ListDevices`。List 支持 lifecycle、online、kind、capability 和可选 UI `q`，所有输入有界，limit 为 1..100，结果按稳定 device ID cursor 分页。Router 只依赖 Query，不直接访问 Repository。
+- Transport 决策：不增加 Search RPC，不引入 gRPC/Protobuf。当前兄弟项目证据是 Admin Owner 列表/详情、Agent 能力过滤和 Channel 精确 ID 解析，均为低频控制查询；HTTP/JSON 保持 JSON Schema/OpenAPI 单一契约源并直接兼容小程序、浏览器和 Python 服务。
+- Contract：新增 Directory Page、Management Event 和公共 lifecycle Schema；Manifest 在 Directory 中为 typed object；Session Close request/response 分离且响应不回显 Lease token；内部持久事件改名为 Device Management Event Ledger，避免暗示系统消息总线。
+- 架构标尺：新增 `docs/architecture/device-control-subsystem.md` 和 ADR 0016；总览文档删除 Authenticated/Approved/Provisioned 混合状态机。
+- 测试：Architecture `21 passed`；Unit `77 passed`；Contract `16 passed`；Component `11 passed`；Local Functional `3 passed`；Contract E2E `1 passed`；全量 `129 passed in 4.55s`，无 skip。Domain + Application branch coverage `95%`（670 statements、208 branches）。Contract generation、Ruff、Import Linter、clean wheel build 与 stale-file audit 均通过；wheel `118` entries，无 retired runtime 或 gRPC/NATS/MQTT/LiveKit dependency。
+- 架构反思：SQLite 适合当前设备规模、单进程写入者和本地故障域；内存索引优先于提前引入远程数据库。只有真实容量、HA 或远程共享需求越过该边界时，才以新 ADR 重选存储。Transport 也只应在 profiling 证明 HTTP 控制查询成为瓶颈后替换 Adapter。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-03 — 删除数据库迁移与开发期兼容层
+
+- 修改目标：项目仍在开发期，不维护 SQLite 历史结构。当前 ORM Model 是唯一 Schema，删除 migration、downgrade、旧列/旧 Directory 转换和 revision 元数据。
+- 首先失败：新增 Architecture/Database tests 首先因仍有 Alembic dependency、migrations 目录以及缺少 `initialize_schema` 而失败；旧 Schema 测试明确要求“不修改后拒绝”，防止兼容逻辑换名回归。
+- 运行时：`HubDatabase.initialize_schema` 在空库直接按 `Base.metadata.create_all` 建表；非空库严格比较业务表和列集合，任何缺失或额外结构都 fail-fast 并要求删除独占数据库后重建。不存在自动 ALTER、数据转换或隐式接管。
+- 删除：整个 `hub/adapters/persistence/migrations`、0001/0002、Alembic env/template、迁移/降级 API 和兼容测试；`pyproject.toml`/`uv.lock` 移除 Alembic 与 Mako，package data 不再包含 migration 文件。
+- 配置库：真实数据库业务表已是当前结构且设备数为 0；仅删除废弃的 `alembic_version` 表，再由新初始化器成功严格校验。现在数据库只包含六张当前 ORM 业务表。
+- 测试：Architecture `22 passed`；Unit `76 passed`；Contract `16 passed`；Component `11 passed`；Local Functional `3 passed`；Contract E2E `1 passed`；最终全量为 `129 passed in 4.21s`，无 skip。Domain + Application branch coverage `95%`（670 statements、208 branches）。Clean wheel 为 `112` entries，不含 migration 文件、Alembic/Mako dependency 或旧 revision。
+- 架构反思：Repository Port 负责隔离持久化细节，不等于必须维护历史 Schema。开发期 fail-fast 重建比未经产品授权的数据迁移更清晰；进入需要保留用户数据的发布阶段前，必须重新决策 Schema 生命周期，而不能继续依赖 `create_all` 处理演进。
+- Commit SHA：`N/A (working tree)`。
+
+## 2026-08-03 — `hub/` 逐文件死代码审计与 Channel 状态所有权收口
+
+- 修改目标：逐一阅读 `hub/` 的手写模块、Schema、生成 shape 和 example，以“Hub 只做跨会话 Device Manager”为删除标尺，不保留开发期兼容或只被旧测试托住的实现。
+- 首先失败：先把测试改为无 Provider ingress、无 Channel Repository、Assignment 仅请求级透传；目标 Unit/Component 首次得到 `12 failed, 2 passed`，失败点正是旧构造参数与 Lifecycle route。
+- 关键发现：`hub_channel_assignments` 只有 Provision/Lifecycle 写入路径；Directory、在线、管理查询、授权、事件流和 Revoke 都不读取。Hub 因此无收益地复制了 Provider 状态机。
+- 整链删除：`ChannelLease/ChannelState/ChannelLifecycle`、Repository/SQL Model/第六张表、Record Use Case、Lifecycle Schema/generated shape/Mapper、Provider Gateway Router、Composition 入站服务和三组专用旧测试。保留唯一 outbound Provider Provision/Revoke Port 与请求级 Assignment 校验/opaque relay。
+- 局部删减：Enrollment 不再返回 Router 立即丢弃的 fingerprint；Session Entity 不再提供无人使用的隐式系统时钟或重复 credential 比较参数；Heartbeat/Close 不再把高频 Session traffic 写入永久管理审计。
+- 存储反思：Session/Challenge 的 `version` 从未参与条件更新，SQLite `SELECT FOR UPDATE` 又不提供行锁，属于虚假并发保障；Directory 的 updated/revision 列完整重复 typed payload 且不用于查询。删除这些字段后，Challenge consume 使用 `consumed=false` 条件原子更新，Directory 本地写入在 memory-hot write-through Adapter 中串行化。
+- 数据库：配置库原六表均为 0 行；旧空库移动到 `/private/tmp/eidolon-hub-before-dead-code-prune.sqlite3`，当前 ORM 已重建五张表，Challenge/Session/Directory 均不含废弃字段。
+- 逐文件证据：`docs/testing/code-inventory.md` 为全部手写生产模块给出处置理由，并逐对登记 15 个 Schema source 与 generated shape；剩余每个模块均有真实装配/调用或明确边界责任。
+- 测试：Architecture `24 passed`；Unit `71 passed`；Contract `14 passed`；Component `12 passed`；Local Functional `3 passed`；Contract E2E `1 passed`；全量 `125 passed in 3.48s`，无 skip。Domain/Application branch suite `87 passed`，579 statements、166 branches，覆盖 `97%`。
+- 工具与发布：Contract generation freshness、Ruff、Import Linter（84 files / 127 dependencies / 3 contracts kept）通过；clean wheel `108 files`，不包含 Provider Gateway、Channel lifecycle/persistence、旧 data/command/migration runtime。
+- ADR：新增 0017，明确 Assignment 是请求级透传而非 Hub 状态；更新 0010/0011/0013/0016 的取代关系和当前结论。
+- 恢复性：本轮源码删除仍可由 Git 恢复；旧空数据库备份在 `/private/tmp`，缓存与构建产物可重新生成。
 - Commit SHA：`N/A (working tree)`。

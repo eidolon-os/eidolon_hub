@@ -1,4 +1,4 @@
-"""Eidolon Hub ASGI entry point."""
+"""Eidolon Hub onboarding and management ASGI entry point."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from hub.composition.app import create_composed_app
 
 
 def create_app() -> FastAPI:
-    """Create the production device access and management application."""
+    """Create the production device onboarding and management application."""
     return create_composed_app()
 
 
