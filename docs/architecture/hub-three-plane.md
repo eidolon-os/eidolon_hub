@@ -10,12 +10,15 @@ flowchart LR
     Core["Registry + Policy Authority"]
     App["Mini App / Admin"]
     Provider["External Channel Provider"]
+    Kernel["eidolon_kernel<br/>Owner Namespace + Device Mount"]
     Memory["Memory-hot Directory"]
     DB["SQLite<br/>devices + events"]
     Consumers["OS metadata consumers"]
 
     Device --> Intro --> Onboarding --> Core
     App -->|"Approve / Revoke"| Core
+    App -->|"Mount / Unmount"| Kernel
+    Kernel -->|"validate approved + Owner"| Memory
     Core -->|"Provision / Revoke"| Provider
     Provider -->|"opaque assignment"| Core --> Onboarding --> Device
     Device -. "long-lived channel and data" .-> Provider
@@ -31,6 +34,7 @@ flowchart LR
 | Registry/Policy | Identity、Manifest、Owner、批准和吊销 | 设备业务状态与 Channel presence |
 | Directory | Owner-scoped metadata Get/List、管理事件 | Command、State、Event、A/V |
 | Provider Control | typed Provision/Revoke、opaque relay | backend 选择、credential 与 Channel lifecycle |
+| Kernel | Owner-scoped approved Device Get | Owner profile、Companion、Mount 与 OS Namespace |
 
 ## Enrollment、Approval 与 Handoff
 
@@ -40,13 +44,16 @@ sequenceDiagram
     participant H as Hub
     participant DB as SQLite
     participant A as Mini App
+    participant K as Kernel
     participant P as Provider
 
     D->>H: Enrollment(identity, manifest, retrieval token)
     H->>DB: persist pending-approval + token hash
     H-->>D: enrollment_id + expiry
     A->>H: Approve(device_id, owner_id)
-    H->>DB: approved + finite handoff window
+    H->>DB: atomic approved + audit + finite handoff window
+    A->>K: Mount(device_id, owner_id, companion_id)
+    K->>H: validate approved Device in Owner scope
     D->>H: Handoff(enrollment_id, retrieval token)
     H->>P: Provision(operation_id=enrollment_id, device facts)
     P-->>H: generic assignments + opaque bindings
@@ -64,7 +71,7 @@ Provider Assignment 只存在于当前调用栈。Provider 按稳定 `enrollment
 
 设备完成 Handoff 后，Command、State、Event、realtime data、Audio 和 Video 永不通过 Hub。Provider 可自行使用 MQTT、WSS、LiveKit 等 backend。
 
-SQLite 是唯一权威源，只有 `hub_devices` 与 `hub_events`。公共 Directory 是内存投影，启动直接扫描 `hub_devices` 重建；没有重复持久化投影。Composition 在打开数据库前获取 `<database>.lock` 非阻塞独占锁，第二个 Hub 进程 fail closed。
+SQLite 是唯一权威源，只有 `hub_devices` 与 `hub_events`。Device Mutation 使用同一事务提交设备事实、幂等标记和审计事件；非原子 Device upsert/Event publish 入口不存在。公共 Directory 是内存投影，启动直接扫描 `hub_devices` 重建，幂等重试可修复提交后的投影失败；没有重复持久化投影。Composition 在打开数据库前获取 `<database>.lock` 非阻塞独占锁，第二个 Hub 进程 fail closed。
 
 Hub 不依赖 NATS、MQTT、LiveKit、`eidolon_channel`、`eidolon_data`、`eidolon_sdk`、PostgreSQL 或 OpenTelemetry。HTTP Provider Control 是低频 Request/Reply；在没有 profiling 证据前不增加 gRPC。
 
@@ -82,3 +89,5 @@ main        -> composition
 ```
 
 Composition Root 是唯一具体实现选择位置；Domain/Application 不出现 FastAPI、SQLAlchemy、HTTPX、Zeroconf 或 Provider backend 分支。
+
+Hub 与 Kernel 不互相导入或反向调用。Hub 拥有 Device→Owner Admission，Kernel 拥有同一 Owner Namespace 内唯一的 Device→Companion Mount；Owner profile 和账号资料由事实拥有方管理，不复制进两个 Core。

@@ -24,6 +24,8 @@ Hub 已从长期 Device Manager 进一步收敛为 **Device Onboarding、Registr
 flowchart LR
     D["New Device"] --> I["mDNS / commissioned URI"] --> O["Enroll / Handoff"]
     M["Mini App / Admin"] -->|"Approve / Revoke"| C["Registry + Policy"]
+    M -->|"Mount / Unmount"| K["eidolon_kernel<br/>Owner Namespace + Device Mount"]
+    K -->|"approved Device Get"| C
     O --> C
     C -->|"Provision / Revoke"| P["External Provider"]
     P -->|"opaque assignment"| C --> O --> D
@@ -40,7 +42,7 @@ Device Enrollment 未经过长期认证会话。设备提交高熵 retrieval tok
 |---|---|
 | `hub/domain` | Device、Manifest、Provider-neutral Assignment 不变量 |
 | `hub/application` | Enroll/Handoff/Approve/Revoke、Provision、Get/List、Directory 投影 |
-| `hub/ports` | Device/Directory Repository、Token、Provider、授权、管理事件接口 |
+| `hub/ports` | Device 只读 Repository、原子 Mutation、Directory、Token、Provider、授权、管理事件接口 |
 | `hub/contracts` | 13 个 JSON Schema、生成 shape、严格 Binding 与 Mapper |
 | `hub/adapters` | SQLite、内存 Directory、Provider HTTP、Zeroconf、JWT、Token hash、Clock/ID/锁 |
 | `hub/interfaces` | Device Onboarding 与 Device Management HTTP Router |
@@ -57,7 +59,9 @@ Domain/Application 不导入 FastAPI、SQLAlchemy、HTTPX 或 Zeroconf；Router 
 | `hub_devices` | Enrollment、Token hash/窗口、Identity、Manifest、Owner、生命周期与幂等事实 |
 | `hub_events` | 有序管理审计 |
 
-启动时从 `hub_devices` 直接生成内存 Directory，Get/List 不访问 SQLite。变更路径 DB-first，再更新投影。没有重复 Directory 表；授权与 Handoff 始终读取权威 Device Repository，不信任公共投影。
+启动时从 `hub_devices` 直接生成内存 Directory，Get/List 不访问 SQLite。Device、request 幂等标记和 Management Audit 在一个 Unit of Work 事务内提交，再更新投影；幂等重试可修复提交后的投影失败。没有非原子 Device upsert/Event publish 入口或重复 Directory 表；授权与 Handoff 始终读取权威 Device Repository，不信任公共投影。
+
+Approval/Revocation 的审计 `principal_id` 来自 JWT Authorizer 验证后的 `sub`，并参与幂等 fingerprint；请求体不能自报操作主体。它和设备归属的 `owner_id` 是正交维度，不会制造第二套 Owner namespace。
 
 ORM 是唯一 Schema，空库直接建表；旧结构 fail-fast，无 migration 或兼容。SQLite WAL 与 `<database>.lock` 限定单机单进程。
 
@@ -75,7 +79,7 @@ Management API：Owner-scoped Device Get/List、Event cursor、Approval 与 Revo
 
 ## 6. 已有与尚缺证据
 
-当前全量自动化回归为 `121 passed`，覆盖架构边界、状态不变量、Token hash、两表 SQLite、内存投影、HTTP 路由、Provider 控制和本地黑盒重启恢复。
+当前全量自动化回归为 `128 passed`，覆盖架构边界、状态不变量、Token hash、canonical 幂等 fingerprint、JWT subject 审计、Device+Audit 原子回滚/并发冲突、幂等投影修复、两表 SQLite、内存投影、HTTP 路由、Provider 控制和本地黑盒重启恢复。
 
 它不证明以下外部事实：
 
@@ -83,7 +87,8 @@ Management API：Owner-scoped Device Get/List、Event cursor、Approval 与 Revo
 - 真实小程序的带外设备确认体验；
 - 真实设备固件 conformance；
 - `eidolon_channel`、`eidolon_admin`、`eidolon_agent` 已对接；
+- Kernel Hub consumer 已通过测试，但真实 Companion Authority 尚无稳定契约，production Mount 当前 fail closed；
 - 生产 TLS/DNS/VLAN、多接口 mDNS 和网络故障恢复；
 - Provider Revoke 的 credential 最终失效窗口。
 
-下一阶段不应向 Hub 加回 Session 或 data plane，而应先补充真实配网安全/体验协议和故障测试，再按 Provider Contract 对接 `eidolon_channel`。
+Owner 在 OS 中收敛为 Kernel 根 Security/Namespace principal；Hub 只拥有 Device→Owner Admission，Kernel 只拥有同一 Owner scope 内 Device→Companion Mount，两个项目都不复制 Owner profile。下一阶段不应向 Hub 加回 Session、Mount 或 data plane，而应先补充真实配网安全/体验协议、Companion Authority 和故障测试，再按 Provider Contract 对接 `eidolon_channel`。

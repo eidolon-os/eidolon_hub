@@ -320,6 +320,23 @@ def test_internal_device_management_events_are_not_named_as_a_system_bus() -> No
     assert "SqlEventBus" not in sources
 
 
+def test_device_facts_and_audit_events_only_use_atomic_mutation_boundary() -> None:
+    repository_port = (ROOT / "hub" / "ports" / "repositories.py").read_text()
+    persistence = (
+        ROOT / "hub" / "adapters" / "persistence" / "repositories.py"
+    ).read_text()
+    mutation_sources = "\n".join(
+        path.read_text()
+        for path in (ROOT / "hub" / "application" / "use_cases").glob("*.py")
+    )
+
+    assert "class DeviceMutationUnitOfWork" in repository_port
+    assert "async def upsert(self, device" not in repository_port
+    assert "async def publish(self, event" not in persistence
+    assert "_devices.upsert(" not in mutation_sources
+    assert "_events.publish(" not in mutation_sources
+
+
 def test_device_management_query_contract_does_not_add_grpc_tooling() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = "\n".join(project["project"]["dependencies"]).lower()

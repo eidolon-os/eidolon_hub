@@ -33,7 +33,7 @@ def build_device_management(
         list_devices=ListDevices(directory),
         approve_device=ApproveDevice(
             devices=repositories.devices,
-            events=repositories.management_events,
+            mutations=repositories.device_mutations,
             clock=clock,
             handoff_ttl=handoff_ttl,
             directory_projector=projector,
@@ -42,7 +42,7 @@ def build_device_management(
             devices=repositories.devices,
             provider=provider,
             hub_id=hub_id,
-            events=repositories.management_events,
+            mutations=repositories.device_mutations,
             clock=clock,
             directory_projector=projector,
         ),

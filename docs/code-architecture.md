@@ -8,13 +8,13 @@
 ```text
 hub.main:app
   -> composition.app.create_composed_app
-  -> resources: process lock + SQLite + repositories + memory directory + HTTP client
+  -> resources: process lock + SQLite + read repositories + atomic mutations + memory directory + HTTP client
   -> hydrate directory from hub_devices
   -> device_onboarding / management / channel_control composition
   -> onboarding and management routers
 ```
 
-设备路径是 `Descriptor -> Enrollment -> Human Approval -> Handoff -> Provider`。Handoff 后设备不再访问 Hub；没有 Session、Heartbeat 或 data plane。
+设备路径是 `Descriptor -> Enrollment -> Human Approval -> Handoff -> Provider`。Approval 后，管理端可独立调用 Kernel Mount；Kernel 通过 Owner-scoped Get 回读 Hub 准入事实。Handoff 后设备不再访问 Hub；没有 Session、Heartbeat 或 data plane。
 
 ## 2. 依赖方向
 
@@ -48,11 +48,12 @@ Domain 不含 HTTP、ORM、Pydantic、配置或 Provider backend 类型。
 
 | 文件 | 作用 |
 |---|---|
-| `application/use_cases/enroll_device.py` | 幂等创建有界 Enrollment，保存 Token hash 和 pending 设备，写管理事件并投影。 |
+| `application/idempotency.py` | 将操作名与命名参数编码为 canonical JSON，并生成无分隔符碰撞的 SHA-256 fingerprint。 |
+| `application/use_cases/enroll_device.py` | 幂等创建有界 Enrollment，以一个 Mutation 原子保存 Token hash、pending 设备和管理事件，再投影。 |
 | `application/use_cases/handoff_device.py` | 校验 Enrollment、Token、窗口和策略；approved 时调用 Provision。 |
 | `application/use_cases/provision_device_channels.py` | 建立最小受信 Provider context，校验返回关联性/有效期，返回请求级 Assignment。 |
-| `application/use_cases/approve_device.py` | 人工批准、绑定 Owner、打开有限 Handoff 窗口并审计。 |
-| `application/use_cases/revoke_device.py` | 终态吊销、审计/投影后通知 Provider Revoke。 |
+| `application/use_cases/approve_device.py` | 人工批准、绑定 Owner，以一个 Mutation 原子打开有限 Handoff 窗口并审计。 |
+| `application/use_cases/revoke_device.py` | 以一个 Mutation 原子终态吊销并审计，投影后幂等通知 Provider Revoke。 |
 | `application/queries/get_device.py` | 从内存 Directory 按稳定 ID读取并强制 Owner scope。 |
 | `application/queries/list_devices.py` | Owner-scoped 结构化过滤、搜索、稳定 cursor 和有界分页。 |
 | `application/projections/device_directory.py` | 由权威 Device 事实生成安全 Directory Entry，并支持启动全量重建。 |
@@ -63,10 +64,10 @@ Application 只依赖 Domain 与 Port，不知道 HTTP status、SQLite 或 Provi
 
 | 文件 | 接口责任 |
 |---|---|
-| `ports/repositories.py` | `DeviceRepository`、`DeviceDirectoryRepository` 与 Projector 接口。 |
-| `ports/identity.py` | Clock、ID、retrieval token hash/verify、Management Authorizer。 |
+| `ports/repositories.py` | 只读 `DeviceRepository`、原子 `DeviceMutationUnitOfWork`、Directory Repository 与 Projector 接口。 |
+| `ports/identity.py` | Clock、ID、retrieval token hash/verify、Management Authorizer 与认证后的 Management Principal。 |
 | `ports/channels.py` | 唯一出站 `ChannelProviderControl` Provision/Revoke 和契约错误。 |
-| `ports/management_events.py` | 低频管理审计 Sink/Stream 和持久记录，不是通用消息总线。 |
+| `ports/management_events.py` | 带操作 `principal_id` 的低频管理审计值与只读 Stream，不是独立 Publish Port 或通用消息总线。 |
 
 Port 表示所有权和测试边界，不表示预埋多套实现。
 
@@ -76,10 +77,10 @@ Port 表示所有权和测试边界，不表示预埋多套实现。
 |---|---|
 | `adapters/persistence/models.py` | `hub_devices` 与 `hub_events` 两张表的唯一 ORM Schema。 |
 | `adapters/persistence/database.py` | SQLite async engine、WAL、空库建表和非空 Schema 严格核对。 |
-| `adapters/persistence/repositories.py` | SQL Device Repository 与 Management Event Ledger。 |
+| `adapters/persistence/repositories.py` | SQL Device 只读 Repository、原子 Device+Audit Unit of Work 与 Management Event Ledger。 |
 | `adapters/persistence/memory.py` | 纯进程内 Device Directory，不做第二份持久化。 |
 | `adapters/security/enrollment_token.py` | SHA-256 Token hash 与 constant-time verify；明文不持久化。 |
-| `adapters/security/management_jwt.py` | 校验管理 JWT、audience、role 和 Owner scope。 |
+| `adapters/security/management_jwt.py` | 校验管理 JWT、audience、role、Owner scope 和 `sub`，返回不可伪造的操作 Principal。 |
 | `adapters/channels/provider_client.py` | HTTP Request/Reply Provider Control；封装 Bearer、超时、网络和响应契约错误。 |
 | `adapters/discovery/zeroconf.py` | 在活跃 IPv4/IPv6 接口发布同链路 Descriptor/Enrollment URI，处理接口更新。 |
 | `adapters/runtime.py` | 系统 Clock、安全随机 ID 与 SQLite 本地独占文件锁。 |
@@ -133,10 +134,29 @@ Composition Root 是唯一具体实现选择位置。Router 不读取 `app.state
 
 Hub 内没有 Session、Challenge、online、Command、State、Event payload、Channel metadata 或 credential 持久状态。
 
-## 10. 无效代码判定规则
+Device Mutation 的唯一写路径是：
+
+```text
+Use Case read immutable Device snapshot
+  -> DeviceMutationUnitOfWork.commit(expected, next, audit)
+  -> one SQLite transaction: hub_devices + hub_events
+  -> commit
+  -> rebuild that Device's memory projection
+```
+
+`expected` 不匹配返回并发冲突；事件校验、唯一约束或数据库写入失败会同时回滚 Device 和 Audit。投影失败不回滚已提交权威事实，但同一 request ID 的幂等重试会重新投影。
+
+## 10. Owner 与 Kernel
+
+Hub 把 `owner_id` 作为稳定、不透明的 OS 根 principal ID，只保存 Device→Owner Admission。Owner profile、账号和 Persona 不进入 Hub。Kernel 读取 Hub 准入事实并拥有同一 Owner Namespace 内唯一的 Device→Companion Mount；Hub 不出现 `companion_id` 或 Kernel client。
+
+Hub 管理入口另保留最窄的操作审计身份：Authorizer 从 JWT `sub` 生成 `ManagementPrincipal.subject_id`，Router 只把它作为 Approval/Revocation 的 `principal_id` 传入 Application，事件与幂等 fingerprint 同时绑定该值。它回答“谁执行了管理操作”，不建立第二个 Owner namespace，也不能由 request payload 指定。
+
+## 11. 无效代码判定规则
 
 - 表达 Handoff 后长期连接、心跳、online 或 data plane 的代码应删除。
 - 在 Core 中按 MQTT/LiveKit/Provider backend 分支的代码应删除或移到 Provider。
 - 重复持久化可由 `hub_devices` 重建的 Directory 应删除。
+- 绕过 `DeviceMutationUnitOfWork` 单独写 Device 或 Management Event 的入口应删除。
 - 未被 Composition、测试或生成流程引用，且不代表契约/Port 边界的模块应删除。
 - 历史兼容和数据库 migration 不属于开发期当前产品。

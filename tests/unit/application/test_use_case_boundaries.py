@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from hub.application.idempotency import mutation_fingerprint
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
@@ -13,6 +14,7 @@ from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
+PRINCIPAL = "owner-operator"
 
 
 class _Clock:
@@ -27,7 +29,8 @@ class _Devices:
     async def get(self, device_id):
         return self.device if self.device and self.device.identity.device_id == device_id else None
 
-    async def upsert(self, device):
+    async def commit(self, *, expected, device, event):
+        assert self.device == expected
         self.device = device
         return device
 
@@ -77,7 +80,7 @@ def _device(**changes):
 def _approve(devices):
     return ApproveDevice(
         devices=devices,
-        events=_Recorder(),
+        mutations=devices,
         clock=_Clock(),
         handoff_ttl=timedelta(minutes=30),
         directory_projector=_Recorder(),
@@ -92,15 +95,24 @@ async def test_directory_missing_device_is_explicit() -> None:
 async def test_approval_rejects_invalid_owner_missing_device_and_revoked_device() -> None:
     with pytest.raises(ValueError, match="owner_id"):
         await _approve(_Devices()).execute(
-            device_id="device-1", owner_id="", request_id="request-1"
+            device_id="device-1",
+            owner_id="",
+            request_id="request-1",
+            principal_id=PRINCIPAL,
         )
     with pytest.raises(KeyError):
         await _approve(_Devices()).execute(
-            device_id="missing", owner_id="owner-1", request_id="request-1"
+            device_id="missing",
+            owner_id="owner-1",
+            request_id="request-1",
+            principal_id=PRINCIPAL,
         )
     with pytest.raises(ValueError, match="revoked"):
         await _approve(_Devices(_device(lifecycle_state=DeviceLifecycleState.REVOKED))).execute(
-            device_id="device-1", owner_id="owner-1", request_id="request-1"
+            device_id="device-1",
+            owner_id="owner-1",
+            request_id="request-1",
+            principal_id=PRINCIPAL,
         )
 
 
@@ -110,23 +122,40 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
         devices=devices,
         provider=provider,
         hub_id="hub-1",
-        events=_Recorder(),
+        mutations=devices,
         clock=_Clock(),
         directory_projector=_Recorder(),
     )
     with pytest.raises(KeyError):
-        await revoke.execute(device_id="missing", reason="test", request_id="revoke-1")
+        await revoke.execute(
+            device_id="missing",
+            reason="test",
+            request_id="revoke-1",
+            principal_id=PRINCIPAL,
+        )
 
     devices.device = _device(
         lifecycle_state=DeviceLifecycleState.REVOKED,
         last_management_request_id="revoke-1",
-        last_management_fingerprint="revoke:test",
+        last_management_fingerprint=mutation_fingerprint(
+            "device.revoke", {"reason": "test", "principal_id": PRINCIPAL}
+        ),
     )
-    replay = await revoke.execute(device_id="device-1", reason="test", request_id="revoke-1")
+    replay = await revoke.execute(
+        device_id="device-1",
+        reason="test",
+        request_id="revoke-1",
+        principal_id=PRINCIPAL,
+    )
     assert replay.lifecycle_state is DeviceLifecycleState.REVOKED
     assert len(provider.revocations) == 1
     with pytest.raises(ValueError, match="reused"):
-        await revoke.execute(device_id="device-1", reason="other", request_id="revoke-1")
+        await revoke.execute(
+            device_id="device-1",
+            reason="other",
+            request_id="revoke-1",
+            principal_id=PRINCIPAL,
+        )
 
     devices.device = replace(
         devices.device,
@@ -134,4 +163,9 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
         owner_id="owner-1",
     )
     with pytest.raises(RuntimeError, match="inconsistent"):
-        await revoke.execute(device_id="device-1", reason="test", request_id="revoke-1")
+        await revoke.execute(
+            device_id="device-1",
+            reason="test",
+            request_id="revoke-1",
+            principal_id=PRINCIPAL,
+        )

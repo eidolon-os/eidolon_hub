@@ -55,8 +55,14 @@ async def test_device_manager_is_limited_to_its_owner_and_approved_devices() -> 
     devices = _Devices()
     authorizer = JwtOwnerManagementAuthorizer(secret=SECRET, devices=devices)
 
-    await authorizer.authorize(credential=_credential(), owner_scope="owner-1", device_id=None)
+    principal = await authorizer.authorize(
+        credential=_credential(), owner_scope="owner-1", device_id=None
+    )
     await authorizer.authorize(credential=_credential(), owner_scope=None, device_id="device-1")
+
+    assert principal.subject_id == "eidolon-agent/test"
+    assert principal.owner_id == "owner-1"
+    assert principal.roles == frozenset({"device-manager"})
 
     with pytest.raises(PermissionError, match="owner scope"):
         await authorizer.authorize(credential=_credential(), owner_scope="owner-2", device_id=None)

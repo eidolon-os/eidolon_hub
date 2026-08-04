@@ -8,6 +8,8 @@
 
 `eidolon_hub` 是 Eidolon OS 的 **Device Onboarding、Registry 与 Policy Authority**。它负责让一个尚未加入系统的设备被识别、等待人工批准、绑定 Owner，并安全取得外部 Channel Provider 的连接信息。
 
+Owner 是 OS 根安全/命名空间 principal。Hub 将设备准入到一个 Owner scope，但不拥有 Owner profile、账号资料或 Companion，也不拥有该 Owner scope 内部的 Device Mount。
+
 Provider 交接成功后，设备不再依赖 Hub。Hub 不是长期连接管理器、在线状态服务、Device Bus、Channel Gateway、命令服务或媒体服务。
 
 Hub 只拥有四类事实：
@@ -33,8 +35,9 @@ Hub 只拥有四类事实：
 - MQTT Topic、WSS、LiveKit Room、TURN、Codec 或媒体如何组织；
 - Command、State、Event、Audio、Video 如何传输或重试；
 - Channel credential 如何签发、更新和撤销。
+- 设备 Mount 到哪个 Companion、如何解析 OS Namespace 和跨服务安全上下文。
 
-这些都是 Channel Provider 或业务消费者的职责。
+长期通信属于 Channel Provider；Device Mount、Owner Namespace 与跨服务权威状态属于 `eidolon_kernel`。
 
 ## 3. 最小生命周期
 
@@ -88,7 +91,20 @@ Hub 只向一个配置的 Provider 调用：
 
 Provider 根据设备事实和自身配置决定 MQTT、WSS、LiveKit 或其他 backend，并返回通用 Assignment Envelope 与 `opaque_binding`。Hub 不理解、不持久化、不记录 binding 内容，只在当前 Handoff 调用栈中原样转交。
 
-## 6. 存储模型
+## 6. Kernel Contract 边界
+
+管理端/小程序负责编排两个独立、可重试的动作：
+
+1. 向 Hub Approval，将设备准入指定 Owner。
+2. 向 Kernel Mount，将 approved Device 挂入同一 Owner Namespace 下的 Companion。
+
+Kernel 只消费 Hub 已有的 Owner-scoped 精确 Device Get，验证稳定 Device ID、`approved` 和 Owner 匹配。Hub 不新增 Kernel 专用设备副本、不保存 `companion_id`、不导入或调用 Kernel。Approved 但 Unmounted 是安全中间态；Mount 失败不得回滚 Hub Approval。
+
+Kernel 把 `owner_id` 当作稳定、不透明的根 principal，只拥有 Namespace/Security Context 语义，不拥有用户资料。当前真实 Companion Authority 契约尚未稳定，Kernel 生产 Mount fail closed；该 blocker 不改变 Hub 边界。
+
+Hub 管理审计仍需记录实际执行者，但它不形成第二套 Owner。Approval/Revocation 的 `principal_id` 由 Management Authorizer 从已验证 JWT `sub` 取得，回答“谁执行”；`owner_id` 回答“设备属于哪个 OS namespace”。两者都进入原子 Device Mutation，且前者不能由管理请求体指定。Kernel V1 的 trusted-local 调用代表单一 Owner context，不要求把 Hub 的远端管理 Principal 复制进 Mount Domain。
+
+## 7. 存储模型
 
 Local-only Hub 使用独占 SQLite `/Users/manson/eidolon/data/eidolon-hub.sqlite3`：
 
@@ -97,11 +113,11 @@ Local-only Hub 使用独占 SQLite `/Users/manson/eidolon/data/eidolon-hub.sqlit
 | `hub_devices` | Enrollment、Token hash/窗口、Identity、Manifest、Owner、生命周期和幂等字段 |
 | `hub_events` | 有序、Owner-scoped 的低频管理审计 |
 
-Device Directory 是 `hub_devices` 的进程内安全投影。启动时直接从设备事实重建，Get/List 走内存；变更先提交 SQLite，再更新投影。数据库中不复制 Directory 表，也没有 Session、Challenge、Command、Channel 或 opaque binding 表。
+Device Directory 是 `hub_devices` 的进程内安全投影。启动时直接从设备事实重建，Get/List 走内存。Device Mutation 在一个 SQLite 事务内同时提交设备事实、请求幂等标记和管理审计，然后更新投影；幂等重试重新执行 Projector 以修复提交后的投影失败。数据库中不复制 Directory 表，也没有 Session、Challenge、Command、Channel 或 opaque binding 表。
 
 当前 ORM 是唯一 Schema。空库直接建表，旧或部分结构直接拒绝；开发阶段不提供 migration、兼容或转换脚本。SQLite 使用 WAL 和进程文件锁，仅支持本机单进程独占访问。
 
-## 7. 必须长期成立的不变量
+## 8. 必须长期成立的不变量
 
 1. Device ID 不依赖 IP、mDNS instance、MQTT client ID、LiveKit room 或 Channel ID。
 2. 设备不能自授 Owner、审批状态或 Channel credential。
@@ -111,6 +127,8 @@ Device Directory 是 `hub_devices` 的进程内安全投影。启动时直接从
 6. Router 只调用 Application Use Case/Query，不直接操作 SQLAlchemy。
 7. Domain/Application 不出现 FastAPI、SQLite、MQTT、LiveKit、NATS 或 Provider backend 判断。
 8. 所有集合查询有上限和稳定 cursor；所有变更操作可幂等重试。
-9. SQLite 写失败时不得只更新内存；内存投影可由权威设备事实重建。
+9. Device Fact、Mutation 幂等标记和 Management Audit 必须原子提交；失败时不得只更新设备或内存。
 10. Provider 交接后的连接、在线、数据和媒体职责不得回流 Hub。
-11. 新需求若越过本标尺，必须先更新 ADR 和本文，再修改代码。
+11. Hub 只拥有 Device→Owner 准入；Device→Companion Mount 与 Owner Namespace 只有 Kernel 一个权威。
+12. Hub 管理操作的审计 `principal_id` 只能来自认证边界；它与 Owner namespace 正交，不得成为第二个目标 Owner 参数。
+12. 新需求若越过本标尺，必须先更新 ADR 和本文，再修改代码。

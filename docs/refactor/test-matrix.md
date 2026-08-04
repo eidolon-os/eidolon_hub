@@ -10,6 +10,10 @@
 | Device data exclusion | Architecture + Component | boundary/route tests | 无 Command/State/Event/Data/Media API、表或 Repository |
 | Device Get/List | Unit + Contract + Component | query/device control/route tests | Owner scope、稳定 ID、filter/capability/q、有界 limit/cursor |
 | Memory Directory | Unit + Component + E2E | memory/projection/restart tests | 从 Device 事实启动重建、DB-first、隐私、Owner scope |
+| Device/Audit atomicity | Architecture + Unit + Component | mutation/projection/persistence tests | 单事务 commit/rollback、expected snapshot、event reuse rollback、retry repair projection |
+| Management audit principal | Unit + Contract + Functional | JWT/lifecycle/schema/control-flow tests | 操作主体只来自 JWT `sub`、事件与幂等 fingerprint 绑定、payload 不可伪造 |
+| Idempotency fingerprint | Unit + Component | enrollment/lifecycle/mutation tests | canonical JSON + SHA-256、delimiter collision、内容复用冲突 |
+| Kernel owner namespace | Architecture + Kernel consumed contract | Hub precise Get + Kernel Hub adapter tests | Device→Owner Admission 与 Device→Companion Mount 单一权威、跨 Owner fail closed |
 | Local-only Settings | Unit + Architecture | production config tests | 单 YAML、无 Profile/PostgreSQL/telemetry/Session、Secret 分离 |
 | Current ORM | Unit + Architecture + Component | database/persistence tests | 精确两表、空库建表、旧/部分结构 fail-fast、不修改 |
 | Single process | Unit + Architecture | runtime/boundary tests | SQLite 文件锁、第二进程 fail closed、无 fencing |

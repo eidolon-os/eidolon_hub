@@ -2,8 +2,26 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Protocol
+
+
+@dataclass(frozen=True, slots=True)
+class ManagementPrincipal:
+    """Authenticated management subject acting in an optional Owner namespace."""
+
+    subject_id: str
+    owner_id: str | None
+    roles: frozenset[str]
+
+    def __post_init__(self) -> None:
+        if not self.subject_id.strip() or len(self.subject_id) > 255:
+            raise ValueError("management principal subject_id is invalid")
+        if self.owner_id is not None and not self.owner_id.strip():
+            raise ValueError("management principal owner_id is invalid")
+        if not self.roles or any(not role.strip() for role in self.roles):
+            raise ValueError("management principal roles are invalid")
 
 
 class RetrievalTokenHasher(Protocol):
@@ -22,4 +40,4 @@ class IdGenerator(Protocol):
 class ManagementAuthorizer(Protocol):
     async def authorize(
         self, *, credential: str, owner_scope: str | None, device_id: str | None
-    ) -> None: ...
+    ) -> ManagementPrincipal: ...

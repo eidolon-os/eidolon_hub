@@ -2,6 +2,22 @@
 
 本日志记录逻辑改动、首先失败的测试、所有权迁移、依赖变化、反思和风险。本轮尚未提交的条目以 `N/A (working tree)` 标记；不会虚构 SHA。
 
+## 2026-08-04 — Hub 架构重构收尾：Device/Audit 原子性与 Kernel Owner Namespace
+
+- 修改目标：关闭最后一个 Hub 内部一致性缺口，并把 Device→Owner Admission 与 Kernel Device→Companion Mount 明确收敛到同一 OS Owner Namespace、两个单一权威。
+- 修改前行为：Enroll/Approve/Revoke 先独立提交 Device，再独立提交 Management Event，最后更新内存投影。设备提交后、事件/投影前失败时，幂等 request ID 已写入 Device，重试直接返回，无法补齐永久审计或当前进程投影。
+- 首先失败：新增 `tests/component/test_atomic_device_mutations.py` 后 collection 因 `ConcurrentDeviceMutationError`/Mutation Port 尚不存在而失败；新增 JWT Principal 断言时 Authorizer 返回 `None`；最终 delimiter-collision 两个用例证明冒号拼接的 Approval/Revoke fingerprint 会把不同参数误判为相同操作。这三项均为预期 Red gate。
+- 代码变化：新增窄 `DeviceMutationUnitOfWork.commit(expected, device, event)`；SQLite Adapter 在进程内异步写锁和一个事务内比较 expected immutable snapshot、写 `hub_devices`、写 `hub_events`。删除 Device Repository 非原子 `upsert` 和 Event Ledger 独立 Publish 入口。
+- 恢复语义：事件校验、并发 expected 冲突或任意 DB 写失败会回滚 Device+Audit；提交后投影失败由同一 request ID 幂等重试重新投影。Revoke 的 Provider 调用仍处于事务外并使用稳定 operation ID 重试，不伪造跨服务数据库事务。
+- OS 所有权：Owner 是 Kernel 根 Security/Namespace principal；Hub 只保存 Device→Owner Admission，不保存 Owner profile 或 `companion_id`。Kernel 回读 Hub Owner-scoped approved Device 并唯一拥有 Device→Companion Mount；Hub 不反向调用或导入 Kernel。
+- 审计主体：新增不可变 `ManagementPrincipal`；JWT Authorizer 校验 `sub` 后返回 Principal，Router 将其 subject 绑定到 Approval/Revocation 事件和 request fingerprint。`owner_id` 继续表示 OS namespace，`principal_id` 只回答谁执行了管理操作，且不能由 payload 伪造；Enrollment 显式记为 untrusted device principal。
+- 幂等语义：Enrollment/Approval/Revocation 不再使用换行或冒号拼接 fingerprint；统一将操作名和命名参数编码为 canonical JSON 后取 SHA-256，消除分隔符碰撞。
+- Schema/依赖：SQLite ORM 仍为两表，但 `hub_events` 与 Management Event Wire Contract 新增 required `principal_id`。确认旧开发库为 0 Device/0 Event 后可恢复地备份到 `/private/tmp/eidolon-hub-db-backup.WzNKvw`，并按当前 ORM 直接重建；无 migration、兼容或新增运行时依赖。
+- 测试：Architecture `26 passed`；Unit `70 passed`；Contract `15 passed`；Component `12 passed`；Functional `4 passed`；E2E `1 passed`；最终全量 `128 passed in 11.32s`、无 skip。Unit+Component+Functional 的 Domain/Application branch suite 为 `86 passed in 3.69s`、441 statements、114 branches、`97.30%`。Contract generation、Ruff、Import Linter 和 lock check 通过；clean wheel 构建通过，共 97 files，运行依赖不含 NATS、MQTT、LiveKit、SDK、Data、PostgreSQL 或 OpenTelemetry。
+- 未证明：真实小程序 pairing/Enrollment Grant、密码学 Hub trust anchor、真实 Device/Provider/Companion Authority、复杂网络 Connectivity 与 Provider revoke 残余 credential 窗口。这些进入跨项目产品里程碑，不回流为 Hub 结构重构。
+- ADR：新增 0019；同步更新 Normative 架构标尺和 OS 集成边界。
+- Commit：本条目随对应代码提交交付；最终 SHA 以 `git log` 为准。
+
 ## 2026-08-04 — Hub 收敛为 Device Onboarding 与 Provider Handoff
 
 - 修改目标：人工 Approval 后由 Provider 完全接管，Hub 不再重复维护长期设备连接、在线状态或 Channel lifecycle。

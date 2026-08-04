@@ -42,11 +42,29 @@ def _device(device_id="device-1", enrollment_id="enrollment-1"):
     )
 
 
+def _enrollment_event(device, event_id):
+    return DeviceManagementEventRecord(
+        event_id=event_id,
+        event_type="eidolon.device.enrolled.v1",
+        source="eidolon-hub/device-management",
+        principal_id=f"untrusted-device:{device.identity.device_id}",
+        subject=device.identity.device_id,
+        occurred_at=device.updated_at,
+        data={"manifest_revision": device.manifest_revision},
+    )
+
+
 async def test_device_round_trip_and_enrollment_lookup(database) -> None:
-    repository = SqlHubRepositories(database).devices
+    repositories = SqlHubRepositories(database)
+    repository = repositories.devices
     device = _device()
-    await repository.upsert(device)
-    await repository.upsert(device)
+    event = _enrollment_event(device, "event-1")
+    await repositories.device_mutations.commit(
+        expected=None, device=device, event=event
+    )
+    await repositories.device_mutations.commit(
+        expected=device, device=device, event=event
+    )
 
     assert await repository.get("device-1") == device
     assert await repository.get_by_enrollment_id("enrollment-1") == device
@@ -55,11 +73,17 @@ async def test_device_round_trip_and_enrollment_lookup(database) -> None:
 
 
 async def test_enrollment_id_is_unique_across_devices(database) -> None:
-    repository = SqlHubRepositories(database).devices
-    await repository.upsert(_device())
+    repositories = SqlHubRepositories(database)
+    first = _device()
+    await repositories.device_mutations.commit(
+        expected=None, device=first, event=_enrollment_event(first, "event-1")
+    )
 
     with pytest.raises(IntegrityError):
-        await repository.upsert(_device("device-2", "enrollment-1"))
+        second = _device("device-2", "enrollment-1")
+        await repositories.device_mutations.commit(
+            expected=None, device=second, event=_enrollment_event(second, "event-2")
+        )
 
 
 async def test_management_event_stream_is_owner_scoped_and_idempotent(database) -> None:
@@ -67,17 +91,21 @@ async def test_management_event_stream_is_owner_scoped_and_idempotent(database) 
     approved = replace(
         _device(), owner_id="owner-1", lifecycle_state=DeviceLifecycleState.APPROVED
     )
-    await repositories.devices.upsert(approved)
     event = DeviceManagementEventRecord(
         event_id="event-1",
         event_type="eidolon.device.approved.v1",
         source="eidolon-hub/device-management",
+        principal_id="owner-operator",
         subject="device-1",
         occurred_at=NOW,
         data={"owner_id": "owner-1"},
     )
-    await repositories.management_events.publish(event)
-    await repositories.management_events.publish(event)
+    await repositories.device_mutations.commit(
+        expected=None, device=approved, event=event
+    )
+    await repositories.device_mutations.commit(
+        expected=approved, device=approved, event=event
+    )
 
     stream = await repositories.management_events.list_after(
         owner_scope="owner-1", stream_position=0, limit=100
@@ -90,15 +118,24 @@ async def test_management_event_stream_is_owner_scoped_and_idempotent(database) 
 
 async def test_management_event_id_cannot_be_reused_with_other_content(database) -> None:
     repositories = SqlHubRepositories(database)
-    await repositories.devices.upsert(_device())
+    device = _device()
     event = DeviceManagementEventRecord(
         event_id="event-1",
         event_type="eidolon.device.enrolled.v1",
         source="eidolon-hub/device-management",
+        principal_id="untrusted-device:device-1",
         subject="device-1",
         occurred_at=NOW,
         data={"ok": True},
     )
-    await repositories.management_events.publish(event)
+    await repositories.device_mutations.commit(
+        expected=None, device=device, event=event
+    )
     with pytest.raises(ValueError, match="reused"):
-        await repositories.management_events.publish(replace(event, data={"ok": False}))
+        await repositories.device_mutations.commit(
+            expected=device,
+            device=replace(device, display_name="Changed"),
+            event=replace(event, data={"ok": False}),
+        )
+
+    assert await repositories.devices.get("device-1") == device

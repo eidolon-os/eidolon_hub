@@ -9,10 +9,10 @@
 
 | 层级 | 当前目标 |
 |---|---|
-| Architecture | 禁止 Session/online/data plane 复活；禁止 MQTT/NATS/SDK/Data/LiveKit 和跨层基础设施泄漏；禁止重复 Directory/Channel persistence |
-| Unit | Enrollment/Token/窗口、三态 policy、Handoff/Provision/Revoke、Get/List、JWT、mDNS、SQLite schema/锁、严格配置 |
+| Architecture | 禁止 Session/online/data plane 复活；禁止 MQTT/NATS/SDK/Data/LiveKit 和跨层基础设施泄漏；禁止重复 Directory/Channel persistence；禁止绕过原子 Mutation 单写 Device/Event |
+| Unit | Enrollment/Token/窗口、三态 policy、幂等投影修复、Handoff/Provision/Revoke、Get/List、JWT、mDNS、SQLite schema/锁、严格配置 |
 | Contract | 13 个 JSON Schema、生成模型 freshness、Enrollment golden example、Onboarding 与 Provider Provision/Revoke binding |
-| Component | 两表 SQLite Repository、启动 Directory 重建、Composition 生命周期和公开 routes |
+| Component | 两表 SQLite Repository、Device+Audit 原子回滚/expected 冲突、启动 Directory 重建、Composition 生命周期和公开 routes |
 | Functional | HTTPS Enrollment/Approval/Handoff，以及真实 HTTP Reference Provider Provision/Revoke |
 | E2E | 生产 Composition 黑盒完成 Enrollment、审批、opaque Handoff、查询/事件和 Hub 重启恢复 |
 

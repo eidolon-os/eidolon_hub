@@ -15,6 +15,7 @@ flowchart LR
     Provider["外部 Channel Provider<br/>WSS / MQTT / LiveKit 等"]
     Directory["Memory-hot Device Directory"]
     SQLite["Hub SQLite<br/>设备事实 + 管理审计"]
+    Kernel["eidolon_kernel<br/>Owner Namespace + Device Mount"]
     OS["Admin / Agent / OS 服务"]
 
     Device --> Intro --> Enroll --> Pending
@@ -25,6 +26,8 @@ flowchart LR
     Device -. "后续连接、心跳、数据和媒体" .-> Provider
     Enroll --> SQLite
     App --> SQLite
+    App -->|"Mount approved device"| Kernel
+    Kernel -->|"校验 approved + Owner"| Directory
     SQLite -->|"启动重建"| Directory --> OS
 ```
 
@@ -38,6 +41,7 @@ flowchart LR
 | Owner、人工审批和终态吊销 | Command、State、Event、Audio、Video |
 | Device Directory 与管理审计 | MQTT/WSS/LiveKit backend 和协议转换 |
 | 向单一 Provider 发起 Provision/Revoke | 解析或持久化 `opaque_binding` |
+| Device 到 Owner 的准入事实 | Device 到 Companion 的 Mount 与 OS Namespace |
 
 当前产品形态刻意收敛为 **Local-only、单进程、Hub 独占 SQLite**，没有 Cloud、PostgreSQL、多实例、NATS、MQTT、LiveKit 或 OpenTelemetry 运行时分支。
 
@@ -48,6 +52,7 @@ sequenceDiagram
     participant D as Device
     participant H as Hub
     participant A as Mini App
+    participant K as Kernel
     participant P as Channel Provider
 
     D->>H: POST /enrollments<br/>Identity + Manifest + retrieval_token
@@ -57,6 +62,9 @@ sequenceDiagram
         H-->>D: 202 pending-approval
     end
     A->>H: Approve(device_id, owner_id)
+    A->>K: Mount(device_id, owner_id, companion_id)
+    K->>H: Get approved device in owner scope
+    H-->>K: lifecycle + manifest revision
     D->>H: POST /enrollments/{id}/handoff
     H->>P: Provision(enrollment_id + device context)
     P-->>H: opaque Channel Assignment
@@ -83,6 +91,14 @@ stateDiagram-v2
 ```
 
 `approved` 只表示“获准进入 Eidolon OS”，不表示设备在线。设备在线、Channel 续约、重连和 Provider credential 生命周期全部由 Channel Provider 管理。
+
+## 与 eidolon_kernel 的边界
+
+Owner 是 Eidolon OS 的根安全与命名空间主体，`owner_id` 是稳定、不透明的 principal ID；它不是账号资料、Persona 或 Companion。Hub 只拥有“这个设备是否获准进入该 Owner 的设备域”这一准入事实，不拥有 Owner profile，也不决定设备 Mount 到哪个 Companion。
+
+`eidolon_kernel` 拥有 Device Mount 与 OS Namespace。管理端/小程序依次编排 Approval 和 Mount；Kernel 通过 Hub 的 Owner-scoped Device Get 校验设备为 approved 且 Owner 匹配。Hub 不导入 Kernel package、不调用 Kernel，也不保存 `companion_id`，从而避免 Hub↔Kernel 循环依赖和双重 Mount 权威。Approved 但尚未 Mount 是安全、可重试的中间状态。
+
+当前 Kernel 已实现 Hub HTTP consumer 和跨 Owner fail-closed 的 Mount Core；真实 Companion Authority 尚未发布稳定契约，因此完整生产 Mount E2E 仍未完成。这个 blocker 不应让 Mount 或 Owner 业务语义回流 Hub。
 
 ## 代码架构
 
@@ -134,6 +150,8 @@ Domain/Application 不导入 FastAPI、SQLAlchemy、HTTPX、Zeroconf 或具体 P
 | `POST /api/device-management/v1/devices/{device_id}/approval` | 人工审批并绑定 Owner |
 | `POST /api/device-management/v1/devices/{device_id}/revocation` | 终态吊销并通知 Provider |
 
+Kernel 只消费现有精确读取：`GET /api/device-management/v1/owners/{owner_scope}/devices/{device_id}`。Hub 不为 Kernel 新建第二套设备 DTO 或数据库访问通道。
+
 ### Channel Provider Control
 
 Hub 固定调用：
@@ -152,9 +170,11 @@ FastAPI 同时发布 `/openapi.json` 和 `/docs`。JSON Schema 是正式 Wire Co
 | 表 | 作用 |
 |---|---|
 | `hub_devices` | Enrollment、Token hash/窗口、Identity、Manifest、Owner 与生命周期权威事实 |
-| `hub_events` | 有序、Owner-scoped 的低频设备管理审计 |
+| `hub_events` | 有序、Owner-scoped 的低频设备管理审计；管理操作保存经 JWT 验证的 `sub` |
 
-公共 Device Directory 是 `hub_devices` 的安全内存投影：启动时从 SQLite 重建，Get/List 走内存；设备事实先写数据库再更新投影。没有重复的 Directory 表，也没有 Session、Challenge、Channel 或 Command 表。
+公共 Device Directory 是 `hub_devices` 的安全内存投影：启动时从 SQLite 重建，Get/List 走内存。Device Mutation 使用一个 SQLite Unit of Work，在同一事务提交设备事实、请求幂等标记和管理审计，再更新投影；幂等重试会从权威事实修复投影。没有重复的 Directory 表，也没有 Session、Challenge、Channel 或 Command 表。
+
+Owner 与操作审计主体是两个不同维度：`owner_id` 表示设备归属的 OS 根命名空间；`principal_id` 表示这次管理操作由哪个已认证 JWT `sub` 执行。请求体不能伪造后者。设备自行发起的 Enrollment 只记录显式的 `untrusted-device:{device_id}`，不把它提升为可信 Owner 身份。
 
 SQLite 使用 WAL，进程持有 `<database>.lock` 独占锁。空库按当前 ORM 建表；旧结构直接拒绝，不提供 migration、兼容、多实例或网络文件系统支持。
 

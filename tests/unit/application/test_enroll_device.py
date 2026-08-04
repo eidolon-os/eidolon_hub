@@ -37,11 +37,6 @@ class _Devices:
     async def get(self, device_id):
         return self.values.get(device_id)
 
-    async def upsert(self, device):
-        self.values[device.identity.device_id] = device
-        return device
-
-
 class _Recorder:
     def __init__(self):
         self.values = []
@@ -51,6 +46,28 @@ class _Recorder:
 
     async def execute(self, value):
         self.values.append(value)
+
+
+class _Mutations:
+    def __init__(self, devices, events):
+        self.devices = devices
+        self.events = events
+
+    async def commit(self, *, expected, device, event):
+        assert self.devices.values.get(device.identity.device_id) == expected
+        self.devices.values[device.identity.device_id] = device
+        self.events.values.append(event)
+        return device
+
+
+class _FailOnceProjector(_Recorder):
+    failures = 1
+
+    async def execute(self, value):
+        if self.failures:
+            self.failures -= 1
+            raise RuntimeError("projection failed")
+        await super().execute(value)
 
 
 def _intent(*, request_id="enroll-1", title="Device", token=TOKEN):
@@ -69,7 +86,7 @@ def _intent(*, request_id="enroll-1", title="Device", token=TOKEN):
 def _use_case(devices, events, projector, clock=None):
     return EnrollDevice(
         devices=devices,
-        events=events,
+        mutations=_Mutations(devices, events),
         clock=clock or _Clock(),
         ids=_Ids(),
         tokens=Sha256RetrievalTokenHasher(),
@@ -87,7 +104,7 @@ async def test_enrollment_is_idempotent_and_request_id_is_content_bound() -> Non
 
     assert retried == first
     assert len(events.values) == 1
-    assert projector.values == ["device-1"]
+    assert projector.values == ["device-1", "device-1"]
     assert first.retrieval_token_hash != TOKEN
     with pytest.raises(ValueError, match="different content"):
         await use_case.execute(_intent(title="Changed"))
@@ -126,3 +143,16 @@ async def test_idempotent_retry_detects_corrupt_fingerprint_metadata() -> None:
 
     with pytest.raises(ValueError, match="different content"):
         await use_case.execute(_intent())
+
+
+async def test_retry_repairs_projection_without_duplicating_audit() -> None:
+    devices, events, projector = _Devices(), _Recorder(), _FailOnceProjector()
+    use_case = _use_case(devices, events, projector)
+
+    with pytest.raises(RuntimeError, match="projection failed"):
+        await use_case.execute(_intent())
+    repaired = await use_case.execute(_intent())
+
+    assert repaired.identity.device_id == "device-1"
+    assert len(events.values) == 1
+    assert projector.values == ["device-1"]

@@ -132,6 +132,7 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
                 event_id="event-1",
                 event_type="eidolon.device.enrolled.v1",
                 source="eidolon-hub/device-management",
+                principal_id="untrusted-device:device-1",
                 device_id="device-1",
                 occurred_at=NOW,
                 data={"manifest_revision": "sha256:revision"},

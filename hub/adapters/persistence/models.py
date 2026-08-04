@@ -42,6 +42,7 @@ class DeviceManagementEventRow(Base):
     event_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     event_type: Mapped[str] = mapped_column(String(255), index=True)
     source: Mapped[str] = mapped_column(String(512), default="")
+    principal_id: Mapped[str] = mapped_column(String(255), index=True)
     subject: Mapped[str] = mapped_column(String(512), index=True)
     owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

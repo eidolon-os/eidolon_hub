@@ -18,6 +18,7 @@ class Event(BaseModel):
     event_id: Annotated[str, Field(max_length=255, min_length=1)]
     event_type: Annotated[str, Field(max_length=255, min_length=1)]
     source: Annotated[str, Field(max_length=512, min_length=1)]
+    principal_id: Annotated[str, Field(max_length=255, min_length=1)]
     device_id: Annotated[str, Field(max_length=255, min_length=1)]
     occurred_at: AwareDatetime
     data: Dict[str, Any]

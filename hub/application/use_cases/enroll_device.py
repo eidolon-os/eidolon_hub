@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 from datetime import timedelta
 
+from hub.application.idempotency import mutation_fingerprint
 from hub.domain.devices.entities import (
     DeviceEnrollmentIntent,
     DeviceLifecycleState,
@@ -13,9 +13,12 @@ from hub.domain.devices.entities import (
 from hub.ports.identity import Clock, IdGenerator, RetrievalTokenHasher
 from hub.ports.management_events import (
     DeviceManagementEventRecord,
-    DeviceManagementEventSink,
 )
-from hub.ports.repositories import DeviceDirectoryProjector, DeviceRepository
+from hub.ports.repositories import (
+    DeviceDirectoryProjector,
+    DeviceMutationUnitOfWork,
+    DeviceRepository,
+)
 
 
 class EnrollDevice:
@@ -23,7 +26,7 @@ class EnrollDevice:
         self,
         *,
         devices: DeviceRepository,
-        events: DeviceManagementEventSink,
+        mutations: DeviceMutationUnitOfWork,
         clock: Clock,
         ids: IdGenerator,
         tokens: RetrievalTokenHasher,
@@ -31,7 +34,7 @@ class EnrollDevice:
         directory_projector: DeviceDirectoryProjector,
     ) -> None:
         self._devices = devices
-        self._events = events
+        self._mutations = mutations
         self._clock = clock
         self._ids = ids
         self._tokens = tokens
@@ -47,6 +50,7 @@ class EnrollDevice:
         if current is not None and current.last_enrollment_request_id == enrollment.request_id:
             if current.last_enrollment_fingerprint != fingerprint:
                 raise ValueError("enrollment request_id was reused with different content")
+            await self._directory_projector.execute(current.identity.device_id)
             return current
 
         if current is not None:
@@ -70,29 +74,31 @@ class EnrollDevice:
             last_enrollment_request_id=enrollment.request_id,
             last_enrollment_fingerprint=fingerprint,
         )
-        persisted = await self._devices.upsert(device)
-        await self._events.publish(
-            DeviceManagementEventRecord(
+        persisted = await self._mutations.commit(
+            expected=current,
+            device=device,
+            event=DeviceManagementEventRecord(
                 event_id=enrollment.request_id,
                 event_type="eidolon.device.enrolled.v1",
                 source="eidolon-hub/device-management",
+                principal_id=f"untrusted-device:{device.identity.device_id}",
                 subject=device.identity.device_id,
                 occurred_at=now,
                 data={"manifest_revision": device.manifest_revision},
-            )
+            ),
         )
         await self._directory_projector.execute(device.identity.device_id)
         return persisted
 
     @staticmethod
     def _fingerprint(enrollment: DeviceEnrollmentIntent, *, token_hash: str) -> str:
-        canonical = "\n".join(
-            (
-                enrollment.identity.device_id,
-                enrollment.display_name,
-                enrollment.device_kind,
-                enrollment.manifest.revision,
-                token_hash,
-            )
+        return mutation_fingerprint(
+            "device.enroll",
+            {
+                "device_id": enrollment.identity.device_id,
+                "display_name": enrollment.display_name,
+                "device_kind": enrollment.device_kind,
+                "manifest_revision": enrollment.manifest.revision,
+                "token_hash": token_hash,
+            },
         )
-        return hashlib.sha256(canonical.encode()).hexdigest()

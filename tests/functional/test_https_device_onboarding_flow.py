@@ -50,14 +50,10 @@ class _Devices:
             (d for d in self.values.values() if d.enrollment_id == enrollment_id), None
         )
 
-    async def upsert(self, device):
+    async def commit(self, *, expected, device, event):
+        assert self.values.get(device.identity.device_id) == expected
         self.values[device.identity.device_id] = device
         return device
-
-
-class _Events:
-    async def publish(self, event):
-        self.event = event
 
 
 class _Projector:
@@ -98,7 +94,7 @@ def _runtime():
         ),
         enroll=EnrollDevice(
             devices=devices,
-            events=_Events(),
+            mutations=devices,
             clock=_Clock(),
             ids=_Ids(),
             tokens=tokens,

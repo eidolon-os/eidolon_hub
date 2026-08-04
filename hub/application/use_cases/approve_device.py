@@ -5,13 +5,17 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import timedelta
 
+from hub.application.idempotency import mutation_fingerprint
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.ports.identity import Clock
 from hub.ports.management_events import (
     DeviceManagementEventRecord,
-    DeviceManagementEventSink,
 )
-from hub.ports.repositories import DeviceDirectoryProjector, DeviceRepository
+from hub.ports.repositories import (
+    DeviceDirectoryProjector,
+    DeviceMutationUnitOfWork,
+    DeviceRepository,
+)
 
 
 class ApproveDevice:
@@ -19,18 +23,25 @@ class ApproveDevice:
         self,
         *,
         devices: DeviceRepository,
-        events: DeviceManagementEventSink,
+        mutations: DeviceMutationUnitOfWork,
         clock: Clock,
         handoff_ttl: timedelta,
         directory_projector: DeviceDirectoryProjector,
     ) -> None:
         self._devices = devices
-        self._events = events
+        self._mutations = mutations
         self._clock = clock
         self._handoff_ttl = handoff_ttl
         self._directory_projector = directory_projector
 
-    async def execute(self, *, device_id: str, owner_id: str, request_id: str) -> ManagedDevice:
+    async def execute(
+        self,
+        *,
+        device_id: str,
+        owner_id: str,
+        request_id: str,
+        principal_id: str,
+    ) -> ManagedDevice:
         if not owner_id.strip():
             raise ValueError("owner_id is required")
         current = await self._devices.get(device_id)
@@ -38,10 +49,14 @@ class ApproveDevice:
             raise KeyError(device_id)
         if current.lifecycle_state is DeviceLifecycleState.REVOKED:
             raise ValueError("revoked device cannot be approved")
-        fingerprint = f"approve:{owner_id}"
+        fingerprint = mutation_fingerprint(
+            "device.approve",
+            {"owner_id": owner_id, "principal_id": principal_id},
+        )
         if current.last_management_request_id == request_id:
             if current.last_management_fingerprint != fingerprint:
                 raise ValueError("management request_id was reused")
+            await self._directory_projector.execute(device_id)
             return current
         now = self._clock.now()
         if (
@@ -63,16 +78,18 @@ class ApproveDevice:
             last_management_request_id=request_id,
             last_management_fingerprint=fingerprint,
         )
-        persisted = await self._devices.upsert(approved)
-        await self._events.publish(
-            DeviceManagementEventRecord(
+        persisted = await self._mutations.commit(
+            expected=current,
+            device=approved,
+            event=DeviceManagementEventRecord(
                 event_id=request_id,
                 event_type="eidolon.device.approved.v1",
                 source="eidolon-hub/device-management",
+                principal_id=principal_id,
                 subject=device_id,
                 occurred_at=now,
                 data={"owner_id": owner_id},
-            )
+            ),
         )
         await self._directory_projector.execute(device_id)
         return persisted

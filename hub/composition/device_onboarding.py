@@ -50,7 +50,7 @@ def build_device_onboarding(
             descriptor=descriptor,
             enroll=EnrollDevice(
                 devices=repositories.devices,
-                events=repositories.management_events,
+                mutations=repositories.device_mutations,
                 clock=clock,
                 ids=ids,
                 tokens=tokens,

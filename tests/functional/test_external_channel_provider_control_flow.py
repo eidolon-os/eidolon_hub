@@ -44,14 +44,10 @@ class _Devices:
     async def get(self, device_id):
         return self.device if device_id == self.device.identity.device_id else None
 
-    async def upsert(self, device):
+    async def commit(self, *, expected, device, event):
+        assert self.device == expected
         self.device = device
         return device
-
-
-class _Events:
-    async def publish(self, event):
-        self.event = event
 
 
 class _Projector:
@@ -119,10 +115,15 @@ async def test_provision_relay_and_revoke_are_control_only() -> None:
             devices=devices,
             provider=provider,
             hub_id="hub-local",
-            events=_Events(),
+            mutations=devices,
             clock=_Clock(),
             directory_projector=_Projector(),
-        ).execute(device_id="device-1", reason="operator-request", request_id="revoke-1")
+        ).execute(
+            device_id="device-1",
+            reason="operator-request",
+            request_id="revoke-1",
+            principal_id="owner-operator",
+        )
 
     assert provisions[0].device.device_id == "device-1"
     assert revocations[0].device_id == "device-1"

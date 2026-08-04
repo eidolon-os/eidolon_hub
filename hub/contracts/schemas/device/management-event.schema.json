@@ -10,13 +10,14 @@
     "event": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "stream_position", "event_id", "event_type", "source", "device_id", "occurred_at", "data"],
+      "required": ["operation", "stream_position", "event_id", "event_type", "source", "principal_id", "device_id", "occurred_at", "data"],
       "properties": {
         "operation": {"const": "device.management-event"},
         "stream_position": {"type": "integer", "minimum": 1},
         "event_id": {"type": "string", "minLength": 1, "maxLength": 255},
         "event_type": {"type": "string", "minLength": 1, "maxLength": 255},
         "source": {"type": "string", "minLength": 1, "maxLength": 512},
+        "principal_id": {"type": "string", "minLength": 1, "maxLength": 255},
         "device_id": {"type": "string", "minLength": 1, "maxLength": 255},
         "occurred_at": {"type": "string", "format": "date-time"},
         "data": {"type": "object"}

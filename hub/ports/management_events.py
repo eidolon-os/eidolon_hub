@@ -17,14 +17,23 @@ class DeviceManagementEventRecord:
     event_id: str
     event_type: str
     source: str
+    principal_id: str
     subject: str
     occurred_at: datetime
     data: ManagementEventData
 
     def __post_init__(self) -> None:
-        identifiers = (self.event_id, self.event_type, self.source, self.subject)
+        identifiers = (
+            self.event_id,
+            self.event_type,
+            self.source,
+            self.principal_id,
+            self.subject,
+        )
         if any(not value.strip() for value in identifiers):
             raise ValueError("management event identifiers are required")
+        if len(self.principal_id) > 255:
+            raise ValueError("management event principal_id exceeds 255 characters")
         if self.occurred_at.tzinfo is None:
             raise ValueError("management event timestamp must be timezone-aware")
         if not isinstance(self.data, dict):
@@ -39,10 +48,6 @@ class StoredDeviceManagementEvent:
     def __post_init__(self) -> None:
         if self.stream_position < 1:
             raise ValueError("management event stream_position must be positive")
-
-
-class DeviceManagementEventSink(Protocol):
-    async def publish(self, event: DeviceManagementEventRecord) -> None: ...
 
 
 class DeviceManagementEventStream(Protocol):

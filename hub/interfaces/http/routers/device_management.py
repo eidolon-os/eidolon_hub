@@ -144,13 +144,14 @@ def create_device_management_router(
     ):
         runtime = current()
         try:
-            await runtime.authorizer.authorize(
+            principal = await runtime.authorizer.authorize(
                 credential=authorization, owner_scope=None, device_id=device_id
             )
             device = await runtime.approve_device.execute(
                 device_id=device_id,
                 owner_id=payload.owner_id,
                 request_id=payload.request_id,
+                principal_id=principal.subject_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="device not found") from exc
@@ -168,13 +169,14 @@ def create_device_management_router(
     ):
         runtime = current()
         try:
-            await runtime.authorizer.authorize(
+            principal = await runtime.authorizer.authorize(
                 credential=authorization, owner_scope=None, device_id=device_id
             )
             device = await runtime.revoke_device.execute(
                 device_id=device_id,
                 reason=payload.reason,
                 request_id=payload.request_id,
+                principal_id=principal.subject_id,
             )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="device not found") from exc

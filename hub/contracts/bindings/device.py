@@ -106,6 +106,7 @@ class DeviceManagementEvent(ContractModel):
     event_id: str = Field(min_length=1, max_length=255)
     event_type: str = Field(min_length=1, max_length=255)
     source: str = Field(min_length=1, max_length=512)
+    principal_id: str = Field(min_length=1, max_length=255)
     device_id: str = Field(min_length=1, max_length=255)
     occurred_at: datetime
     data: JsonObject

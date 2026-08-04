@@ -127,6 +127,7 @@ def stored_event_to_wire(stored: StoredDeviceManagementEvent) -> DeviceManagemen
         event_id=event.event_id,
         event_type=event.event_type,
         source=event.source,
+        principal_id=event.principal_id,
         device_id=event.subject,
         occurred_at=event.occurred_at,
         data=event.data,

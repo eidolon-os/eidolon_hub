@@ -12,6 +12,7 @@ from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.ports.management_events import DeviceManagementEventRecord
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
 
@@ -42,9 +43,25 @@ def _device():
     )
 
 
+def _event(device, event_id):
+    return DeviceManagementEventRecord(
+        event_id=event_id,
+        event_type="eidolon.device.approved.v1",
+        source="eidolon-hub/device-management",
+        principal_id="owner-operator",
+        subject=device.identity.device_id,
+        occurred_at=device.updated_at,
+        data={"owner_id": device.owner_id},
+    )
+
+
 async def test_directory_projects_only_safe_device_metadata(database) -> None:
-    devices = SqlHubRepositories(database).devices
-    await devices.upsert(_device())
+    repositories = SqlHubRepositories(database)
+    device = _device()
+    await repositories.device_mutations.commit(
+        expected=None, device=device, event=_event(device, "event-1")
+    )
+    devices = repositories.devices
     directory = InMemoryDeviceDirectoryRepository()
     projector = ProjectDeviceDirectory(devices=devices, directory=directory)
 
@@ -56,8 +73,12 @@ async def test_directory_projects_only_safe_device_metadata(database) -> None:
 
 
 async def test_directory_is_rebuilt_from_device_table_after_restart(database) -> None:
-    devices = SqlHubRepositories(database).devices
-    await devices.upsert(_device())
+    repositories = SqlHubRepositories(database)
+    device = _device()
+    await repositories.device_mutations.commit(
+        expected=None, device=device, event=_event(device, "event-1")
+    )
+    devices = repositories.devices
     restarted_directory = InMemoryDeviceDirectoryRepository()
 
     projected = await ProjectDeviceDirectory(
@@ -69,12 +90,19 @@ async def test_directory_is_rebuilt_from_device_table_after_restart(database) ->
 
 
 async def test_owner_scope_change_removes_old_memory_visibility(database) -> None:
-    devices = SqlHubRepositories(database).devices
-    await devices.upsert(_device())
+    repositories = SqlHubRepositories(database)
+    original = _device()
+    await repositories.device_mutations.commit(
+        expected=None, device=original, event=_event(original, "event-1")
+    )
+    devices = repositories.devices
     directory = InMemoryDeviceDirectoryRepository()
     projector = ProjectDeviceDirectory(devices=devices, directory=directory)
     await projector.execute("device-1")
-    await devices.upsert(replace(_device(), owner_id="owner-2"))
+    changed = replace(original, owner_id="owner-2")
+    await repositories.device_mutations.commit(
+        expected=original, device=changed, event=_event(changed, "event-2")
+    )
     transferred = await projector.execute("device-1")
 
     assert await directory.list(owner_scope="owner-1") == ()

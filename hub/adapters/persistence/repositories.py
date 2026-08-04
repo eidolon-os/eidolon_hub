@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import UTC, datetime
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import DeviceManagementEventRow, DeviceRow
@@ -16,6 +18,7 @@ from hub.ports.management_events import (
     DeviceManagementEventRecord,
     StoredDeviceManagementEvent,
 )
+from hub.ports.repositories import ConcurrentDeviceMutationError
 
 
 def _aware(value: datetime) -> datetime:
@@ -37,17 +40,6 @@ class SqlDeviceRepository:
                 select(DeviceRow).where(DeviceRow.enrollment_id == enrollment_id)
             )
             return None if row is None else self._decode(row)
-
-    async def upsert(self, device: ManagedDevice) -> ManagedDevice:
-        async with self._database.sessions.begin() as session:
-            row = await session.get(DeviceRow, device.identity.device_id)
-            values = self._values(device)
-            if row is None:
-                session.add(DeviceRow(**values))
-            else:
-                for name, value in values.items():
-                    setattr(row, name, value)
-        return device
 
     async def list_all(self) -> tuple[ManagedDevice, ...]:
         async with self._database.sessions() as session:
@@ -74,6 +66,16 @@ class SqlDeviceRepository:
             "last_management_request_id": device.last_management_request_id,
             "last_management_fingerprint": device.last_management_fingerprint,
         }
+
+    @classmethod
+    async def _upsert(cls, session: AsyncSession, device: ManagedDevice) -> None:
+        row = await session.get(DeviceRow, device.identity.device_id)
+        values = cls._values(device)
+        if row is None:
+            session.add(DeviceRow(**values))
+            return
+        for name, value in values.items():
+            setattr(row, name, value)
 
     @staticmethod
     def _decode(row: DeviceRow) -> ManagedDevice:
@@ -105,7 +107,8 @@ class SqlDeviceManagementEventLedger:
     def __init__(self, database: HubDatabase) -> None:
         self._database = database
 
-    async def publish(self, event: DeviceManagementEventRecord) -> None:
+    @staticmethod
+    def _data_json(event: DeviceManagementEventRecord) -> str:
         data_json = json.dumps(
             event.data,
             ensure_ascii=False,
@@ -114,32 +117,47 @@ class SqlDeviceManagementEventLedger:
         )
         if len(data_json.encode()) > 256 * 1024:
             raise ValueError("management event data exceeds 256KiB")
-        async with self._database.sessions.begin() as session:
-            current = await session.scalar(
-                select(DeviceManagementEventRow).where(
-                    DeviceManagementEventRow.event_id == event.event_id
-                )
+        return data_json
+
+    @classmethod
+    async def _append(
+        cls,
+        session: AsyncSession,
+        *,
+        event: DeviceManagementEventRecord,
+        owner_id: str,
+        data_json: str | None = None,
+    ) -> None:
+        encoded = data_json if data_json is not None else cls._data_json(event)
+        current = await session.scalar(
+            select(DeviceManagementEventRow).where(
+                DeviceManagementEventRow.event_id == event.event_id
             )
-            if current is not None:
-                if (
-                    current.event_type != event.event_type
-                    or current.subject != event.subject
-                    or current.data_json != data_json
-                ):
-                    raise ValueError("event_id was reused with different content")
-                return
-            device = await session.get(DeviceRow, event.subject)
-            session.add(
-                DeviceManagementEventRow(
-                    event_id=event.event_id,
-                    event_type=event.event_type,
-                    source=event.source,
-                    subject=event.subject,
-                    owner_id=(device.owner_id if device and device.owner_id else "unclaimed"),
-                    occurred_at=event.occurred_at,
-                    data_json=data_json,
-                )
+        )
+        if current is not None:
+            if (
+                current.event_type != event.event_type
+                or current.source != event.source
+                or current.principal_id != event.principal_id
+                or current.subject != event.subject
+                or current.owner_id != owner_id
+                or _aware(current.occurred_at) != event.occurred_at
+                or current.data_json != encoded
+            ):
+                raise ValueError("event_id was reused with different content")
+            return
+        session.add(
+            DeviceManagementEventRow(
+                event_id=event.event_id,
+                event_type=event.event_type,
+                source=event.source,
+                principal_id=event.principal_id,
+                subject=event.subject,
+                owner_id=owner_id,
+                occurred_at=event.occurred_at,
+                data_json=encoded,
             )
+        )
 
     async def list_after(
         self, *, owner_scope: str, stream_position: int, limit: int
@@ -167,6 +185,7 @@ class SqlDeviceManagementEventLedger:
                     event_id=row.event_id,
                     event_type=row.event_type,
                     source=row.source,
+                    principal_id=row.principal_id,
                     subject=row.subject,
                     occurred_at=_aware(row.occurred_at),
                     data=json.loads(row.data_json),
@@ -176,9 +195,46 @@ class SqlDeviceManagementEventLedger:
         )
 
 
+class SqlDeviceMutationUnitOfWork:
+    """Single-process atomic boundary for device facts and audit events."""
+
+    def __init__(self, database: HubDatabase) -> None:
+        self._database = database
+        self._lock = asyncio.Lock()
+
+    async def commit(
+        self,
+        *,
+        expected: ManagedDevice | None,
+        device: ManagedDevice,
+        event: DeviceManagementEventRecord,
+    ) -> ManagedDevice:
+        if event.subject != device.identity.device_id:
+            raise ValueError("management event subject must match device")
+        data_json = SqlDeviceManagementEventLedger._data_json(event)
+        owner_id = device.owner_id or "unclaimed"
+        async with self._lock:
+            async with self._database.sessions.begin() as session:
+                row = await session.get(DeviceRow, device.identity.device_id)
+                actual = None if row is None else SqlDeviceRepository._decode(row)
+                if actual != expected:
+                    raise ConcurrentDeviceMutationError(
+                        "device changed concurrently; reload and retry"
+                    )
+                await SqlDeviceRepository._upsert(session, device)
+                await SqlDeviceManagementEventLedger._append(
+                    session,
+                    event=event,
+                    owner_id=owner_id,
+                    data_json=data_json,
+                )
+        return device
+
+
 class SqlHubRepositories:
     """Composition-only bundle; callers receive individual repository ports."""
 
     def __init__(self, database: HubDatabase) -> None:
         self.devices = SqlDeviceRepository(database)
+        self.device_mutations = SqlDeviceMutationUnitOfWork(database)
         self.management_events = SqlDeviceManagementEventLedger(database)

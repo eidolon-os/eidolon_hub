@@ -5,13 +5,29 @@ from __future__ import annotations
 from typing import Protocol
 
 from hub.domain.devices.entities import DeviceDirectoryEntry, ManagedDevice
+from hub.ports.management_events import DeviceManagementEventRecord
+
+
+class ConcurrentDeviceMutationError(ValueError):
+    """The authoritative device changed after the use case read it."""
 
 
 class DeviceRepository(Protocol):
     async def get(self, device_id: str) -> ManagedDevice | None: ...
     async def get_by_enrollment_id(self, enrollment_id: str) -> ManagedDevice | None: ...
-    async def upsert(self, device: ManagedDevice) -> ManagedDevice: ...
     async def list_all(self) -> tuple[ManagedDevice, ...]: ...
+
+
+class DeviceMutationUnitOfWork(Protocol):
+    """Atomically persist one device fact and its management audit event."""
+
+    async def commit(
+        self,
+        *,
+        expected: ManagedDevice | None,
+        device: ManagedDevice,
+        event: DeviceManagementEventRecord,
+    ) -> ManagedDevice: ...
 
 
 class DeviceDirectoryRepository(Protocol):
