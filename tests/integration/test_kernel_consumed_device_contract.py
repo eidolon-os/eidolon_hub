@@ -23,15 +23,15 @@ from hub.config import (
 
 KERNEL_ROOT = Path(__file__).resolve().parents[3] / "eidolon_kernel"
 if not (KERNEL_ROOT / "eidolon_kernel").is_dir():
-    pytest.skip("eidolon_kernel sibling is required for the joint contract test", allow_module_level=True)
+    pytest.skip(
+        "eidolon_kernel sibling is required for the joint contract test", allow_module_level=True
+    )
 sys.path.insert(0, str(KERNEL_ROOT))
 
 HubHttpDeviceAuthority = importlib.import_module(
     "eidolon_kernel.adapters.device_registry.hub_http"
 ).HubHttpDeviceAuthority
-ContractRegistry = importlib.import_module(
-    "eidolon_kernel.contracts.registry"
-).ContractRegistry
+ContractRegistry = importlib.import_module("eidolon_kernel.contracts.registry").ContractRegistry
 SqliteMountStore = importlib.import_module(
     "eidolon_kernel.adapters.persistence.sqlite"
 ).SqliteMountStore
@@ -88,9 +88,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
         HubConfig(
             onboarding=OnboardingConfig(public_base_url="https://hub.contract.invalid"),
             discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
-            channel_provider=ChannelProviderConfig(
-                contract_url=httpserver.url_for("/v1")
-            ),
+            channel_provider=ChannelProviderConfig(contract_url=httpserver.url_for("/v1")),
             persistence=PersistenceConfig(path=str(tmp_path / "joint-contract.sqlite3")),
         )
     )
