@@ -143,7 +143,6 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
             mounted = DeviceMount.first(
                 device_id="joint-device-1",
                 owner_id="joint-owner-1",
-                companion_id="joint-companion-1",
                 at=datetime.now(UTC),
                 request_id="joint-mount-1",
                 fingerprint="sha256:" + "a" * 64,
