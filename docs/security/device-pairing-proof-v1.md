@@ -75,6 +75,22 @@ implementations must use a physical display/QR, authenticated BLE, authenticated
 SoftAP, or another channel that demonstrates local access. Publishing it through
 mDNS, Hub logs, or an unauthenticated LAN endpoint destroys the proof.
 
+The ESP display QR profile is a compact transport encoding of two fields from
+that object:
+
+```text
+EIDOLON:PAIR:1:<enrollment_id>:<pairing_secret>
+```
+
+The payload is ASCII, each variable field matches `[A-Za-z0-9_-]+`, and total
+length is at most 106 bytes. Current Hub enrollment IDs (`enrollment_` plus 144
+random bits encoded base64url) leave room for the ESP's 256-bit base64url secret.
+The QR deliberately omits network location: a Controller must use the Hub origin
+from its already-verified provisioning/discovery target and address
+`/api/device-management/v1/enrollments/{enrollment_id}/pairing-claims`. No URI,
+Owner ID, Device ID or lifecycle claim from a QR is trusted. The Hub claim
+response supplies the authoritative Device and Owner binding.
+
 ## Owner claim input and output
 
 The authenticated Controller posts the local secret to the receipt URI:
@@ -119,6 +135,68 @@ enrollment is unknown; `409` covers expiry or an idempotency-content conflict;
 and schema validation failures return `422`. The exact successful request may be
 replayed after approval, including after the pending deadline, because it cannot
 change the already-bound Owner.
+
+## Controller and Local API boundary
+
+Mobile does not mint Hub authority and must not send an `owner_id` in the Hub
+claim body. The intended Controller-authenticated Local API input is this exact
+consumer envelope (this is not a Hub route):
+
+```http
+PUT /api/local/v1/device-admissions/{setup_id}
+Authorization: Bearer <Controller session>
+Content-Type: application/json
+```
+
+```json
+{
+  "contract_version": "1",
+  "request_id": "<stable Controller idempotency key>",
+  "hub_id": "<verified provisioning target Hub ID>",
+  "descriptor_uri": "<verified HTTPS Hub descriptor URI>",
+  "enrollment_id": "<physical pairing payload enrollment ID>",
+  "pairing_secret": "<physical pairing payload secret>",
+  "companion_id": "<optional Owner-scoped Companion>"
+}
+```
+
+Local API derives `owner_id` and Controller principal from the verified session,
+resolves the Hub from the pinned descriptor target, mints/obtains a short-lived
+Hub JWT with `aud=eidolon-hub`, `sub=<Controller principal>`,
+`roles=[device-manager]`, `owner_id=<authenticated Owner>`, and calls the Hub
+pairing endpoint with the same stable `request_id`. It must redact and avoid
+checkpointing `pairing_secret`.
+
+The Local API result shape is:
+
+```json
+{
+  "operation": "local.device-admission-progress",
+  "contract_version": "1",
+  "setup_id": "<same Local/App workflow ID>",
+  "request_id": "<same idempotency key>",
+  "device_id": "<Hub response device ID>",
+  "enrollment_id": "<same enrollment ID>",
+  "owner_id": "<authenticated Owner>",
+  "state": "approved|binding|ready|failed",
+  "completed_stage": "hub-approved|kernel-mounted|companion-attached",
+  "companion_id": "<attached Companion or null>",
+  "retryable": false
+}
+```
+
+`setup_id` is Local/App workflow identity and never crosses into firmware or
+Hub. `enrollment_id` is Hub enrollment identity. `request_id` is stable across a
+lost response, process restart and forward retry. After Hub approval, Local API
+mounts the authoritative returned `device_id` into the authenticated Owner's
+Kernel scope; optional `companion_id` is validated inside that Owner scope and
+attached only after mount. Hub never accepts or stores `companion_id`. A Hub
+success followed by Kernel/Companion failure is a forward-retry state, not a
+reason to revoke or re-enroll the device.
+
+The current Hub pairing endpoint implements the Hub half of this boundary. The
+Mobile/Local API consumer route and Kernel/Companion orchestration are separate
+tasks and are not implemented in this repository.
 
 ## Security boundary
 
