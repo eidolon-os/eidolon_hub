@@ -39,9 +39,6 @@ def _device(device_id="device-1", enrollment_id="enrollment-1"):
         ),
         enrolled_at=NOW,
         updated_at=NOW,
-        identity_key_fingerprint="p256:" + "b" * 64,
-        pairing_method="local-secret-sha256",
-        pairing_secret_hash="sha256:" + "c" * 64,
     )
 
 

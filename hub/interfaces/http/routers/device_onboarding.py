@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import APIRouter, HTTPException, Response, status
 
-from hub.adapters.security.enrollment_identity import P256EnrollmentIdentityVerifier
 from hub.application.use_cases.enroll_device import EnrollDevice
 from hub.application.use_cases.handoff_device import HandoffDevice
 from hub.contracts.bindings.onboarding import (
@@ -31,10 +30,6 @@ class DeviceOnboardingHttpServices:
     descriptor: HubDescriptor
     enroll: EnrollDevice
     handoff: HandoffDevice
-    pairing_claim_base_uri: str = ""
-    identity_proofs: P256EnrollmentIdentityVerifier = field(
-        default_factory=P256EnrollmentIdentityVerifier
-    )
 
 
 def create_device_onboarding_router(
@@ -52,26 +47,10 @@ def create_device_onboarding_router(
     @router.post("/enrollments", response_model=DeviceEnrollmentReceipt)
     async def enroll(payload: DeviceEnrollment) -> DeviceEnrollmentReceipt:
         try:
-            runtime = current()
-            fingerprint = runtime.identity_proofs.verify(payload)
-            device = await runtime.enroll.execute(
-                enrollment_to_domain(payload, identity_key_fingerprint=fingerprint)
-            )
-        except PermissionError as exc:
-            raise HTTPException(status_code=403, detail=str(exc)) from exc
+            device = await current().enroll.execute(enrollment_to_domain(payload))
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        claim_uri = None
-        if payload.pairing_proof is not None:
-            claim_uri = (
-                f"{runtime.pairing_claim_base_uri.rstrip('/')}/"
-                f"{device.enrollment_id}/pairing-claims"
-            )
-        return enrollment_receipt_to_wire(
-            device,
-            request_id=payload.request_id,
-            pairing_claim_uri=claim_uri,
-        )
+        return enrollment_receipt_to_wire(device, request_id=payload.request_id)
 
     @router.post(
         "/enrollments/{enrollment_id}/handoff",

@@ -4,7 +4,6 @@
   "title": "Device Management Mutations",
   "oneOf": [
     { "$ref": "#/$defs/DeviceApprovalRequest" },
-    { "$ref": "#/$defs/DevicePairingClaimRequest" },
     { "$ref": "#/$defs/DeviceRevocationRequest" }
   ],
   "$defs": {
@@ -16,16 +15,6 @@
         "operation": { "const": "device.approval" },
         "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
         "owner_id": { "type": "string", "minLength": 1, "maxLength": 64 }
-      }
-    },
-    "DevicePairingClaimRequest": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["operation", "request_id", "pairing_secret"],
-      "properties": {
-        "operation": { "const": "device.pairing-claim" },
-        "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
-        "pairing_secret": { "type": "string", "minLength": 32, "maxLength": 256 }
       }
     },
     "DeviceRevocationRequest": {

@@ -54,11 +54,6 @@ class EnrollDevice:
             return current
 
         if current is not None:
-            if (
-                current.identity_key_fingerprint
-                and enrollment.identity_key_fingerprint != current.identity_key_fingerprint
-            ):
-                raise ValueError("device identity key changed")
             can_restart = (
                 current.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
                 and current.retrieval_expires_at <= now
@@ -78,9 +73,6 @@ class EnrollDevice:
             updated_at=now,
             last_enrollment_request_id=enrollment.request_id,
             last_enrollment_fingerprint=fingerprint,
-            identity_key_fingerprint=enrollment.identity_key_fingerprint,
-            pairing_method=enrollment.pairing_method,
-            pairing_secret_hash=enrollment.pairing_secret_hash,
         )
         persisted = await self._mutations.commit(
             expected=current,
@@ -108,8 +100,5 @@ class EnrollDevice:
                 "device_kind": enrollment.device_kind,
                 "manifest_revision": enrollment.manifest.revision,
                 "token_hash": token_hash,
-                "identity_key_fingerprint": enrollment.identity_key_fingerprint,
-                "pairing_method": enrollment.pairing_method,
-                "pairing_secret_hash": enrollment.pairing_secret_hash,
             },
         )

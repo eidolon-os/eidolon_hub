@@ -31,9 +31,6 @@ class ManagedDevice:
     updated_at: datetime
     last_enrollment_request_id: str = ""
     last_enrollment_fingerprint: str = ""
-    identity_key_fingerprint: str = ""
-    pairing_method: str = ""
-    pairing_secret_hash: str = field(default="", repr=False)
     owner_id: str | None = None
     lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.PENDING_APPROVAL
     last_management_request_id: str = ""
@@ -44,8 +41,6 @@ class ManagedDevice:
             raise ValueError("enrollment_id and retrieval token hash are required")
         if not self.device_kind.strip():
             raise ValueError("device_kind is required")
-        if bool(self.pairing_method) != bool(self.pairing_secret_hash):
-            raise ValueError("pairing method and secret hash must be stored together")
         if any(
             value.tzinfo is None
             for value in (self.retrieval_expires_at, self.enrolled_at, self.updated_at)
@@ -78,9 +73,6 @@ class DeviceEnrollmentIntent:
     display_name: str
     device_kind: str
     manifest: DeviceManifestDocument
-    identity_key_fingerprint: str = ""
-    pairing_method: str = ""
-    pairing_secret_hash: str = field(default="", repr=False)
 
 
 @dataclass(frozen=True, slots=True)

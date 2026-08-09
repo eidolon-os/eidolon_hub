@@ -32,7 +32,6 @@ class ManagementPermission(StrEnum):
     DEVICE_GET = "device:get"
     DEVICE_EVENTS = "device:events"
     DEVICE_APPROVE = "device:approve"
-    DEVICE_PAIR_CLAIM = "device:pair-claim"
     DEVICE_REVOKE = "device:revoke"
 
 

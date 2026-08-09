@@ -5,29 +5,10 @@ from __future__ import annotations
 
 from typing import Annotated, Literal
 
-from pydantic import AnyUrl, BaseModel, ConfigDict, Field, RootModel
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 from ..common import device_lifecycle_state_schema, identity_schema
 from ..device import manifest_schema
-
-
-class IdentityProof(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    algorithm: Literal["p256-sha256"]
-    public_key_spki: Annotated[str, Field(max_length=256, min_length=80)]
-    signature: Annotated[str, Field(max_length=256, min_length=64)]
-
-
-class PairingProof(BaseModel):
-    model_config = ConfigDict(
-        extra="forbid",
-        frozen=True,
-    )
-    method: Literal["local-secret-sha256"]
-    commitment: Annotated[str, Field(pattern="^sha256:[0-9a-f]{64}$")]
 
 
 class DeviceEnrollmentReceipt(BaseModel):
@@ -41,7 +22,6 @@ class DeviceEnrollmentReceipt(BaseModel):
     device_id: Annotated[str, Field(max_length=128, min_length=1)]
     lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState
     retrieval_expires_at_ms: Annotated[int, Field(ge=0)]
-    pairing_claim_uri: AnyUrl | None = None
 
 
 class DeviceEnrollment(BaseModel):
@@ -56,8 +36,6 @@ class DeviceEnrollment(BaseModel):
     manifest: manifest_schema.DeviceManifest
     display_name: Annotated[str | None, Field(max_length=128)] = ""
     device_kind: Annotated[str | None, Field(max_length=96, min_length=1)] = "unknown"
-    identity_proof: IdentityProof | None = None
-    pairing_proof: PairingProof | None = None
 
 
 class DeviceEnrollmentContract(RootModel[DeviceEnrollment | DeviceEnrollmentReceipt]):

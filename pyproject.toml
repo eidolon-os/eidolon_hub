@@ -22,7 +22,6 @@ dependencies = [
     "ifaddr>=0.2",
     "sqlalchemy[asyncio]>=2.0",
     "aiosqlite>=0.20",
-    "cryptography>=42.0",
 ]
 
 [tool.setuptools.packages.find]
