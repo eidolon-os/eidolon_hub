@@ -63,6 +63,10 @@ def build_device_onboarding(
                 tokens=tokens,
                 clock=clock,
             ),
+            pairing_claim_base_uri=(
+                config.onboarding.public_base_url.rstrip("/")
+                + "/api/device-management/v1/enrollments"
+            ),
         ),
         mdns_advertiser=_mdns_advertiser(config, descriptor),
     )

@@ -10,6 +10,7 @@ from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.queries.get_device import GetDevice
 from hub.application.queries.list_devices import ListDevices
 from hub.application.use_cases.approve_device import ApproveDevice
+from hub.application.use_cases.claim_device_pairing import ClaimDevicePairing
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.interfaces.http.routers.device_management import DeviceManagementHttpServices
 from hub.ports.channels import ChannelProviderControl
@@ -29,15 +30,21 @@ def build_device_management(
     clock: Clock,
     handoff_ttl: timedelta,
 ) -> DeviceManagementHttpServices:
+    approve = ApproveDevice(
+        devices=repositories.devices,
+        mutations=repositories.device_mutations,
+        clock=clock,
+        handoff_ttl=handoff_ttl,
+        directory_projector=projector,
+    )
     return DeviceManagementHttpServices(
         get_device=GetDevice(directory),
         list_devices=ListDevices(directory),
-        approve_device=ApproveDevice(
+        approve_device=approve,
+        claim_pairing=ClaimDevicePairing(
             devices=repositories.devices,
-            mutations=repositories.device_mutations,
+            approve=approve,
             clock=clock,
-            handoff_ttl=handoff_ttl,
-            directory_projector=projector,
         ),
         revoke_device=RevokeDevice(
             devices=repositories.devices,

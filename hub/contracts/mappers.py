@@ -44,7 +44,9 @@ def manifest_revision(manifest_json: str) -> str:
     return "sha256:" + hashlib.sha256(manifest_json.encode()).hexdigest()
 
 
-def enrollment_to_domain(enrollment: DeviceEnrollment) -> DeviceEnrollmentIntent:
+def enrollment_to_domain(
+    enrollment: DeviceEnrollment, *, identity_key_fingerprint: str = ""
+) -> DeviceEnrollmentIntent:
     manifest_json = canonical_manifest(enrollment)
     return DeviceEnrollmentIntent(
         request_id=enrollment.request_id,
@@ -56,11 +58,16 @@ def enrollment_to_domain(enrollment: DeviceEnrollment) -> DeviceEnrollmentIntent
             canonical_json=manifest_json,
             revision=manifest_revision(manifest_json),
         ),
+        identity_key_fingerprint=identity_key_fingerprint,
+        pairing_method=(enrollment.pairing_proof.method if enrollment.pairing_proof else ""),
+        pairing_secret_hash=(
+            enrollment.pairing_proof.commitment if enrollment.pairing_proof else ""
+        ),
     )
 
 
 def enrollment_receipt_to_wire(
-    device: ManagedDevice, *, request_id: str
+    device: ManagedDevice, *, request_id: str, pairing_claim_uri: str | None = None
 ) -> DeviceEnrollmentReceipt:
     return DeviceEnrollmentReceipt(
         request_id=request_id,
@@ -68,6 +75,7 @@ def enrollment_receipt_to_wire(
         device_id=device.identity.device_id,
         lifecycle_state=device.lifecycle_state.value,
         retrieval_expires_at_ms=int(device.retrieval_expires_at.timestamp() * 1000),
+        pairing_claim_uri=pairing_claim_uri,
     )
 
 

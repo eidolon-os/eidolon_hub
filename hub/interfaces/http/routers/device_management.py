@@ -10,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException
 from hub.application.queries.get_device import GetDevice
 from hub.application.queries.list_devices import DeviceListQuery, ListDevices
 from hub.application.use_cases.approve_device import ApproveDevice
+from hub.application.use_cases.claim_device_pairing import ClaimDevicePairing
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.contracts.bindings.device import (
     DeviceApprovalRequest,
@@ -17,6 +18,7 @@ from hub.contracts.bindings.device import (
     DeviceDirectoryPage,
     DeviceLifecycleStatus,
     DeviceManagementEventPage,
+    DevicePairingClaimRequest,
     DeviceRevocationRequest,
 )
 from hub.contracts.mappers import (
@@ -35,6 +37,7 @@ class DeviceManagementHttpServices:
     get_device: GetDevice
     list_devices: ListDevices
     approve_device: ApproveDevice
+    claim_pairing: ClaimDevicePairing
     revoke_device: RevokeDevice
     authorizer: ManagementAuthorizer
     event_stream: DeviceManagementEventStream
@@ -142,6 +145,38 @@ def create_device_management_router(
             next_stream_position=(stored[-1].stream_position if stored else after_stream_position),
             events=tuple(stored_event_to_wire(item) for item in stored),
         )
+
+    @router.post(
+        "/enrollments/{enrollment_id}/pairing-claims",
+        response_model=DeviceLifecycleStatus,
+    )
+    async def claim_pending_enrollment(
+        enrollment_id: str,
+        payload: DevicePairingClaimRequest,
+        authorization: str = Header(alias="Authorization"),
+    ) -> DeviceLifecycleStatus:
+        runtime = current()
+        try:
+            principal = await runtime.authorizer.authorize(
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_PAIR_CLAIM,
+                owner_scope=None,
+                device_id=None,
+            )
+            device = await runtime.claim_pairing.execute(
+                enrollment_id=enrollment_id,
+                pairing_secret=payload.pairing_secret,
+                owner_id=principal.owner_id or "",
+                request_id=payload.request_id,
+                principal_id=principal.subject_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="enrollment not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return lifecycle_status_to_wire(device)
 
     @router.post("/devices/{device_id}/approval", response_model=DeviceLifecycleStatus)
     async def approve_registered_device(

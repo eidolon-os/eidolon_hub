@@ -18,6 +18,16 @@ class DeviceApprovalRequest(BaseModel):
     owner_id: Annotated[str, Field(max_length=64, min_length=1)]
 
 
+class DevicePairingClaimRequest(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    operation: Literal["device.pairing-claim"]
+    request_id: Annotated[str, Field(max_length=96, min_length=1)]
+    pairing_secret: Annotated[str, Field(max_length=256, min_length=32)]
+
+
 class DeviceRevocationRequest(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -28,11 +38,13 @@ class DeviceRevocationRequest(BaseModel):
     reason: Annotated[str | None, Field(max_length=256, min_length=1)] = "operator-request"
 
 
-class DeviceManagementMutations(RootModel[DeviceApprovalRequest | DeviceRevocationRequest]):
+class DeviceManagementMutations(
+    RootModel[DeviceApprovalRequest | DevicePairingClaimRequest | DeviceRevocationRequest]
+):
     model_config = ConfigDict(
         frozen=True,
     )
     root: Annotated[
-        DeviceApprovalRequest | DeviceRevocationRequest,
+        DeviceApprovalRequest | DevicePairingClaimRequest | DeviceRevocationRequest,
         Field(title="Device Management Mutations"),
     ]

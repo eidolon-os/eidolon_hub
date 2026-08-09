@@ -48,9 +48,7 @@ class JwtOwnerManagementAuthorizer:
                 or owner_scope is None
                 or device_id is None
             ):
-                raise PermissionError(
-                    "device registry reader is limited to exact device reads"
-                )
+                raise PermissionError("device registry reader is limited to exact device reads")
             return ManagementPrincipal(
                 subject_id="eidolon-kernel/device-authority",
                 owner_id=None,
@@ -86,10 +84,23 @@ class JwtOwnerManagementAuthorizer:
             if not claim_owner or claim_owner != owner_scope:
                 raise PermissionError("management credential owner scope mismatch")
 
-        if permission in {
-            ManagementPermission.DEVICE_APPROVE,
-            ManagementPermission.DEVICE_REVOKE,
-        } and not is_admin:
+        if permission is ManagementPermission.DEVICE_PAIR_CLAIM:
+            if not is_manager or not claim_owner:
+                raise PermissionError("Owner pairing requires device-manager role and Owner scope")
+            return ManagementPrincipal(
+                subject_id=subject_id,
+                owner_id=claim_owner,
+                roles=frozenset(roles),
+            )
+
+        if (
+            permission
+            in {
+                ManagementPermission.DEVICE_APPROVE,
+                ManagementPermission.DEVICE_REVOKE,
+            }
+            and not is_admin
+        ):
             if not is_manager or device_id is None:
                 raise PermissionError("device-manager role required for device mutation")
             device = await self._devices.get(device_id)

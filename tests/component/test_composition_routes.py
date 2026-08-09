@@ -30,6 +30,10 @@ def test_public_contract_routes_exist_before_lifespan_start() -> None:
     assert "/api/device-management/v1/devices/{device_id}/commands" not in paths
     assert "/api/device-management/v1/commands/{command_id}" not in paths
     assert "/api/device-management/v1/devices/{device_id}/approval" in paths
+    assert (
+        "/api/device-management/v1/enrollments/{enrollment_id}/pairing-claims"
+        in paths
+    )
     assert "/api/device-management/v1/devices/{device_id}/revocation" in paths
     assert "/api/provider/v1/data/inbound" not in paths
     assert not any(path.startswith("/api/provider/") for path in paths)

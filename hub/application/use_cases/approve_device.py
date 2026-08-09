@@ -41,6 +41,7 @@ class ApproveDevice:
         owner_id: str,
         request_id: str,
         principal_id: str,
+        approval_method: str = "hub-admin",
     ) -> ManagedDevice:
         if not owner_id.strip():
             raise ValueError("owner_id is required")
@@ -51,7 +52,11 @@ class ApproveDevice:
             raise ValueError("revoked device cannot be approved")
         fingerprint = mutation_fingerprint(
             "device.approve",
-            {"owner_id": owner_id, "principal_id": principal_id},
+            {
+                "owner_id": owner_id,
+                "principal_id": principal_id,
+                "approval_method": approval_method,
+            },
         )
         if current.last_management_request_id == request_id:
             if current.last_management_fingerprint != fingerprint:
@@ -88,7 +93,7 @@ class ApproveDevice:
                 principal_id=principal_id,
                 subject=device_id,
                 occurred_at=now,
-                data={"owner_id": owner_id},
+                data={"owner_id": owner_id, "approval_method": approval_method},
             ),
         )
         await self._directory_projector.execute(device_id)

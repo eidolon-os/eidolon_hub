@@ -34,6 +34,17 @@ class HubDescriptor(ContractModel):
         return value
 
 
+class DeviceIdentityProof(ContractModel):
+    algorithm: Literal["p256-sha256"] = "p256-sha256"
+    public_key_spki: str = Field(min_length=80, max_length=256, repr=False)
+    signature: str = Field(min_length=64, max_length=256, repr=False)
+
+
+class PairingProofCommitment(ContractModel):
+    method: Literal["local-secret-sha256"] = "local-secret-sha256"
+    commitment: str = Field(pattern=r"^sha256:[0-9a-f]{64}$", repr=False)
+
+
 class DeviceEnrollment(ContractModel):
     operation: Literal["device.enrollment"] = "device.enrollment"
     request_id: str = Field(min_length=1, max_length=96)
@@ -42,6 +53,8 @@ class DeviceEnrollment(ContractModel):
     manifest: DeviceManifest
     display_name: str = Field(default="", max_length=128)
     device_kind: str = Field(default="unknown", min_length=1, max_length=96)
+    identity_proof: DeviceIdentityProof | None = Field(default=None, repr=False)
+    pairing_proof: PairingProofCommitment | None = Field(default=None, repr=False)
 
 
 class DeviceEnrollmentReceipt(ContractModel):
@@ -51,6 +64,17 @@ class DeviceEnrollmentReceipt(ContractModel):
     device_id: str = Field(min_length=1, max_length=128)
     lifecycle_state: DeviceLifecycleState
     retrieval_expires_at_ms: int = Field(ge=0)
+    pairing_claim_uri: str | None = Field(default=None, max_length=2048)
+
+    @field_validator("pairing_claim_uri")
+    @classmethod
+    def _https_pairing_claim_uri(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parsed = urlparse(value)
+        if parsed.scheme != "https" or not parsed.netloc:
+            raise ValueError("pairing claim endpoint must use https")
+        return value
 
 
 class DeviceHandoffRequest(ContractModel):

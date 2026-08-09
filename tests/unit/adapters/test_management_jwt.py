@@ -121,6 +121,38 @@ async def test_hub_admin_can_manage_cross_owner_and_unclaimed_scopes() -> None:
     )
 
 
+async def test_owner_pairing_permission_comes_only_from_signed_owner_scope() -> None:
+    authorizer = JwtOwnerManagementAuthorizer(
+        secret=SECRET,
+        devices=_Devices(),
+        device_registry_reader_token=REGISTRY_READER_TOKEN,
+    )
+
+    principal = await authorizer.authorize(
+        credential=_credential(owner_id="owner-pairing"),
+        permission=ManagementPermission.DEVICE_PAIR_CLAIM,
+        owner_scope=None,
+        device_id=None,
+    )
+
+    assert principal.owner_id == "owner-pairing"
+    assert principal.subject_id == "eidolon-agent/test"
+    with pytest.raises(PermissionError, match="Owner pairing"):
+        await authorizer.authorize(
+            credential=_credential(owner_id="", roles=["device-manager"]),
+            permission=ManagementPermission.DEVICE_PAIR_CLAIM,
+            owner_scope=None,
+            device_id=None,
+        )
+    with pytest.raises(PermissionError, match="Owner pairing"):
+        await authorizer.authorize(
+            credential=_credential(owner_id="owner-pairing", roles=["hub-admin"]),
+            permission=ManagementPermission.DEVICE_PAIR_CLAIM,
+            owner_scope=None,
+            device_id=None,
+        )
+
+
 async def test_device_registry_reader_can_only_read_one_exact_device() -> None:
     authorizer = JwtOwnerManagementAuthorizer(
         secret=SECRET,
@@ -141,6 +173,7 @@ async def test_device_registry_reader_can_only_read_one_exact_device() -> None:
         ManagementPermission.DEVICE_LIST,
         ManagementPermission.DEVICE_EVENTS,
         ManagementPermission.DEVICE_APPROVE,
+        ManagementPermission.DEVICE_PAIR_CLAIM,
         ManagementPermission.DEVICE_REVOKE,
     ):
         with pytest.raises(PermissionError, match="exact device reads"):

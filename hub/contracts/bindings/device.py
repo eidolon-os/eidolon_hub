@@ -63,6 +63,12 @@ class DeviceApprovalRequest(ContractModel):
     owner_id: str = Field(min_length=1, max_length=64)
 
 
+class DevicePairingClaimRequest(ContractModel):
+    operation: Literal["device.pairing-claim"] = "device.pairing-claim"
+    request_id: str = Field(min_length=1, max_length=96)
+    pairing_secret: str = Field(min_length=32, max_length=256, repr=False)
+
+
 class DeviceRevocationRequest(ContractModel):
     operation: Literal["device.revocation"] = "device.revocation"
     request_id: str = Field(min_length=1, max_length=96)
