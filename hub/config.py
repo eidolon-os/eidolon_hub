@@ -53,7 +53,7 @@ class OnboardingConfig(_StrictConfig):
 
 
 class ChannelProviderConfig(_StrictConfig):
-    contract_url: str = "http://127.0.0.1:8090/v1"
+    contract_url: str = "http://127.0.0.1:8767/v1"
 
     @model_validator(mode="after")
     def validate_contract_url(self) -> ChannelProviderConfig:

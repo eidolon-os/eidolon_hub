@@ -17,7 +17,7 @@ from hub.config import (
 def test_default_config_knows_only_local_behavior_and_public_contract_addresses() -> None:
     config = HubConfig()
 
-    assert config.channel_provider.contract_url == "http://127.0.0.1:8090/v1"
+    assert config.channel_provider.contract_url == "http://127.0.0.1:8767/v1"
     assert config.onboarding.public_base_url == "https://eidolon-hub.local"
     assert config.persistence.path == "/Users/manson/eidolon/data/eidolon-hub.sqlite3"
     assert not hasattr(config, "deployment")
