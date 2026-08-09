@@ -55,28 +55,8 @@ in-place database migrations, so a database created against an older ORM schema
 is rejected by the existing current-schema check rather than silently altered.
 
 The enrollment receipt returns a concrete HTTPS `pairing_claim_uri` when the
-commitment is present. The device's local/near-field pairing payload for a
-Mobile or Local Controller is exactly:
-
-```json
-{
-  "schema_version": 1,
-  "hub_id": "<descriptor hub_id>",
-  "enrollment_id": "<receipt enrollment_id>",
-  "device_id": "<stable device_id>",
-  "pairing_claim_uri": "<receipt pairing_claim_uri>",
-  "pairing_secret": "<device-generated base64url secret>",
-  "expires_at_ms": 1786000000000
-}
-```
-
-The transport of this payload is deliberately out of Hub scope. Product
-implementations must use a physical display/QR, authenticated BLE, authenticated
-SoftAP, or another channel that demonstrates local access. Publishing it through
-mDNS, Hub logs, or an unauthenticated LAN endpoint destroys the proof.
-
-The ESP display QR profile is a compact transport encoding of two fields from
-that object:
+commitment is present. The only product physical/near-field Owner-admission
+payload for a Mobile or Local Controller is exactly:
 
 ```text
 EIDOLON:PAIR:1:<enrollment_id>:<pairing_secret>
@@ -85,7 +65,10 @@ EIDOLON:PAIR:1:<enrollment_id>:<pairing_secret>
 The payload is ASCII, each variable field matches `[A-Za-z0-9_-]+`, and total
 length is at most 106 bytes. Current Hub enrollment IDs (`enrollment_` plus 144
 random bits encoded base64url) leave room for the ESP's 256-bit base64url secret.
-The QR deliberately omits network location: a Controller must use the Hub origin
+It may be carried by the display QR or a future authenticated near-field
+transport, but its bytes do not change and there is no JSON alternative.
+Publishing it through mDNS, Hub logs, or an unauthenticated LAN endpoint destroys
+the proof. The payload deliberately omits network location: a Controller must use the Hub origin
 from its already-verified provisioning/discovery target and address
 `/api/device-management/v1/enrollments/{enrollment_id}/pairing-claims`. No URI,
 Owner ID, Device ID or lifecycle claim from a QR is trusted. The Hub claim
