@@ -200,6 +200,13 @@ tasks and are not implemented in this repository.
 
 ## Security boundary
 
+mDNS is discovery, not a TLS trust mechanism. `descriptor_uri` and
+`enrollment_uri` may therefore use a publicly trusted DNS hostname even though
+the service is announced on the local link. Devices must validate the HTTPS
+certificate for the URI hostname. A `.local` deployment is valid only when its
+private CA has been installed through an authenticated provisioning channel;
+disabling certificate or hostname verification is not part of this contract.
+
 This is proof of access to the device-generated secret plus continuity of its
 TOFU P-256 key; it is not manufacturer attestation. An attacker who can read the
 device display/local pairing transport, extract flash secrets, compromise Hub

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import timedelta
 from urllib.parse import urlparse
@@ -20,6 +21,14 @@ from hub.ports.channels import ChannelProviderControl
 from hub.ports.identity import Clock, IdGenerator
 
 _MDNS_SERVICE_TYPE = "_eidolon-hub._tcp.local."
+
+
+def _mdns_target_hostname(hub_id: str, public_hostname: str) -> str:
+    """Return the local SRV target, independent of the TLS identity in TXT."""
+    if public_hostname.endswith(".local"):
+        return public_hostname.removesuffix(".local")
+    label = re.sub(r"[^a-z0-9-]+", "-", hub_id.lower()).strip("-")
+    return (label or "eidolon-hub")[:63].rstrip("-")
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,7 +104,7 @@ def _mdns_advertiser(
         advertisement_id="mdns-local",
         service_type=_MDNS_SERVICE_TYPE,
         service_name=f"{config.onboarding.hub_id}.{_MDNS_SERVICE_TYPE}",
-        hostname=public_hostname.removesuffix(".local"),
+        hostname=_mdns_target_hostname(config.onboarding.hub_id, public_hostname),
         port=public_url.port or 443,
         descriptor_uri=descriptor.descriptor_uri,
         enrollment_uri=descriptor.enrollment_uri,

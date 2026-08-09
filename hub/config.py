@@ -87,13 +87,6 @@ class HubConfig(_StrictConfig):
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
     channel_provider: ChannelProviderConfig = Field(default_factory=ChannelProviderConfig)
 
-    @model_validator(mode="after")
-    def validate_local_contract(self) -> HubConfig:
-        public_hostname = urlparse(self.onboarding.public_base_url).hostname or ""
-        if self.discovery.mdns.enabled and not public_hostname.endswith(".local"):
-            raise ValueError("enabled mDNS requires a .local public_base_url hostname")
-        return self
-
     @classmethod
     def load(cls) -> HubConfig:
         _bootstrap_dotenv()

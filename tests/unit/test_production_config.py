@@ -8,9 +8,7 @@ from pydantic import ValidationError
 import hub.config as config_module
 from hub.config import (
     ChannelProviderConfig,
-    DiscoveryConfig,
     HubConfig,
-    MdnsDiscoveryConfig,
     OnboardingConfig,
     PersistenceConfig,
 )
@@ -48,15 +46,11 @@ def test_remote_channel_provider_requires_https() -> None:
         ChannelProviderConfig(contract_url="http://provider.example/v1")
 
 
-def test_mdns_requires_a_local_public_hostname() -> None:
-    with pytest.raises(ValidationError, match=r"\.local"):
-        HubConfig(onboarding=OnboardingConfig(public_base_url="https://hub.example.com"))
-
+def test_mdns_allows_a_publicly_trusted_https_hostname() -> None:
     config = HubConfig(
-        discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
         onboarding=OnboardingConfig(public_base_url="https://hub.example.com"),
     )
-    assert config.discovery.mdns.enabled is False
+    assert config.discovery.mdns.enabled is True
 
 
 def test_checked_in_settings_loads_as_the_only_configuration(monkeypatch) -> None:

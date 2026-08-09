@@ -77,3 +77,19 @@ def test_mdns_identity_and_port_derive_from_public_contract() -> None:
     assert advertiser._service_name == "living-room-hub._eidolon-hub._tcp.local."
     assert advertiser._hostname == "living-room"
     assert advertiser._port == 8443
+
+
+def test_mdns_can_advertise_a_public_ca_tls_uri_over_the_local_link() -> None:
+    config = HubConfig(
+        onboarding=OnboardingConfig(
+            hub_id="Living Room Hub",
+            public_base_url="https://hub.example.com:8443",
+        )
+    )
+
+    advertiser = _mdns_advertiser(config, _hub_descriptor(config))
+
+    assert advertiser is not None
+    assert advertiser._hostname == "living-room-hub"
+    assert advertiser._port == 8443
+    assert advertiser._descriptor_uri.startswith("https://hub.example.com:8443/")
