@@ -163,6 +163,18 @@ def test_enrollment_request_and_receipt_conform_to_same_contract() -> None:
         _validate("onboarding/enrollment.schema.json", value)
 
 
+def test_manual_admission_contract_has_no_device_display_or_owner_secret() -> None:
+    definitions = _schema("onboarding/enrollment.schema.json")["$defs"]
+
+    request_fields = set(definitions["DeviceEnrollment"]["properties"])
+    receipt_fields = set(definitions["DeviceEnrollmentReceipt"]["properties"])
+
+    assert "identity_proof" not in request_fields
+    assert "pairing_proof" not in request_fields
+    assert "pairing_secret" not in request_fields
+    assert "pairing_claim_uri" not in receipt_fields
+
+
 def test_handoff_request_and_outcome_conform_to_same_contract() -> None:
     values = (
         DeviceHandoffRequest(
