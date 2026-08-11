@@ -26,8 +26,14 @@ def interface_addresses() -> tuple[str, ...]:
                 continue
             if address.is_loopback or address.is_unspecified or address.is_multicast:
                 continue
-            # A scoped link-local IPv6 literal is not a portable descriptor URI.
-            if address.version == 6 and address.is_link_local:
+            # A link-local address describes one cable, not a network a phone
+            # can be sent to. This held for IPv6 from the start; the IPv4 half
+            # was missing, so a Host with a second NIC — an operator's direct
+            # wire, or simply Ethernet beside Wi-Fi — advertised 169.254/16.
+            # Sorted as text that address even precedes the real one, so the
+            # Hub told every device on the LAN to reach it somewhere they
+            # cannot route to.
+            if address.is_link_local:
                 continue
             values.add(str(address))
     return tuple(sorted(values, key=lambda value: (ipaddress.ip_address(value).version, value)))

@@ -93,3 +93,49 @@ def test_mdns_can_advertise_a_public_ca_tls_uri_over_the_local_link() -> None:
     assert advertiser._hostname == "living-room-hub"
     assert advertiser._port == 8443
     assert advertiser._descriptor_uri.startswith("https://hub.example.com:8443/")
+
+
+def test_a_link_local_address_is_never_advertised() -> None:
+    """169.254/16 describes one cable, not a network a phone can be sent to.
+
+    The IPv6 half of this was filtered from the start; the IPv4 half was not.
+    A Host with a second NIC — an operator's direct wire, or simply Ethernet
+    beside Wi-Fi — therefore advertised its link-local address, and because
+    addresses sort as text that one even preceded the routable one. Every
+    device on the LAN was told to reach the Hub somewhere it cannot route to.
+    """
+
+    from hub.adapters.discovery import zeroconf as module
+
+    class _Adapter:
+        def __init__(self, ips):
+            self.ips = ips
+
+    class _IP:
+        def __init__(self, ip):
+            self.ip = ip
+
+    adapters = [
+        _Adapter([_IP("169.254.55.2"), _IP("192.168.100.15")]),
+        _Adapter([_IP(("fe80::1", 0, 0))]),
+        _Adapter([_IP("127.0.0.1")]),
+    ]
+    with patch.object(module.ifaddr, "get_adapters", return_value=adapters):
+        assert module.interface_addresses() == ("192.168.100.15",)
+
+
+def test_a_routable_address_is_still_advertised_when_it_is_the_only_one() -> None:
+    from hub.adapters.discovery import zeroconf as module
+
+    class _Adapter:
+        def __init__(self, ips):
+            self.ips = ips
+
+    class _IP:
+        def __init__(self, ip):
+            self.ip = ip
+
+    with patch.object(
+        module.ifaddr, "get_adapters", return_value=[_Adapter([_IP("10.0.0.4")])]
+    ):
+        assert module.interface_addresses() == ("10.0.0.4",)
