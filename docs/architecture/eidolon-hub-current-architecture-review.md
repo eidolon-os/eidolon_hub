@@ -52,7 +52,7 @@ Domain/Application 不导入 FastAPI、SQLAlchemy、HTTPX 或 Zeroconf；Router 
 
 ## 4. ORM 与热读路径
 
-默认数据库 `/Users/manson/eidolon/data/eidolon-hub.sqlite3` 只有：
+默认数据库 `$EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3` 只有：
 
 | 表 | 作用 |
 |---|---|

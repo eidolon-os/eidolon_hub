@@ -106,7 +106,7 @@ Hub 管理审计仍需记录实际执行者，但它不形成第二套 Owner。A
 
 ## 7. 存储模型
 
-Local-only Hub 使用独占 SQLite `/Users/manson/eidolon/data/eidolon-hub.sqlite3`：
+Local-only Hub 使用独占 SQLite `$EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3`：
 
 | 表 | 权威内容 |
 |---|---|

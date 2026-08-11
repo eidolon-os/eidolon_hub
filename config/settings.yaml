@@ -14,4 +14,4 @@ channel_provider:
 
 persistence:
   # Hub owns this database file; it does not share the legacy eidolon.sqlite3.
-  path: /Users/manson/eidolon/data/eidolon-hub.sqlite3
+  path: $EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3

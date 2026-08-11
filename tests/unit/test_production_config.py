@@ -14,12 +14,16 @@ from hub.config import (
 )
 
 
-def test_default_config_knows_only_local_behavior_and_public_contract_addresses() -> None:
+def test_default_config_knows_only_local_behavior_and_public_contract_addresses(
+    tmp_path, monkeypatch
+) -> None:
+    state_root = tmp_path / "state"
+    monkeypatch.setenv("EIDOLON_STATE_ROOT", str(state_root))
     config = HubConfig()
 
     assert config.channel_provider.contract_url == "http://127.0.0.1:8767/v1"
     assert config.onboarding.public_base_url == "https://eidolon-hub.local"
-    assert config.persistence.path == "/Users/manson/eidolon/data/eidolon-hub.sqlite3"
+    assert config.persistence.path == str(state_root / "hub/eidolon-hub.sqlite3")
     assert not hasattr(config, "deployment")
     assert not hasattr(config, "api")
     assert not hasattr(config, "channel_control")
@@ -53,14 +57,16 @@ def test_mdns_allows_a_publicly_trusted_https_hostname() -> None:
     assert config.discovery.mdns.enabled is True
 
 
-def test_checked_in_settings_loads_as_the_only_configuration(monkeypatch) -> None:
+def test_checked_in_settings_loads_as_the_only_configuration(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "state"
     monkeypatch.delenv("EIDOLON_HUB_SETTINGS_YAML", raising=False)
     monkeypatch.delenv("EIDOLON_HUB_ENV_FILE", raising=False)
+    monkeypatch.setenv("EIDOLON_STATE_ROOT", str(state_root))
 
     config = HubConfig.load()
 
     assert config.persistence == PersistenceConfig(
-        path="/Users/manson/eidolon/data/eidolon-hub.sqlite3"
+        path=str(state_root / "hub/eidolon-hub.sqlite3")
     )
     assert config.discovery.mdns.enabled is True
 
@@ -86,6 +92,21 @@ persistence:
     assert config.onboarding.public_base_url == "https://custom.local"
     assert config.channel_provider.contract_url == "https://provider.example/v1"
     assert config.persistence.path == "/tmp/eidolon-hub-custom.sqlite3"
+
+
+def test_settings_path_expands_host_contract_environment(tmp_path, monkeypatch) -> None:
+    state_root = tmp_path / "state"
+    settings = tmp_path / "settings.yaml"
+    settings.write_text(
+        "persistence:\n  path: $EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("EIDOLON_STATE_ROOT", str(state_root))
+    monkeypatch.setenv("EIDOLON_HUB_SETTINGS_YAML", str(settings))
+
+    config = HubConfig.load()
+
+    assert config.persistence.path == str(state_root / "hub/eidolon-hub.sqlite3")
 
 
 def test_installed_wheel_falls_back_to_packaged_settings(tmp_path, monkeypatch) -> None:

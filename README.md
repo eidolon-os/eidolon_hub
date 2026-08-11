@@ -165,7 +165,7 @@ FastAPI 同时发布 `/openapi.json` 和 `/docs`。JSON Schema 是正式 Wire Co
 
 ## 存储与内存热路径
 
-默认数据库为 `/Users/manson/eidolon/data/eidolon-hub.sqlite3`，只包含：
+默认数据库为 `$EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3`，只包含：
 
 | 表 | 作用 |
 |---|---|

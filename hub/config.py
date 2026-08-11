@@ -74,7 +74,10 @@ class ChannelProviderConfig(_StrictConfig):
 
 class PersistenceConfig(_StrictConfig):
     path: str = Field(
-        default="/Users/manson/eidolon/data/eidolon-hub.sqlite3",
+        default_factory=lambda: str(
+            Path(os.environ.get("EIDOLON_STATE_ROOT", "~/eidolon/data")).expanduser()
+            / "hub/eidolon-hub.sqlite3"
+        ),
         min_length=1,
     )
 
@@ -129,6 +132,9 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     value = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
     if not isinstance(value, dict):
         raise ValueError("Hub settings must be a YAML object")
+    persistence = value.get("persistence")
+    if isinstance(persistence, dict) and isinstance(persistence.get("path"), str):
+        persistence["path"] = os.path.expandvars(os.path.expanduser(persistence["path"]))
     return value
 
 

@@ -256,7 +256,7 @@
 - 修改前行为：`EIDOLON_HUB_PROFILE` 选择 Local/Cloud YAML；Persistence 同时支持 SQLite 与 asyncpg/PostgreSQL；Cloud 启动只检查 migration head；`DeviceAuthorityLease`、instance ID 和 fencing token 处理多实例设备竞争；Directory 周期全量 refresh 观察其他实例写入。
 - 首先失败：新增 Local-only Architecture characterization 后，测试首先因缺少单一 `config/settings.yaml`、Package Metadata 仍含 `asyncpg` 而失败，证明删除目标可被自动化观察；随后才修改生产代码。
 - 配置：合并为唯一严格 `config/settings.yaml`；删除 `settings.local.yaml`、`settings.cloud.yaml`、Profile/instance/PostgreSQL 环境变量。`.env` 只保存 Lease、Management JWT 和 Provider Token 三个 Secret。
-- Persistence：Composition 只创建 Hub 独占 SQLite，默认 `/Users/manson/eidolon/data/eidolon-hub.sqlite3`，启动执行 packaged Alembic migration；删除 PostgreSQL factory/pool、asyncpg、独立 migration CLI 和 Cloud Functional/Parity tests。初始迁移只保留六张当前业务表。
+- Persistence：Composition 只创建 Hub 独占 SQLite，当前路径由 Host profile 注入为 `$EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3`，启动执行 packaged Alembic migration；删除 PostgreSQL factory/pool、asyncpg、独立 migration CLI 和 Cloud Functional/Parity tests。初始迁移只保留六张当前业务表。
 - 单进程所有权：新增 `LocalProcessLock`，打开数据库前非阻塞独占 `<database>.lock`；第二个 Hub 进程共享同一路径时 fail closed。锁文件存在不等于锁被持有，正常退出释放内核锁。
 - Domain/Application：删除 Authority Entity/Repository、`hub_instance_id`、`fencing_token`、authority acquire/renew 和按最大 fence 过滤 Session；在线只由本进程持久 active Session 与 expiry 推导。
 - 热路径：Device Directory 仍为 SQLite authoritative + in-memory write-through，启动 hydrate、DB-first 更新；删除跨实例 background refresh，保留显式 refresh 与时间派生投影周期。

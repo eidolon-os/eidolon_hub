@@ -15,7 +15,7 @@ Hub 仍需要清晰分层、可测试的 Repository Port、数据库权威源和
 ## 决策
 
 1. Hub 产品运行形态只有 Local 单进程；只有一个严格的 `config/settings.yaml`，不再提供 Profile selector。
-2. Hub 运行时数据库只有独占 SQLite 文件，默认路径为 `/Users/manson/eidolon/data/eidolon-hub.sqlite3`。
+2. Hub 运行时数据库只有独占 SQLite 文件，默认路径为 `$EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3`。
 3. Composition 启动时获取 `<database>.lock` 的非阻塞独占文件锁。共享同一数据库的第二个 Hub 进程立即失败，不尝试主从切换。
 4. 删除 PostgreSQL/asyncpg、pool 配置、独立 migration CLI 和 Cloud-only tests。
    数据库 migration 机制随后也已删除；当前语义见 ADR 0016 与 Device Control Subsystem 标尺。
