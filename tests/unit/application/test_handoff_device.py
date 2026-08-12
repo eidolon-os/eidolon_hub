@@ -103,6 +103,37 @@ async def test_unknown_invalid_and_expired_handoffs_fail_closed() -> None:
         await expired.execute(enrollment_id=device.enrollment_id, retrieval_token=TOKEN)
 
 
+async def test_approved_device_keeps_serving_after_the_pickup_window() -> None:
+    # The window bounds an enrollment nobody has collected. An approved device
+    # asks for channel credentials every time it opens a conversation; ending
+    # that at a fixed time after approval would take the device out of service
+    # while its owner still has it.
+    device = replace(
+        _device(state=DeviceLifecycleState.APPROVED),
+        retrieval_expires_at=NOW - timedelta(seconds=1),
+    )
+    use_case, provision = _use_case(device)
+
+    outcome = await use_case.execute(enrollment_id="enrollment-1", retrieval_token=TOKEN)
+
+    assert outcome.assignments is not None
+    assert provision.calls[0]["device"] is device
+
+
+async def test_revoked_device_reports_revocation_even_after_the_window() -> None:
+    device = replace(
+        _device(state=DeviceLifecycleState.REVOKED),
+        retrieval_expires_at=NOW - timedelta(seconds=1),
+    )
+    use_case, provision = _use_case(device)
+
+    outcome = await use_case.execute(enrollment_id="enrollment-1", retrieval_token=TOKEN)
+
+    assert outcome.device.lifecycle_state is DeviceLifecycleState.REVOKED
+    assert outcome.assignments is None
+    assert provision.calls == []
+
+
 async def test_revoked_handoff_returns_terminal_state_without_provider() -> None:
     use_case, provision = _use_case(_device(state=DeviceLifecycleState.REVOKED))
     outcome = await use_case.execute(enrollment_id="enrollment-1", retrieval_token=TOKEN)
