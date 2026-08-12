@@ -54,7 +54,14 @@ class EnrollDevice:
             return current
 
         if current is not None:
-            can_restart = (
+            # Enrolling is asking for a grant, so it is refused exactly while a
+            # grant exists: an approved device cannot be reset by anyone who
+            # merely knows its id. A revocation ends the grant — the owner
+            # removed this phone — and the device may ask again from scratch,
+            # which is the only way one that was removed, or reinstalled, ever
+            # comes back. An unapproved enrollment nobody collected in time is
+            # likewise free to start over.
+            can_restart = current.lifecycle_state is DeviceLifecycleState.REVOKED or (
                 current.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
                 and current.retrieval_expires_at <= now
             )

@@ -7,7 +7,7 @@ import pytest
 
 from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
 from hub.application.use_cases.enroll_device import EnrollDevice
-from hub.domain.devices.entities import DeviceEnrollmentIntent
+from hub.domain.devices.entities import DeviceEnrollmentIntent, DeviceLifecycleState
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
@@ -117,6 +117,27 @@ async def test_unexpired_or_approved_device_cannot_be_enrolled_again() -> None:
 
     with pytest.raises(ValueError, match="already enrolled"):
         await use_case.execute(_intent(request_id="enroll-2", token="x" * 32))
+
+
+async def test_revoked_device_can_enroll_again_and_needs_approval_again() -> None:
+    # Removing a phone has to leave a way back — a reinstall, a recovered
+    # handset — and the way back is a fresh enrollment the owner approves.
+    devices, events, projector = _Devices(), _Recorder(), _Recorder()
+    use_case = _use_case(devices, events, projector)
+    first = await use_case.execute(_intent())
+    devices.values["device-1"] = replace(
+        first,
+        lifecycle_state=DeviceLifecycleState.REVOKED,
+        owner_id="owner-1",
+    )
+
+    again = await use_case.execute(
+        _intent(request_id="enroll-2", token="new-device-random-retrieval-token-2")
+    )
+
+    assert again.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
+    assert again.owner_id is None
+    assert again.enrollment_id != first.enrollment_id
 
 
 async def test_expired_pending_enrollment_can_restart_without_compatibility_state() -> None:
