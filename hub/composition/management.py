@@ -31,7 +31,7 @@ def build_device_management(
 ) -> DeviceManagementHttpServices:
     return DeviceManagementHttpServices(
         get_device=GetDevice(directory),
-        list_devices=ListDevices(directory),
+        list_devices=ListDevices(directory, clock=clock),
         approve_device=ApproveDevice(
             devices=repositories.devices,
             mutations=repositories.device_mutations,

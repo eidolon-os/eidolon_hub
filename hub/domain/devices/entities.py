@@ -87,12 +87,32 @@ class DeviceDirectoryEntry:
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
     updated_at: datetime
+    #: When this device's current window closes. While it is pending approval
+    #: that is the deadline for collecting the enrollment, and a listing has to
+    #: know it: an enrollment past it can no longer be approved.
+    retrieval_expires_at: datetime
 
     def __post_init__(self) -> None:
         if not self.device_id.strip() or not self.owner_scope.strip():
             raise ValueError("directory device_id and owner_scope are required")
-        if any(value.tzinfo is None for value in (self.enrolled_at, self.updated_at)):
+        if any(
+            value.tzinfo is None
+            for value in (self.enrolled_at, self.updated_at, self.retrieval_expires_at)
+        ):
             raise ValueError("directory timestamps must be timezone-aware")
+
+    def awaits_approval(self, *, now: datetime) -> bool:
+        """Whether approving this device could still do anything.
+
+        A pending enrollment past its window is not waiting for anyone: the Hub
+        refuses it, and the device replaces it by enrolling again. Offering it
+        as claimable is offering something that can only fail.
+        """
+
+        return (
+            self.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
+            and now < self.retrieval_expires_at
+        )
 
     @property
     def manifest_revision(self) -> str:

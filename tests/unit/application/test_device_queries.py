@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
@@ -16,7 +16,12 @@ from hub.domain.devices.manifest import DeviceManifestDocument
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
 
 
-def _entry(device_id: str) -> DeviceDirectoryEntry:
+def _entry(
+    device_id: str,
+    *,
+    lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.APPROVED,
+    retrieval_expires_at: datetime = NOW + timedelta(hours=1),
+) -> DeviceDirectoryEntry:
     return DeviceDirectoryEntry(
         device_id=device_id,
         owner_scope="owner-1",
@@ -29,10 +34,19 @@ def _entry(device_id: str) -> DeviceDirectoryEntry:
                 "actions": [{"name": "display.render"}],
             }
         ),
-        lifecycle_state=DeviceLifecycleState.APPROVED,
+        lifecycle_state=lifecycle_state,
         enrolled_at=NOW,
         updated_at=NOW,
+        retrieval_expires_at=retrieval_expires_at,
     )
+
+
+class _Clock:
+    def __init__(self, now: datetime = NOW) -> None:
+        self._now = now
+
+    def now(self) -> datetime:
+        return self._now
 
 
 class _Directory:
@@ -70,7 +84,7 @@ async def test_get_device_is_owner_scoped_and_exact() -> None:
 
 @pytest.mark.asyncio
 async def test_list_devices_combines_structured_filters_and_stable_cursor() -> None:
-    query = ListDevices(_Directory())
+    query = ListDevices(_Directory(), clock=_Clock())
 
     first = await query.execute(
         DeviceListQuery(
@@ -103,7 +117,7 @@ async def test_list_q_is_a_bounded_ui_filter_not_a_separate_search_contract() ->
     directory = _Directory()
     directory.entries = (replace(_entry("device-a"), display_name="Kitchen Display"),)
 
-    page = await ListDevices(directory).execute(
+    page = await ListDevices(directory, clock=_Clock()).execute(
         DeviceListQuery(owner_scope="owner-1", q=" kitchen ", limit=20)
     )
 
@@ -133,3 +147,52 @@ def test_list_query_accepts_only_bounded_pages(query) -> None:
 def test_list_query_rejects_unbounded_or_ambiguous_inputs(values) -> None:
     with pytest.raises(ValueError):
         DeviceListQuery(**values)
+
+
+@pytest.mark.asyncio
+async def test_an_enrollment_past_its_window_is_not_offered_as_claimable() -> None:
+    # A device that was set up, then left alone past its window, then set up
+    # again keeps its id — so a stale enrollment and the live one look the same
+    # to anything matching on device_id. Offering the stale one is offering a
+    # claim the Hub can only refuse, seventeen seconds before the live one
+    # arrives; that refusal reached a person as "配网失败" for a device that had
+    # in fact been commissioned.
+    directory = _Directory()
+    directory.entries = (
+        _entry(
+            "device-stale",
+            lifecycle_state=DeviceLifecycleState.PENDING_APPROVAL,
+            retrieval_expires_at=NOW - timedelta(seconds=1),
+        ),
+        _entry(
+            "device-live",
+            lifecycle_state=DeviceLifecycleState.PENDING_APPROVAL,
+            retrieval_expires_at=NOW + timedelta(minutes=30),
+        ),
+    )
+
+    page = await ListDevices(directory, clock=_Clock()).execute(
+        DeviceListQuery(
+            owner_scope="owner-1",
+            lifecycle_state=DeviceLifecycleState.PENDING_APPROVAL,
+        )
+    )
+
+    assert [entry.device_id for entry in page.entries] == ["device-live"]
+
+
+@pytest.mark.asyncio
+async def test_the_window_only_decides_what_is_awaiting_approval() -> None:
+    # Past its window an approved device is still this owner's device; the
+    # deadline it carries then is the handoff one, which says nothing about
+    # whether the device belongs here.
+    directory = _Directory()
+    directory.entries = (
+        _entry("device-approved", retrieval_expires_at=NOW - timedelta(days=1)),
+    )
+
+    page = await ListDevices(directory, clock=_Clock()).execute(
+        DeviceListQuery(owner_scope="owner-1")
+    )
+
+    assert [entry.device_id for entry in page.entries] == ["device-approved"]
