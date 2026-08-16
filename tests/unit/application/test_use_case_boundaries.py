@@ -8,6 +8,7 @@ import pytest
 from hub.application.idempotency import mutation_fingerprint
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.use_cases.approve_device import ApproveDevice
+from hub.application.use_cases.rename_device import RenameDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
@@ -222,3 +223,73 @@ async def test_revoking_names_an_owner_and_the_hub_holds_it_to_that() -> None:
         principal_id=PRINCIPAL,
     )
     assert revoked.lifecycle_state is DeviceLifecycleState.REVOKED
+
+
+@pytest.mark.asyncio
+async def test_renaming_a_device_leaves_the_lifecycle_ledger_alone() -> None:
+    """Naming something is not a lifecycle event.
+
+    The management idempotency slot exists so a repeated approval or
+    revocation is recognised as the same act rather than performed twice.
+    Writing a rename into it would make the next approval look like a replay
+    of something else — which is precisely the failure a Controller hit as a
+    permanent 409 it could never clear.
+    """
+
+    devices = _Devices()
+    devices.device = _device(
+        lifecycle_state=DeviceLifecycleState.APPROVED,
+        owner_id="owner-1",
+        last_management_request_id="approval-1",
+        last_management_fingerprint="fingerprint-of-that-approval",
+    )
+    rename = RenameDevice(devices=devices, mutations=devices, clock=_Clock())
+
+    renamed = await rename.execute(
+        device_id="device-1",
+        owner_scope="owner-1",
+        display_name="  客厅的 Box-3  ",
+        principal_id=PRINCIPAL,
+    )
+
+    assert renamed.display_name == "客厅的 Box-3"
+    # The approval that came before is still the last management act on record.
+    assert renamed.last_management_request_id == "approval-1"
+    assert renamed.last_management_fingerprint == "fingerprint-of-that-approval"
+
+
+@pytest.mark.asyncio
+async def test_renaming_answers_to_the_owner_and_refuses_the_impossible() -> None:
+    devices = _Devices()
+    devices.device = _device(
+        lifecycle_state=DeviceLifecycleState.APPROVED,
+        owner_id="owner-1",
+        display_name="esp-box-3",
+    )
+    rename = RenameDevice(devices=devices, mutations=devices, clock=_Clock())
+
+    with pytest.raises(PermissionError):
+        await rename.execute(
+            device_id="device-1",
+            owner_scope="owner-somebody-else",
+            display_name="客厅的 Box-3",
+            principal_id=PRINCIPAL,
+        )
+    with pytest.raises(ValueError):
+        # Whitespace would erase the name they have.
+        await rename.execute(
+            device_id="device-1",
+            owner_scope="owner-1",
+            display_name="   ",
+            principal_id=PRINCIPAL,
+        )
+
+    # Setting a name to what it already is changes nothing and needs no ledger
+    # to say so.
+    unchanged = await rename.execute(
+        device_id="device-1",
+        owner_scope="owner-1",
+        display_name="esp-box-3",
+        principal_id=PRINCIPAL,
+    )
+    assert unchanged.display_name == "esp-box-3"

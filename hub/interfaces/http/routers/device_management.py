@@ -10,6 +10,7 @@ from fastapi import APIRouter, Header, HTTPException
 from hub.application.queries.get_device import GetDevice
 from hub.application.queries.list_devices import DeviceListQuery, ListDevices
 from hub.application.use_cases.approve_device import ApproveDevice
+from hub.application.use_cases.rename_device import RenameDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.contracts.bindings.device import (
     DeviceApprovalRequest,
@@ -17,6 +18,7 @@ from hub.contracts.bindings.device import (
     DeviceDirectoryPage,
     DeviceLifecycleStatus,
     DeviceManagementEventPage,
+    DeviceRenameRequest,
     DeviceRevocationRequest,
 )
 from hub.contracts.mappers import (
@@ -35,6 +37,7 @@ class DeviceManagementHttpServices:
     get_device: GetDevice
     list_devices: ListDevices
     approve_device: ApproveDevice
+    rename_device: RenameDevice
     revoke_device: RevokeDevice
     authorizer: ManagementAuthorizer
     event_stream: DeviceManagementEventStream
@@ -169,6 +172,41 @@ def create_device_management_router(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return lifecycle_status_to_wire(device)
+
+    @router.patch("/devices/{device_id}", response_model=DeviceLifecycleStatus)
+    async def rename_registered_device(
+        device_id: str,
+        payload: DeviceRenameRequest,
+        authorization: str = Header(alias="Authorization"),
+    ):
+        """Set what a device is called.
+
+        Gated on the same permission as revocation rather than a new one: both
+        are an Owner acting on a device they hold, and inventing a permission
+        for the smaller of the two would say they are different kinds of act.
+        """
+
+        runtime = current()
+        try:
+            principal = await runtime.authorizer.authorize(
+                credential=authorization,
+                permission=ManagementPermission.DEVICE_REVOKE,
+                owner_scope=None,
+                device_id=device_id,
+            )
+            device = await runtime.rename_device.execute(
+                device_id=device_id,
+                owner_scope=payload.owner_scope,
+                display_name=payload.display_name,
+                principal_id=principal.subject_id,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="device not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return lifecycle_status_to_wire(device)
 
     @router.post("/devices/{device_id}/revocation", response_model=DeviceLifecycleStatus)

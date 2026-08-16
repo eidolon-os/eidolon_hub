@@ -63,6 +63,16 @@ class DeviceApprovalRequest(ContractModel):
     owner_id: str = Field(min_length=1, max_length=64)
 
 
+class DeviceRenameRequest(ContractModel):
+    """What an Owner calls a device, as the only part of it they decide."""
+
+    operation: Literal["device.rename"] = "device.rename"
+    display_name: str = Field(min_length=1, max_length=128)
+    #: Whose device the caller believes this is; the Hub refuses to rename one
+    #: held by anyone else.
+    owner_scope: str | None = Field(default=None, min_length=1, max_length=64)
+
+
 class DeviceRevocationRequest(ContractModel):
     operation: Literal["device.revocation"] = "device.revocation"
     request_id: str = Field(min_length=1, max_length=96)

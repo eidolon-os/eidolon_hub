@@ -10,6 +10,7 @@ from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.queries.get_device import GetDevice
 from hub.application.queries.list_devices import ListDevices
 from hub.application.use_cases.approve_device import ApproveDevice
+from hub.application.use_cases.rename_device import RenameDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.interfaces.http.routers.device_management import DeviceManagementHttpServices
 from hub.ports.channels import ChannelProviderControl
@@ -38,6 +39,11 @@ def build_device_management(
             clock=clock,
             handoff_ttl=handoff_ttl,
             directory_projector=projector,
+        ),
+        rename_device=RenameDevice(
+            devices=repositories.devices,
+            mutations=repositories.device_mutations,
+            clock=clock,
         ),
         revoke_device=RevokeDevice(
             devices=repositories.devices,
