@@ -84,7 +84,14 @@ class ChannelProviderHttpClient:
                 manifest_revision=context.manifest_revision,
             ),
         )
-        payload = request.model_dump_json().encode()
+        # Serialised by alias, because the wire is the contract and this model
+        # is not it: the manifest's `schema` field is `schema_` in Python, and
+        # dumping without the alias sends a name the Provider has never heard
+        # of. It only shows up once a device declares a property — every
+        # manifest with an empty `properties` list serialises identically
+        # either way — so the first device to describe itself was the first
+        # one the Provider refused.
+        payload = request.model_dump_json(by_alias=True).encode()
         try:
             response = ProviderChannelProvisionResponse.model_validate_json(
                 await self._client.request(self._provision_route, payload, timeout=self._timeout)
@@ -124,7 +131,7 @@ class ChannelProviderHttpClient:
             response = ProviderChannelRevocationResponse.model_validate_json(
                 await self._client.request(
                     self._revoke_route,
-                    request.model_dump_json().encode(),
+                    request.model_dump_json(by_alias=True).encode(),
                     timeout=self._timeout,
                 )
             )

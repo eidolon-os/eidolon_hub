@@ -75,6 +75,49 @@ async def test_provider_client_uses_fixed_provision_contract_and_preserves_bindi
     assert assignments.grants[0].opaque_binding.relay_bytes() == b"provider-owned"
 
 
+async def test_provider_client_sends_manifest_field_names_the_provider_knows() -> None:
+    # A manifest with no properties serialises the same either way, which is why
+    # every earlier test passed while the first device to describe itself was
+    # refused: `schema` is `schema_` in Python, and dumping the model without its
+    # aliases sends a field name no Provider has ever accepted.
+    transport = _Transport()
+    client = ChannelProviderHttpClient(
+        transport, contract_url="https://provider.example/v1", timeout_seconds=3
+    )
+
+    await client.provision_channels(
+        ProviderDeviceContext(
+            operation_id="enrollment-2",
+            hub_id="hub-1",
+            device_id="device-2",
+            owner_id="owner-1",
+            display_name="Device",
+            device_kind="generic",
+            manifest_json=json.dumps(
+                {
+                    "schema_version": 1,
+                    "title": "Device",
+                    "properties": [
+                        {
+                            "name": "interaction_mode",
+                            "schema": {"const": "half_duplex", "type": "string"},
+                            "observable": False,
+                            "writable": False,
+                        }
+                    ],
+                    "actions": [],
+                    "events": [],
+                    "media": [],
+                }
+            ),
+            manifest_revision="sha256:manifest",
+        )
+    )
+
+    prop = transport.calls[0][1]["device"]["manifest"]["properties"][0]
+    assert sorted(prop) == ["name", "observable", "schema", "writable"]
+
+
 async def test_provider_client_uses_separate_idempotent_revoke_contract() -> None:
     transport = _Transport()
     client = ChannelProviderHttpClient(transport, contract_url="https://provider.example/v1")
