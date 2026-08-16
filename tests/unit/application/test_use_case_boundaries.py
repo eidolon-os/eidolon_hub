@@ -128,6 +128,7 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
     )
     with pytest.raises(KeyError):
         await revoke.execute(
+            owner_scope=None,
             device_id="missing",
             reason="test",
             request_id="revoke-1",
@@ -142,7 +143,8 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
         ),
     )
     replay = await revoke.execute(
-        device_id="device-1",
+        owner_scope=None,
+            device_id="device-1",
         reason="test",
         request_id="revoke-1",
         principal_id=PRINCIPAL,
@@ -151,6 +153,7 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
     assert len(provider.revocations) == 1
     with pytest.raises(ValueError, match="reused"):
         await revoke.execute(
+            owner_scope=None,
             device_id="device-1",
             reason="other",
             request_id="revoke-1",
@@ -164,8 +167,58 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
     )
     with pytest.raises(RuntimeError, match="inconsistent"):
         await revoke.execute(
+            owner_scope=None,
             device_id="device-1",
             reason="test",
             request_id="revoke-1",
             principal_id=PRINCIPAL,
         )
+
+
+@pytest.mark.asyncio
+async def test_revoking_names_an_owner_and_the_hub_holds_it_to_that() -> None:
+    """The Hub is where "whose device is this" is actually known.
+
+    Its use case took an identifier and revoked whatever it named, so every
+    layer above could reasonably assume some other layer had checked — and
+    none did. The caller now states the owner, and this record refuses a
+    mutation that names one who does not hold it.
+
+    That is not the boundary's authorization check made twice: the boundary
+    decides whether a session speaks for an Owner, and this decides whether
+    its own record agrees. Different questions, different places.
+    """
+
+    devices = _Devices()
+    devices.device = _device(
+        lifecycle_state=DeviceLifecycleState.APPROVED,
+        owner_id="owner-1",
+    )
+    revoke = RevokeDevice(
+        devices=devices,
+        provider=_Provider(),
+        hub_id="hub-local",
+        mutations=devices,
+        clock=_Clock(),
+        directory_projector=_Recorder(),
+    )
+
+    with pytest.raises(PermissionError):
+        await revoke.execute(
+            device_id="device-1",
+            owner_scope="owner-somebody-else",
+            reason="test",
+            request_id="revoke-1",
+            principal_id=PRINCIPAL,
+        )
+
+    # Still revocable by the owner who has it, and by an operator who is
+    # withdrawing without naming one.
+    revoked = await revoke.execute(
+        device_id="device-1",
+        owner_scope="owner-1",
+        reason="test",
+        request_id="revoke-1",
+        principal_id=PRINCIPAL,
+    )
+    assert revoked.lifecycle_state is DeviceLifecycleState.REVOKED

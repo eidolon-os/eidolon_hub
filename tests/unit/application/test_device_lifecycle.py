@@ -187,6 +187,7 @@ async def test_revocation_notifies_provider_without_hub_session_state() -> None:
         clock=_Clock(),
         directory_projector=projector,
     ).execute(
+        owner_scope=None,
         device_id="device-1",
         reason="operator-request",
         request_id="revoke-1",
@@ -217,13 +218,15 @@ async def test_provider_outage_keeps_revoked_state_and_same_request_retries() ->
 
     with pytest.raises(ConnectionError, match="unavailable"):
         await use_case.execute(
-            device_id="device-1",
+            owner_scope=None,
+        device_id="device-1",
             reason="compromised",
             request_id="revoke-retry-1",
             principal_id=PRINCIPAL,
         )
     assert devices.device.lifecycle_state is DeviceLifecycleState.REVOKED
     replay = await use_case.execute(
+        owner_scope=None,
         device_id="device-1",
         reason="compromised",
         request_id="revoke-retry-1",
@@ -250,6 +253,7 @@ async def test_revocation_idempotency_fingerprint_has_no_delimiter_collisions() 
     )
 
     await use_case.execute(
+        owner_scope=None,
         device_id="device-1",
         reason="reason:a",
         request_id="revoke-delimiter",
@@ -258,7 +262,8 @@ async def test_revocation_idempotency_fingerprint_has_no_delimiter_collisions() 
 
     with pytest.raises(ValueError, match="reused"):
         await use_case.execute(
-            device_id="device-1",
+            owner_scope=None,
+        device_id="device-1",
             reason="reason",
             request_id="revoke-delimiter",
             principal_id="a:principal",

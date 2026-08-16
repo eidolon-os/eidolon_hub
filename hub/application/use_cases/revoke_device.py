@@ -41,13 +41,33 @@ class RevokeDevice:
         self,
         *,
         device_id: str,
+        owner_scope: str | None,
         reason: str,
         request_id: str,
         principal_id: str,
     ) -> ManagedDevice:
+        """Withdraw a device's grant.
+
+        `owner_scope` has no default on purpose. This use case used to take an
+        identifier and revoke whatever it named, and every layer above it could
+        reasonably assume some other layer had checked whose device that was —
+        so none did. Requiring the caller to state the owner turns that
+        assumption into something written down at each call site, and passing
+        None is then a decision someone made rather than a question nobody
+        asked.
+
+        None means "any device", which is what an operator withdrawing an
+        unclaimed enrollment needs. A value means this device must belong to
+        that owner, and the Hub refuses if it does not — not because it doubts
+        the caller's authority, but because this is its own record and the
+        mutation names an owner that does not hold it.
+        """
+
         current = await self._devices.get(device_id)
         if current is None:
             raise KeyError(device_id)
+        if owner_scope is not None and current.owner_id != owner_scope:
+            raise PermissionError("device does not belong to that owner")
         fingerprint = mutation_fingerprint(
             "device.revoke",
             {"reason": reason, "principal_id": principal_id},

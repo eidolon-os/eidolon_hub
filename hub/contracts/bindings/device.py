@@ -67,6 +67,10 @@ class DeviceRevocationRequest(ContractModel):
     operation: Literal["device.revocation"] = "device.revocation"
     request_id: str = Field(min_length=1, max_length=96)
     reason: str = Field(default="operator-request", min_length=1, max_length=256)
+    #: Whose device the caller believes this is. Optional because an unclaimed
+    #: enrollment belongs to nobody; when given, the Hub refuses to revoke a
+    #: device held by anyone else.
+    owner_scope: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class DeviceLifecycleStatus(ContractModel):

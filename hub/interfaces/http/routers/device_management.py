@@ -187,6 +187,10 @@ def create_device_management_router(
             )
             device = await runtime.revoke_device.execute(
                 device_id=device_id,
+                # Said by the caller, and checked against this Hub's own
+                # record. Absent means an unclaimed enrollment is being
+                # withdrawn, which belongs to nobody to begin with.
+                owner_scope=payload.owner_scope,
                 reason=payload.reason,
                 request_id=payload.request_id,
                 principal_id=principal.subject_id,

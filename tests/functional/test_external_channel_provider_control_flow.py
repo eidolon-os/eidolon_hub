@@ -119,7 +119,8 @@ async def test_provision_relay_and_revoke_are_control_only() -> None:
             clock=_Clock(),
             directory_projector=_Projector(),
         ).execute(
-            device_id="device-1",
+            owner_scope=None,
+        device_id="device-1",
             reason="operator-request",
             request_id="revoke-1",
             principal_id="owner-operator",
