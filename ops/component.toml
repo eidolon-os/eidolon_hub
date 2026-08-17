@@ -1,0 +1,77 @@
+# How Hub is operated, stated by Hub.
+#
+# Ops used to carry these facts in tables of its own, which meant every change
+# here was a change someone had to remember to make there. This file is the
+# authority now; Ops reads it. The schema is eidolon_ops's
+# contracts/component-ops/v1.schema.json.
+#
+# tests/test_operations_contract.py checks these claims against Hub's own code
+# and configuration, so a change on one side that is not made on the other
+# fails here rather than on a Host.
+
+schema_version = 1
+component_id = "eidolon_hub"
+contract_version = "1"
+
+[[units]]
+id = "eidolon-hub"
+kind = "service"
+exec = ".venv/bin/uvicorn"
+user = "eidolon"
+serves = ["hub"]
+# Hub asks the Channel Provider for room contracts while admitting a device,
+# so it is ordered behind it rather than discovering it is not there yet.
+requires = ["eidolon-channel-provider"]
+after = ["local-fs.target", "network.target"]
+
+[ports.hub]
+default = 8082
+bind = "loopback"
+purpose = "device admission authority"
+# Loopback, not LAN. What reaches Hub from the network reaches it through the
+# ingress Ops installs in front of it, which is where the TLS identity is.
+
+[[inputs]]
+name = "hub_env"
+install_path = "/etc/eidolon/hub.env"
+kind = "secret"
+source = "operator"
+owner = "root"
+group = "root"
+mode = "0600"
+required_by = ["eidolon-hub"]
+
+[[inputs]]
+name = "hub_settings"
+install_path = "/etc/eidolon/generated/hub.yaml"
+kind = "settings"
+source = "derived"
+template = "config/settings.yaml"
+owner = "root"
+group = "eidolon"
+mode = "0640"
+required_by = ["eidolon-hub"]
+# Derived because two of its values — hub_id and public_base_url — name the
+# Host this release is going to; Ops fills them from the Host identity.
+#
+# The template is Hub's own settings file, which is also the one this
+# repository's tests load and a local run reads. There is deliberately not a
+# second copy for deployment: the template used to be
+# eidolon_kernel/config/hub.systemd.example.yaml, which meant Hub could not
+# change its own deployed defaults without a release of another repository, and
+# that the settings Hub's suite exercised were not the settings a Host started
+# with. The two had drifted by the time anyone read them side by side.
+
+[[state.authority]]
+path = "/var/lib/eidolon/hub/eidolon-hub.sqlite3"
+owner = "eidolon"
+group = "eidolon"
+backup = "sqlite-online"
+# Every device admission a Host has ever made. Losing it does not lose a
+# setting, it loses the record of which devices are allowed to be here.
+
+[state]
+runtime = []
+
+[reset]
+factory = ["/var/lib/eidolon/hub"]
