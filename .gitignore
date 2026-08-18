@@ -55,6 +55,9 @@ reports/e2e_*/
 
 **/.env.local
 
+# TLS private keys are local deployment material and must never enter Git.
+/deploy/nginx/ssl/*.key
+
 # Local OS/editor/runtime hygiene
 **/.DS_Store
 ._*
