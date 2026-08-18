@@ -38,12 +38,12 @@ class OnboardingConfig(_StrictConfig):
     descriptor_uri: str = (
         "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
     )
-    descriptor_path: str = "/var/lib/eidolon-bootstrap/owner_domain_descriptor.json"
+    descriptor_path: str = "/etc/eidolon/owner-domain/owner_domain_descriptor.json"
     owner_root_certificate_path: str = (
-        "/var/lib/eidolon-bootstrap/owner_domain_root_ca.pem"
+        "/etc/eidolon/owner-domain/owner_domain_root_ca.pem"
     )
     authority_signing_certificate_path: str = (
-        "/var/lib/eidolon-bootstrap/authority_signing_certificate.pem"
+        "/etc/eidolon/owner-domain/authority_signing_certificate.pem"
     )
     retrieval_window_seconds: int = Field(default=1800, ge=60, le=86_400)
 

@@ -12,9 +12,9 @@ onboarding:
   owner_domain_id: owner-local
   trust_epoch: 1
   descriptor_uri: https://eidolon-hub.local/api/device-onboarding/v1/descriptor
-  descriptor_path: /var/lib/eidolon-bootstrap/owner_domain_descriptor.json
-  owner_root_certificate_path: /var/lib/eidolon-bootstrap/owner_domain_root_ca.pem
-  authority_signing_certificate_path: /var/lib/eidolon-bootstrap/authority_signing_certificate.pem
+  descriptor_path: /etc/eidolon/owner-domain/owner_domain_descriptor.json
+  owner_root_certificate_path: /etc/eidolon/owner-domain/owner_domain_root_ca.pem
+  authority_signing_certificate_path: /etc/eidolon/owner-domain/authority_signing_certificate.pem
   retrieval_window_seconds: 1800
 
 discovery:

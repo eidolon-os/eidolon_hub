@@ -64,7 +64,7 @@ required_by = ["eidolon-hub"]
 
 [[inputs]]
 name = "owner_domain_descriptor"
-install_path = "/var/lib/eidolon-bootstrap/owner_domain_descriptor.json"
+install_path = "/etc/eidolon/owner-domain/owner_domain_descriptor.json"
 kind = "identity"
 source = "derived"
 owner = "root"
@@ -76,7 +76,7 @@ required_by = ["eidolon-hub"]
 
 [[inputs]]
 name = "owner_domain_root_certificate"
-install_path = "/var/lib/eidolon-bootstrap/owner_domain_root_ca.pem"
+install_path = "/etc/eidolon/owner-domain/owner_domain_root_ca.pem"
 kind = "identity"
 source = "derived"
 owner = "root"
@@ -86,7 +86,7 @@ required_by = ["eidolon-hub"]
 
 [[inputs]]
 name = "authority_signing_certificate"
-install_path = "/var/lib/eidolon-bootstrap/authority_signing_certificate.pem"
+install_path = "/etc/eidolon/owner-domain/authority_signing_certificate.pem"
 kind = "identity"
 source = "derived"
 owner = "root"
