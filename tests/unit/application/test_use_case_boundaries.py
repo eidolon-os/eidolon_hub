@@ -122,7 +122,7 @@ async def test_revoke_missing_and_replay_metadata_guards() -> None:
     revoke = RevokeDevice(
         devices=devices,
         provider=provider,
-        hub_id="hub-1",
+        owner_domain_id="hub-1",
         mutations=devices,
         clock=_Clock(),
         directory_projector=_Recorder(),
@@ -198,7 +198,7 @@ async def test_revoking_names_an_owner_and_the_hub_holds_it_to_that() -> None:
     revoke = RevokeDevice(
         devices=devices,
         provider=_Provider(),
-        hub_id="hub-local",
+        owner_domain_id="hub-local",
         mutations=devices,
         clock=_Clock(),
         directory_projector=_Recorder(),

@@ -7,9 +7,14 @@
 # runs on. ops/component.toml declares it; tests/contract pins the two lines.
 
 onboarding:
-  # Rewritten per Host by Ops; matched literally, so keep them one to a line.
-  hub_id: eidolon-hub-local
-  public_base_url: https://eidolon-hub.local
+  # The Owner identity and signed directory survive Host replacement. Only the
+  # candidate descriptor URI is rewritten when transport location changes.
+  owner_domain_id: owner-local
+  trust_epoch: 1
+  descriptor_uri: https://eidolon-hub.local/api/device-onboarding/v1/descriptor
+  descriptor_path: /var/lib/eidolon-bootstrap/owner_domain_descriptor.json
+  owner_root_certificate_path: /var/lib/eidolon-bootstrap/owner_domain_root_ca.pem
+  authority_signing_certificate_path: /var/lib/eidolon-bootstrap/authority_signing_certificate.pem
   retrieval_window_seconds: 1800
 
 discovery:

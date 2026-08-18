@@ -65,7 +65,7 @@ def _token(*, secret: str, subject: str, role: str) -> str:
 
 @pytest.mark.asyncio
 async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
-    tmp_path, monkeypatch, httpserver
+    tmp_path, monkeypatch, httpserver, owner_directory_config
 ) -> None:
     management_secret = "joint-contract-management-secret-0001"
     provider_token = "joint-contract-provider-secret-000001"
@@ -86,7 +86,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
     )
     app = create_composed_app(
         HubConfig(
-            onboarding=OnboardingConfig(public_base_url="https://hub.contract.invalid"),
+            onboarding=owner_directory_config(host="hub.contract.invalid"),
             discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
             channel_provider=ChannelProviderConfig(contract_url=httpserver.url_for("/v1")),
             persistence=PersistenceConfig(path=str(tmp_path / "joint-contract.sqlite3")),

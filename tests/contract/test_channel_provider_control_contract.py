@@ -51,7 +51,7 @@ class _Transport:
 def _context():
     return ProviderDeviceContext(
         operation_id="enrollment-1",
-        hub_id="hub-1",
+        owner_domain_id="hub-1",
         device_id="device-1",
         owner_id="owner-1",
         display_name="Device",
@@ -88,7 +88,7 @@ async def test_provider_client_sends_manifest_field_names_the_provider_knows() -
     await client.provision_channels(
         ProviderDeviceContext(
             operation_id="enrollment-2",
-            hub_id="hub-1",
+            owner_domain_id="hub-1",
             device_id="device-2",
             owner_id="owner-1",
             display_name="Device",

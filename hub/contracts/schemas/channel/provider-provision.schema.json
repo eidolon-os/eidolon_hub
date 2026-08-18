@@ -19,11 +19,11 @@
     "provisionRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "operation_id", "hub_id", "device"],
+      "required": ["operation", "operation_id", "owner_domain_id", "device"],
       "properties": {
         "operation": {"const": "channel.provision-device"},
         "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "hub_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "owner_domain_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "device": {"$ref": "#/$defs/device"}
       }
     },
@@ -42,11 +42,11 @@
     "revokeRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "operation_id", "hub_id", "device_id", "reason"],
+      "required": ["operation", "operation_id", "owner_domain_id", "device_id", "reason"],
       "properties": {
         "operation": {"const": "channel.revoke-device"},
         "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
-        "hub_id": {"type": "string", "minLength": 1, "maxLength": 128},
+        "owner_domain_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "reason": {"type": "string", "minLength": 1, "maxLength": 256}
       }

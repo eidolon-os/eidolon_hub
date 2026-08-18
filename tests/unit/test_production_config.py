@@ -22,7 +22,10 @@ def test_default_config_knows_only_local_behavior_and_public_contract_addresses(
     config = HubConfig()
 
     assert config.channel_provider.contract_url == "http://127.0.0.1:8767/v1"
-    assert config.onboarding.public_base_url == "https://eidolon-hub.local"
+    assert config.onboarding.owner_domain_id == "owner-local"
+    assert config.onboarding.descriptor_uri == (
+        "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
+    )
     assert config.persistence.path == str(state_root / "hub/eidolon-hub.sqlite3")
     assert not hasattr(config, "deployment")
     assert not hasattr(config, "api")
@@ -30,8 +33,10 @@ def test_default_config_knows_only_local_behavior_and_public_contract_addresses(
 
 
 def test_onboarding_requires_https() -> None:
-    with pytest.raises(ValidationError, match="plain HTTPS base URL"):
-        OnboardingConfig(public_base_url="http://hub.example")
+    with pytest.raises(ValidationError, match="plain HTTPS descriptor URI"):
+        OnboardingConfig(
+            descriptor_uri="http://hub.example/api/device-onboarding/v1/descriptor"
+        )
 
 
 @pytest.mark.parametrize("seconds", (59, 86_401))
@@ -52,7 +57,11 @@ def test_remote_channel_provider_requires_https() -> None:
 
 def test_mdns_allows_a_publicly_trusted_https_hostname() -> None:
     config = HubConfig(
-        onboarding=OnboardingConfig(public_base_url="https://hub.example.com"),
+        onboarding=OnboardingConfig(
+            descriptor_uri=(
+                "https://hub.example.com/api/device-onboarding/v1/descriptor"
+            )
+        ),
     )
     assert config.discovery.mdns.enabled is True
 
@@ -76,7 +85,7 @@ def test_explicit_settings_path_is_the_simple_override(tmp_path, monkeypatch) ->
     settings.write_text(
         """
 onboarding:
-  public_base_url: https://custom.local
+  descriptor_uri: https://custom.local/api/device-onboarding/v1/descriptor
 channel_provider:
   contract_url: https://provider.example/v1
 persistence:
@@ -89,7 +98,9 @@ persistence:
 
     config = HubConfig.load()
 
-    assert config.onboarding.public_base_url == "https://custom.local"
+    assert config.onboarding.descriptor_uri == (
+        "https://custom.local/api/device-onboarding/v1/descriptor"
+    )
     assert config.channel_provider.contract_url == "https://provider.example/v1"
     assert config.persistence.path == "/tmp/eidolon-hub-custom.sqlite3"
 

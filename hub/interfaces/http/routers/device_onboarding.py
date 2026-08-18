@@ -14,7 +14,7 @@ from hub.contracts.bindings.onboarding import (
     DeviceEnrollmentReceipt,
     DeviceHandoffOutcome,
     DeviceHandoffRequest,
-    HubDescriptor,
+    OwnerDomainDescriptor,
 )
 from hub.contracts.mappers import (
     enrollment_receipt_to_wire,
@@ -27,7 +27,7 @@ from hub.ports.channels import ChannelProviderContractError
 
 @dataclass(frozen=True, slots=True)
 class DeviceOnboardingHttpServices:
-    descriptor: HubDescriptor
+    descriptor: OwnerDomainDescriptor
     enroll: EnrollDevice
     handoff: HandoffDevice
 
@@ -40,8 +40,8 @@ def create_device_onboarding_router(
     def current() -> DeviceOnboardingHttpServices:
         return services() if callable(services) else services
 
-    @router.get("/descriptor", response_model=HubDescriptor)
-    async def descriptor() -> HubDescriptor:
+    @router.get("/descriptor", response_model=OwnerDomainDescriptor)
+    async def descriptor() -> OwnerDomainDescriptor:
         return current().descriptor
 
     @router.post("/enrollments", response_model=DeviceEnrollmentReceipt)

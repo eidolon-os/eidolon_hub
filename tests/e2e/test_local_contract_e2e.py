@@ -72,7 +72,7 @@ def _handoff():
 
 
 def test_local_enrollment_handoff_and_directory_survive_restart(
-    tmp_path, monkeypatch, httpserver
+    tmp_path, monkeypatch, httpserver, owner_directory_config
 ) -> None:
     management_secret = "local-e2e-management-secret-0001"
     provider_token = "local-e2e-provider-secret-value-1"
@@ -121,7 +121,7 @@ def test_local_enrollment_handoff_and_directory_survive_restart(
     ).respond_with_handler(provider_provision)
 
     config = HubConfig(
-        onboarding=OnboardingConfig(public_base_url="https://hub.e2e.invalid"),
+        onboarding=owner_directory_config(host="hub.e2e.invalid"),
         discovery=DiscoveryConfig(mdns=MdnsDiscoveryConfig(enabled=False)),
         channel_provider=ChannelProviderConfig(contract_url=httpserver.url_for("/v1")),
         persistence=PersistenceConfig(path=str(tmp_path / "hub-e2e.sqlite3")),

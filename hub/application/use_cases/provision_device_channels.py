@@ -17,11 +17,11 @@ class ProvisionDeviceChannels:
     def __init__(
         self,
         *,
-        hub_id: str,
+        owner_domain_id: str,
         provider: ChannelProviderControl,
         clock: Clock,
     ) -> None:
-        self._hub_id = hub_id
+        self._owner_domain_id = owner_domain_id
         self._provider = provider
         self._clock = clock
 
@@ -38,7 +38,7 @@ class ProvisionDeviceChannels:
 
         context = ProviderDeviceContext(
             operation_id=operation_id,
-            hub_id=self._hub_id,
+            owner_domain_id=self._owner_domain_id,
             device_id=device.identity.device_id,
             owner_id=device.owner_id,
             display_name=device.display_name,

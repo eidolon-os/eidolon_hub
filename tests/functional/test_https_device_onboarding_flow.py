@@ -6,12 +6,16 @@ from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from eidolon_sdk.device_foundation.v1 import (
+    AuthorityEndpoint,
+    LogicalAuthority,
+    OwnerDomainDescriptor,
+)
 
 from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
 from hub.application.use_cases.enroll_device import EnrollDevice
 from hub.application.use_cases.handoff_device import HandoffDevice
 from hub.application.use_cases.provision_device_channels import ProvisionDeviceChannels
-from hub.contracts.bindings.onboarding import HubDescriptor
 from hub.domain.channels.entities import (
     ChannelAssignmentSet,
     ChannelGrant,
@@ -86,11 +90,23 @@ def _runtime():
     devices = _Devices()
     tokens = Sha256RetrievalTokenHasher()
     services = DeviceOnboardingHttpServices(
-        descriptor=HubDescriptor(
-            hub_id="hub-local",
-            descriptor_uri="https://hub.test/api/device-onboarding/v1/descriptor",
-            device_onboarding_uri="https://hub.test/api/device-onboarding/v1",
-            enrollment_uri="https://hub.test/api/device-onboarding/v1/enrollments",
+        descriptor=OwnerDomainDescriptor(
+            owner_domain_id="owner-local",
+            directory_revision=1,
+            trust_root_refs=("sha256:" + "a" * 64,),
+            endpoints=(
+                AuthorityEndpoint(
+                    authority=LogicalAuthority.ADMISSION,
+                    logical_audience="eidolon-admission",
+                    uri="https://hub.test/api/device-onboarding/v1",
+                    transport_profile="https-json",
+                    priority=10,
+                ),
+            ),
+            issued_at=NOW - timedelta(minutes=1),
+            expires_at=NOW + timedelta(days=1),
+            signing_key_id="sha256:" + "b" * 64,
+            signature="A" * 86,
         ),
         enroll=EnrollDevice(
             devices=devices,
@@ -104,7 +120,7 @@ def _runtime():
         handoff=HandoffDevice(
             devices=devices,
             provision=ProvisionDeviceChannels(
-                hub_id="hub-local", provider=_Provider(), clock=_Clock()
+                owner_domain_id="owner-local", provider=_Provider(), clock=_Clock()
             ),
             tokens=tokens,
             clock=_Clock(),

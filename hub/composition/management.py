@@ -24,7 +24,7 @@ def build_device_management(
     directory: DeviceDirectoryRepository,
     projector: ProjectDeviceDirectory,
     provider: ChannelProviderControl,
-    hub_id: str,
+    owner_domain_id: str,
     management_jwt_secret: bytes,
     device_registry_reader_token: str,
     clock: Clock,
@@ -48,7 +48,7 @@ def build_device_management(
         revoke_device=RevokeDevice(
             devices=repositories.devices,
             provider=provider,
-            hub_id=hub_id,
+            owner_domain_id=owner_domain_id,
             mutations=repositories.device_mutations,
             clock=clock,
             directory_projector=projector,

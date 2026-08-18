@@ -77,7 +77,7 @@ def test_channel_binding_and_grant_invariants() -> None:
 def test_provider_control_values_are_bounded() -> None:
     context = ProviderDeviceContext(
         operation_id="enrollment-1",
-        hub_id="hub-1",
+        owner_domain_id="hub-1",
         device_id="device-1",
         owner_id="owner-1",
         display_name="Device",
@@ -86,7 +86,7 @@ def test_provider_control_values_are_bounded() -> None:
         manifest_revision="sha256:manifest",
     )
     with pytest.raises(ValueError, match="identifiers"):
-        replace(context, hub_id="")
+        replace(context, owner_domain_id="")
     with pytest.raises(ValueError, match="owner_id"):
         replace(context, owner_id="")
     revocation = ProviderChannelRevocation("revoke-1", "hub-1", "device-1", "operator")

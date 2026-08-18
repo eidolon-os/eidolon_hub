@@ -202,7 +202,7 @@ uv run uvicorn hub.main:app --host 0.0.0.0 --port 8082
 
 ASGI 监听、TLS、可信代理和 Nginx/Ingress 属于部署层。`onboarding.public_base_url` 必须是设备真正可访问的 HTTPS 地址。默认读取 `config/settings.yaml`；可通过 `EIDOLON_HUB_SETTINGS_YAML=/absolute/path/settings.yaml` 覆盖。
 
-同一个 `config/settings.yaml` 也是产品主机的模板：Ops 按 release 钉的 commit 读它，只替换 `onboarding.hub_id` 与 `onboarding.public_base_url` 两行（主机身份决定），写到主机的 `/etc/eidolon/generated/hub.yaml`。没有第二份部署副本——这里改的默认值就是主机拿到的默认值，本仓测试跑的就是主机启动用的那个文件。这两行按字面匹配且各只能出现一次，`tests/contract/test_operations_contract.py` 钉住这一点；契约声明在 [`ops/component.toml`](ops/component.toml)。
+同一个 `config/settings.yaml` 也是产品主机的模板：Ops 按 release 钉的 commit 读它，只替换 `onboarding.owner_domain_id` 与 `onboarding.public_base_url` 两行（主机身份决定），写到主机的 `/etc/eidolon/generated/hub.yaml`。没有第二份部署副本——这里改的默认值就是主机拿到的默认值，本仓测试跑的就是主机启动用的那个文件。这两行按字面匹配且各只能出现一次，`tests/contract/test_operations_contract.py` 钉住这一点；契约声明在 [`ops/component.toml`](ops/component.toml)。
 
 ## 验证与文档
 

@@ -51,8 +51,8 @@ owner = "root"
 group = "eidolon"
 mode = "0640"
 required_by = ["eidolon-hub"]
-# Derived because two of its values — hub_id and public_base_url — name the
-# Host this release is going to; Ops fills them from the Host identity.
+# Derived because Owner identity stays stable while descriptor_uri names the
+# current Host candidate; Ops fills both from its offline Owner material.
 #
 # The template is Hub's own settings file, which is also the one this
 # repository's tests load and a local run reads. There is deliberately not a
@@ -61,6 +61,40 @@ required_by = ["eidolon-hub"]
 # change its own deployed defaults without a release of another repository, and
 # that the settings Hub's suite exercised were not the settings a Host started
 # with. The two had drifted by the time anyone read them side by side.
+
+[[inputs]]
+name = "owner_domain_descriptor"
+install_path = "/var/lib/eidolon-bootstrap/owner_domain_descriptor.json"
+kind = "identity"
+source = "derived"
+owner = "root"
+group = "eidolon"
+mode = "0640"
+required_by = ["eidolon-hub"]
+# Signed offline. The Host receives only this public directory; an endpoint
+# change advances directory_revision without changing the Owner trust root.
+
+[[inputs]]
+name = "owner_domain_root_certificate"
+install_path = "/var/lib/eidolon-bootstrap/owner_domain_root_ca.pem"
+kind = "identity"
+source = "derived"
+owner = "root"
+group = "eidolon"
+mode = "0640"
+required_by = ["eidolon-hub"]
+
+[[inputs]]
+name = "authority_signing_certificate"
+install_path = "/var/lib/eidolon-bootstrap/authority_signing_certificate.pem"
+kind = "identity"
+source = "derived"
+owner = "root"
+group = "eidolon"
+mode = "0640"
+required_by = ["eidolon-hub"]
+# The corresponding Owner root and delegated signing private keys MUST remain
+# in the controller-side Ops material directory and are never component inputs.
 
 [[state.authority]]
 path = "/var/lib/eidolon/hub/eidolon-hub.sqlite3"

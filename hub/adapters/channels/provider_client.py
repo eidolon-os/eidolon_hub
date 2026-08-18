@@ -74,7 +74,7 @@ class ChannelProviderHttpClient:
     async def provision_channels(self, context: ProviderDeviceContext) -> ChannelAssignmentSet:
         request = ProviderChannelProvisionRequest(
             operation_id=context.operation_id,
-            hub_id=context.hub_id,
+            owner_domain_id=context.owner_domain_id,
             device=ProviderChannelDevice(
                 device_id=context.device_id,
                 owner_id=context.owner_id,
@@ -123,7 +123,7 @@ class ChannelProviderHttpClient:
     async def revoke_channels(self, revocation: ProviderChannelRevocation) -> None:
         request = ProviderChannelRevocationRequest(
             operation_id=revocation.operation_id,
-            hub_id=revocation.hub_id,
+            owner_domain_id=revocation.owner_domain_id,
             device_id=revocation.device_id,
             reason=revocation.reason,
         )

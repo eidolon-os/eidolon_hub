@@ -37,7 +37,7 @@ class RevokeRequest(BaseModel):
     )
     operation: Literal["channel.revoke-device"]
     operation_id: Annotated[str, Field(max_length=128, min_length=1)]
-    hub_id: Annotated[str, Field(max_length=128, min_length=1)]
+    owner_domain_id: Annotated[str, Field(max_length=128, min_length=1)]
     device_id: Annotated[str, Field(max_length=128, min_length=1)]
     reason: Annotated[str, Field(max_length=256, min_length=1)]
 
@@ -72,5 +72,5 @@ class ProvisionRequest(BaseModel):
     )
     operation: Literal["channel.provision-device"]
     operation_id: Annotated[str, Field(max_length=128, min_length=1)]
-    hub_id: Annotated[str, Field(max_length=128, min_length=1)]
+    owner_domain_id: Annotated[str, Field(max_length=128, min_length=1)]
     device: Device

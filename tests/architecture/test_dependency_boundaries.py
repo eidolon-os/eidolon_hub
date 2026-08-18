@@ -38,16 +38,19 @@ def test_domain_and_application_do_not_import_infrastructure() -> None:
     assert violations == []
 
 
-def test_hub_has_no_direct_sdk_source_or_project_dependency() -> None:
+def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
+    allowed = {
+        Path("hub/adapters/security/owner_directory.py"),
+        Path("hub/contracts/bindings/onboarding.py"),
+    }
     violations = []
-    for source_root in (ROOT / "hub", ROOT / "tests", ROOT / "scripts"):
-        for path in source_root.rglob("*.py"):
-            if "eidolon_sdk" in _imports(path):
-                violations.append(str(path.relative_to(ROOT)))
+    for path in (ROOT / "hub").rglob("*.py"):
+        if "eidolon_sdk" in _imports(path) and path.relative_to(ROOT) not in allowed:
+            violations.append(str(path.relative_to(ROOT)))
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = project["project"]["dependencies"]
-    assert not any(item.split("[", 1)[0].lower() == "eidolon-sdk" for item in dependencies)
-    assert "eidolon-sdk" not in project.get("tool", {}).get("uv", {}).get("sources", {})
+    assert any(item.split("[", 1)[0].lower() == "eidolon-sdk" for item in dependencies)
+    assert "eidolon-sdk" in project.get("tool", {}).get("uv", {}).get("sources", {})
     assert violations == []
 
 

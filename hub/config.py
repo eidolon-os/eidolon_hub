@@ -33,13 +33,23 @@ class DiscoveryConfig(_StrictConfig):
 
 
 class OnboardingConfig(_StrictConfig):
-    hub_id: str = Field(default="eidolon-hub-local", min_length=1, max_length=128)
-    public_base_url: str = "https://eidolon-hub.local"
+    owner_domain_id: str = Field(default="owner-local", min_length=1, max_length=128)
+    trust_epoch: int = Field(default=1, ge=1)
+    descriptor_uri: str = (
+        "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
+    )
+    descriptor_path: str = "/var/lib/eidolon-bootstrap/owner_domain_descriptor.json"
+    owner_root_certificate_path: str = (
+        "/var/lib/eidolon-bootstrap/owner_domain_root_ca.pem"
+    )
+    authority_signing_certificate_path: str = (
+        "/var/lib/eidolon-bootstrap/authority_signing_certificate.pem"
+    )
     retrieval_window_seconds: int = Field(default=1800, ge=60, le=86_400)
 
     @model_validator(mode="after")
     def validate_onboarding_contract(self) -> OnboardingConfig:
-        parsed = urlparse(self.public_base_url)
+        parsed = urlparse(self.descriptor_uri)
         if (
             parsed.scheme != "https"
             or not parsed.netloc
@@ -47,8 +57,19 @@ class OnboardingConfig(_StrictConfig):
             or parsed.password is not None
             or parsed.query
             or parsed.fragment
+            or parsed.path != "/api/device-onboarding/v1/descriptor"
         ):
-            raise ValueError("onboarding.public_base_url must be a plain HTTPS base URL")
+            raise ValueError("onboarding.descriptor_uri must be the plain HTTPS descriptor URI")
+        for value, name in (
+            (self.descriptor_path, "descriptor_path"),
+            (self.owner_root_certificate_path, "owner_root_certificate_path"),
+            (
+                self.authority_signing_certificate_path,
+                "authority_signing_certificate_path",
+            ),
+        ):
+            if not Path(value).is_absolute():
+                raise ValueError(f"onboarding.{name} must be absolute")
         return self
 
 

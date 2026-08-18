@@ -84,11 +84,12 @@ def test_the_template_still_carries_what_ops_rewrites(contract: dict) -> None:
         encoding="utf-8"
     )
 
-    # Ops matches these two lines literally and exactly once each, then replaces
-    # them with the Host's own identity. Renaming, nesting, quoting or folding
-    # either one would not fail Hub's own validation — it would fail a release,
-    # or worse, ship a Hub answering to a name no device asked for.
-    for line in ("hub_id: eidolon-hub-local", "public_base_url: https://eidolon-hub.local"):
+    # Ops replaces the Owner identity from recovery material and the candidate
+    # route from this deployment. The two values are intentionally independent.
+    for line in (
+        "owner_domain_id: owner-local",
+        "descriptor_uri: https://eidolon-hub.local/api/device-onboarding/v1/descriptor",
+    ):
         assert template.count(line) == 1
 
 
@@ -97,10 +98,10 @@ def test_a_rendered_template_is_still_settings_hub_accepts(contract: dict) -> No
         encoding="utf-8"
     )
     rendered = template.replace(
-        "hub_id: eidolon-hub-local", "hub_id: eidolon-hub-b3c897513cdce9"
+        "owner_domain_id: owner-local", "owner_domain_id: owner-production"
     ).replace(
-        "public_base_url: https://eidolon-hub.local",
-        "public_base_url: https://eidolon-hub-b3c897513cdce9.local:8443",
+        "descriptor_uri: https://eidolon-hub.local/api/device-onboarding/v1/descriptor",
+        "descriptor_uri: https://host-b.local:8443/api/device-onboarding/v1/descriptor",
     )
 
     # What Ops writes onto a Host has to be a document Hub's strict, extra-forbid
@@ -108,8 +109,8 @@ def test_a_rendered_template_is_still_settings_hub_accepts(contract: dict) -> No
     # default does not carry.
     config = HubConfig.model_validate(yaml.safe_load(rendered))
 
-    assert config.onboarding.hub_id == "eidolon-hub-b3c897513cdce9"
-    assert config.onboarding.public_base_url.endswith(":8443")
+    assert config.onboarding.owner_domain_id == "owner-production"
+    assert config.onboarding.descriptor_uri.startswith("https://host-b.local:8443/")
 
 
 def test_the_declared_database_is_the_one_hubs_settings_point_at(

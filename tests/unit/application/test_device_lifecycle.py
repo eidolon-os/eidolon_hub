@@ -182,7 +182,7 @@ async def test_revocation_notifies_provider_without_hub_session_state() -> None:
     revoked = await RevokeDevice(
         devices=devices,
         provider=provider,
-        hub_id="hub-local",
+        owner_domain_id="hub-local",
         mutations=_Mutations(devices, events),
         clock=_Clock(),
         directory_projector=projector,
@@ -210,7 +210,7 @@ async def test_provider_outage_keeps_revoked_state_and_same_request_retries() ->
     use_case = RevokeDevice(
         devices=devices,
         provider=provider,
-        hub_id="hub-local",
+        owner_domain_id="hub-local",
         mutations=_Mutations(devices, events),
         clock=_Clock(),
         directory_projector=_Recorder(),
@@ -246,7 +246,7 @@ async def test_revocation_idempotency_fingerprint_has_no_delimiter_collisions() 
     use_case = RevokeDevice(
         devices=devices,
         provider=provider,
-        hub_id="hub-local",
+        owner_domain_id="hub-local",
         mutations=_Mutations(devices, _Recorder()),
         clock=_Clock(),
         directory_projector=_Recorder(),

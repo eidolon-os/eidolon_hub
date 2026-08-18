@@ -41,7 +41,7 @@ async def test_channel_provider_adapter_conforms_to_provision_port() -> None:
     )
     context = ProviderDeviceContext(
         operation_id="enrollment-1",
-        hub_id="hub-1",
+        owner_domain_id="hub-1",
         device_id="device-1",
         owner_id="owner-1",
         display_name="Device",

@@ -25,14 +25,14 @@ class RevokeDevice:
         *,
         devices: DeviceRepository,
         provider: ChannelProviderControl,
-        hub_id: str,
+        owner_domain_id: str,
         mutations: DeviceMutationUnitOfWork,
         clock: Clock,
         directory_projector: DeviceDirectoryProjector,
     ) -> None:
         self._devices = devices
         self._provider = provider
-        self._hub_id = hub_id
+        self._owner_domain_id = owner_domain_id
         self._mutations = mutations
         self._clock = clock
         self._directory_projector = directory_projector
@@ -109,7 +109,7 @@ class RevokeDevice:
         await self._provider.revoke_channels(
             ProviderChannelRevocation(
                 operation_id=request_id,
-                hub_id=self._hub_id,
+                owner_domain_id=self._owner_domain_id,
                 device_id=device_id,
                 reason=reason,
             )

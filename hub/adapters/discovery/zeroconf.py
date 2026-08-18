@@ -39,8 +39,8 @@ def interface_addresses() -> tuple[str, ...]:
     return tuple(sorted(values, key=lambda value: (ipaddress.ip_address(value).version, value)))
 
 
-class ZeroconfHubAdvertiser:
-    """Advertise one logical Hub on all interfaces; never bridges VLANs."""
+class ZeroconfAuthorityCandidateAdvertiser:
+    """Advertise a candidate signed directory URI; never acts as trust."""
 
     def __init__(
         self,
@@ -50,8 +50,8 @@ class ZeroconfHubAdvertiser:
         service_name: str,
         hostname: str,
         port: int,
-        descriptor_uri: str,
-        enrollment_uri: str,
+        owner_domain_id: str,
+        owner_domain_descriptor_uri: str,
         addresses: tuple[str, ...] | None = None,
         refresh_seconds: float = 10.0,
     ) -> None:
@@ -60,8 +60,8 @@ class ZeroconfHubAdvertiser:
         self._service_name = service_name
         self._hostname = hostname
         self._port = port
-        self._descriptor_uri = descriptor_uri
-        self._enrollment_uri = enrollment_uri
+        self._owner_domain_id = owner_domain_id
+        self._owner_domain_descriptor_uri = owner_domain_descriptor_uri
         self._addresses = addresses
         self._refresh_seconds = refresh_seconds
         self._aiozc: AsyncZeroconf | None = None
@@ -78,8 +78,8 @@ class ZeroconfHubAdvertiser:
             port=self._port,
             properties={
                 "txtvers": "1",
-                "descriptor_uri": self._descriptor_uri,
-                "enrollment_uri": self._enrollment_uri,
+                "owner_domain_id": self._owner_domain_id,
+                "owner_domain_descriptor_uri": self._owner_domain_descriptor_uri,
             },
             server=f"{self._hostname.rstrip('.')}.local.",
         )

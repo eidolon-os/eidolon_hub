@@ -24,7 +24,7 @@ class ProviderChannelDevice(ContractModel):
 class ProviderChannelProvisionRequest(ContractModel):
     operation: Literal["channel.provision-device"] = "channel.provision-device"
     operation_id: str = Field(min_length=1, max_length=128)
-    hub_id: str = Field(min_length=1, max_length=128)
+    owner_domain_id: str = Field(min_length=1, max_length=128)
     device: ProviderChannelDevice
 
 
@@ -66,7 +66,7 @@ class ProviderChannelProvisionResponse(ContractModel):
 class ProviderChannelRevocationRequest(ContractModel):
     operation: Literal["channel.revoke-device"] = "channel.revoke-device"
     operation_id: str = Field(min_length=1, max_length=128)
-    hub_id: str = Field(min_length=1, max_length=128)
+    owner_domain_id: str = Field(min_length=1, max_length=128)
     device_id: str = Field(min_length=1, max_length=128)
     reason: str = Field(min_length=1, max_length=256)
 

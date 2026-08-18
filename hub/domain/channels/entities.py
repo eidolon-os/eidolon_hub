@@ -64,7 +64,7 @@ class ChannelGrant:
 @dataclass(frozen=True, slots=True)
 class ProviderDeviceContext:
     operation_id: str
-    hub_id: str
+    owner_domain_id: str
     device_id: str
     owner_id: str
     display_name: str
@@ -75,7 +75,7 @@ class ProviderDeviceContext:
     def __post_init__(self) -> None:
         required = (
             self.operation_id,
-            self.hub_id,
+            self.owner_domain_id,
             self.device_id,
             self.device_kind,
             self.manifest_revision,
@@ -104,12 +104,12 @@ class ChannelAssignmentSet:
 @dataclass(frozen=True, slots=True)
 class ProviderChannelRevocation:
     operation_id: str
-    hub_id: str
+    owner_domain_id: str
     device_id: str
     reason: str
 
     def __post_init__(self) -> None:
-        if any(not value.strip() for value in (self.operation_id, self.hub_id, self.device_id)):
+        if any(not value.strip() for value in (self.operation_id, self.owner_domain_id, self.device_id)):
             raise ValueError("channel revocation identifiers are required")
         if not self.reason.strip() or len(self.reason) > 256:
             raise ValueError("a bounded channel revocation reason is required")

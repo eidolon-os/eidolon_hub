@@ -8,6 +8,7 @@ from pathlib import Path
 
 from hypothesis import given, settings
 from hypothesis_jsonschema import from_schema
+from eidolon_sdk.device_foundation.v1 import OwnerDomainDescriptor
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
@@ -24,7 +25,6 @@ from hub.contracts.bindings.onboarding import (
     DeviceEnrollmentReceipt,
     DeviceHandoffOutcome,
     DeviceHandoffRequest,
-    HubDescriptor,
 )
 from hub.contracts.generated.schema_models.device.manifest_schema import (
     DeviceManifest as GeneratedDeviceManifest,
@@ -96,15 +96,6 @@ def test_runtime_bindings_conform_to_generated_shapes() -> None:
 def test_public_status_bindings_conform_to_schema_sources() -> None:
     values = (
         (
-            "onboarding/descriptor.schema.json",
-            HubDescriptor(
-                hub_id="hub-1",
-                descriptor_uri="https://hub.example/api/device-onboarding/v1/descriptor",
-                device_onboarding_uri="https://hub.example/api/device-onboarding/v1",
-                enrollment_uri="https://hub.example/api/device-onboarding/v1/enrollments",
-            ),
-        ),
-        (
             "device/directory.schema.json",
             DeviceDirectoryEntry(
                 device_id="device-1",
@@ -141,6 +132,13 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
     )
     for relative, model in values:
         _validate(relative, model)
+
+
+def test_descriptor_binding_is_owned_by_canonical_sdk_contract() -> None:
+    assert OwnerDomainDescriptor.__module__.startswith(
+        "eidolon_sdk.device_foundation.v1"
+    )
+    assert not (SCHEMAS / "onboarding" / "descriptor.schema.json").exists()
 
 
 def test_enrollment_request_and_receipt_conform_to_same_contract() -> None:

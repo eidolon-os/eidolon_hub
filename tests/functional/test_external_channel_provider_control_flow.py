@@ -102,7 +102,7 @@ async def test_provision_relay_and_revoke_are_control_only() -> None:
         )
         devices = _Devices()
         assignments = await ProvisionDeviceChannels(
-            hub_id="hub-local",
+            owner_domain_id="hub-local",
             provider=provider,
             clock=_Clock(),
         ).execute(
@@ -114,7 +114,7 @@ async def test_provision_relay_and_revoke_are_control_only() -> None:
         await RevokeDevice(
             devices=devices,
             provider=provider,
-            hub_id="hub-local",
+            owner_domain_id="hub-local",
             mutations=devices,
             clock=_Clock(),
             directory_projector=_Projector(),

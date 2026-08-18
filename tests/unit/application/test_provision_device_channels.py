@@ -70,7 +70,7 @@ def _device(*, state=DeviceLifecycleState.APPROVED):
 async def test_provision_relays_provider_assignment_without_local_state() -> None:
     provider = _Provider()
     assignments = await ProvisionDeviceChannels(
-        hub_id="hub-1", provider=provider, clock=_Clock()
+        owner_domain_id="hub-1", provider=provider, clock=_Clock()
     ).execute(device=_device(), operation_id="enrollment-1")
 
     assert provider.contexts[0].manifest_json == _device().manifest_json
@@ -85,7 +85,7 @@ async def test_provision_rejects_nonapproved_device(state) -> None:
     provider = _Provider()
     with pytest.raises(PermissionError, match="approved"):
         await ProvisionDeviceChannels(
-            hub_id="hub-1", provider=provider, clock=_Clock()
+            owner_domain_id="hub-1", provider=provider, clock=_Clock()
         ).execute(device=_device(state=state), operation_id="enrollment-1")
     assert provider.contexts == []
 
@@ -94,7 +94,7 @@ async def test_provision_rejects_nonapproved_device(state) -> None:
 async def test_provision_requires_bounded_operation_id(operation_id) -> None:
     with pytest.raises(ValueError, match="operation_id"):
         await ProvisionDeviceChannels(
-            hub_id="hub-1", provider=_Provider(), clock=_Clock()
+            owner_domain_id="hub-1", provider=_Provider(), clock=_Clock()
         ).execute(device=_device(), operation_id=operation_id)
 
 
@@ -118,5 +118,5 @@ async def test_invalid_provider_assignments_are_rejected(mutation) -> None:
 
     with pytest.raises(ValueError):
         await ProvisionDeviceChannels(
-            hub_id="hub-1", provider=_InvalidProvider(), clock=_Clock()
+            owner_domain_id="hub-1", provider=_InvalidProvider(), clock=_Clock()
         ).execute(device=_device(), operation_id="enrollment-1")
