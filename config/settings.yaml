@@ -1,6 +1,13 @@
 # Local Hub behavior and public contracts. ASGI listen/TLS are deployment concerns.
+#
+# This is also the template a product Host is started from: Ops reads this file
+# at the commit a release pins and rewrites the two lines below that name a
+# particular Host. There is no separate deployment copy, so a default changed
+# here is a default a Host gets, and Hub's own tests exercise the file a Host
+# runs on. ops/component.toml declares it; tests/contract pins the two lines.
 
 onboarding:
+  # Rewritten per Host by Ops; matched literally, so keep them one to a line.
   hub_id: eidolon-hub-local
   public_base_url: https://eidolon-hub.local
   retrieval_window_seconds: 1800
