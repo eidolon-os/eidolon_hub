@@ -24,10 +24,6 @@ discovery:
 channel_provider:
   contract_url: http://127.0.0.1:8767/v1
 
-device_control:
-  erase_operation_ttl_seconds: 604800
-  erase_reconcile_poll_seconds: 1.0
-
 persistence:
   # Hub owns this database file; it does not share the legacy eidolon.sqlite3.
   path: $EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3
