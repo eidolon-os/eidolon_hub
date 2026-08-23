@@ -68,11 +68,13 @@ install_path = "/etc/eidolon/owner-domain/owner_domain_descriptor.json"
 kind = "identity"
 source = "derived"
 owner = "root"
-group = "eidolon"
-mode = "0640"
+group = "root"
+mode = "0644"
 required_by = ["eidolon-hub"]
 # Signed offline. The Host receives only this public directory; an endpoint
 # change advances directory_revision without changing the Owner trust root.
+# This is public verification material, not an Owner credential: root owns its
+# integrity while unprivileged Host services, including Local API, may read it.
 
 [[inputs]]
 name = "owner_domain_root_certificate"
@@ -80,8 +82,8 @@ install_path = "/etc/eidolon/owner-domain/owner_domain_root_ca.pem"
 kind = "identity"
 source = "derived"
 owner = "root"
-group = "eidolon"
-mode = "0640"
+group = "root"
+mode = "0644"
 required_by = ["eidolon-hub"]
 
 [[inputs]]
@@ -90,8 +92,8 @@ install_path = "/etc/eidolon/owner-domain/authority_signing_certificate.pem"
 kind = "identity"
 source = "derived"
 owner = "root"
-group = "eidolon"
-mode = "0640"
+group = "root"
+mode = "0644"
 required_by = ["eidolon-hub"]
 # The corresponding Owner root and delegated signing private keys MUST remain
 # in the controller-side Ops material directory and are never component inputs.
