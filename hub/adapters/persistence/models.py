@@ -47,3 +47,63 @@ class DeviceManagementEventRow(Base):
     owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     data_json: Mapped[str] = mapped_column(Text)
+
+
+class DeviceOperationKeyBindingRow(Base):
+    """Device Control's immutable ACK-key binding for one Claim generation."""
+
+    __tablename__ = "hub_device_operation_key_bindings"
+
+    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    claim_generation: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enrollment_id: Mapped[str] = mapped_column(String(255), unique=True)
+    enrollment_request_id: Mapped[str] = mapped_column(String(255))
+    public_key_spki: Mapped[str] = mapped_column(String(256))
+    key_id: Mapped[str] = mapped_column(String(128))
+    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class DeviceEraseOperationRow(Base):
+    """Independent device-local.erase ledger; never stores Channel state."""
+
+    __tablename__ = "hub_device_erase_operations"
+
+    operation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    source_event_id: Mapped[str] = mapped_column(String(255), unique=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(128))
+    device_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
+    public_key_spki: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    key_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    command_json: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    delivery_attempt_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    delivery_accepted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    terminal_result: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    result_code: Mapped[str] = mapped_column(String(128), default="")
+    last_error_code: Mapped[str] = mapped_column(String(128), default="")
+
+
+class DeviceEraseAckEvidenceRow(Base):
+    """Immutable ACK/late-evidence idempotency record."""
+
+    __tablename__ = "hub_device_erase_ack_evidence"
+
+    operation_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    ack_sequence: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ack_fingerprint: Mapped[str] = mapped_column(String(128))
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    applied: Mapped[int] = mapped_column(Integer)
+    result: Mapped[str] = mapped_column(String(64))
+    result_code: Mapped[str] = mapped_column(String(128))

@@ -5,11 +5,40 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
+from eidolon_sdk.device_foundation.v1 import (
+    DeviceEraseContractError,
+    DeviceLocalEraseAck,
+    DeviceLocalEraseCommand,
+    DeviceLocalEraseOperationStatus,
+    DeviceOperationKeyProof,
+    DeviceRef,
+    canonical_bytes,
+    operation_fingerprint,
+    operation_key_id,
+    verify_device_erase_ack,
+    verify_operation_key_proof,
+    verify_p256_signature,
+)
 from pydantic import Field, field_validator
 
 from hub.contracts.bindings.common import ContractModel, JsonObject
 
 DeviceLifecycleState = Literal["pending-approval", "approved", "revoked"]
+
+__all__ = [
+    "DeviceEraseContractError",
+    "DeviceLocalEraseAck",
+    "DeviceLocalEraseCommand",
+    "DeviceLocalEraseOperationStatus",
+    "DeviceOperationKeyProof",
+    "DeviceRef",
+    "canonical_bytes",
+    "operation_fingerprint",
+    "operation_key_id",
+    "verify_device_erase_ack",
+    "verify_operation_key_proof",
+    "verify_p256_signature",
+]
 
 
 class PropertyAffordance(ContractModel):

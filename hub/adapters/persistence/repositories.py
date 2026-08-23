@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from hub.adapters.persistence.database import HubDatabase
+from hub.adapters.persistence.device_erase import SqlDeviceEraseLedger
 from hub.adapters.persistence.models import DeviceManagementEventRow, DeviceRow
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
@@ -236,5 +237,6 @@ class SqlHubRepositories:
 
     def __init__(self, database: HubDatabase) -> None:
         self.devices = SqlDeviceRepository(database)
+        self.device_erase = SqlDeviceEraseLedger(database)
         self.device_mutations = SqlDeviceMutationUnitOfWork(database)
         self.management_events = SqlDeviceManagementEventLedger(database)

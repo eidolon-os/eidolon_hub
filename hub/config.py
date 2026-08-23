@@ -103,6 +103,11 @@ class PersistenceConfig(_StrictConfig):
     )
 
 
+class DeviceControlConfig(_StrictConfig):
+    erase_operation_ttl_seconds: int = Field(default=604_800, ge=300, le=2_592_000)
+    erase_reconcile_poll_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+
+
 class HubConfig(_StrictConfig):
     """Local behavior and external contract addresses."""
 
@@ -110,6 +115,7 @@ class HubConfig(_StrictConfig):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
     channel_provider: ChannelProviderConfig = Field(default_factory=ChannelProviderConfig)
+    device_control: DeviceControlConfig = Field(default_factory=DeviceControlConfig)
 
     @classmethod
     def load(cls) -> HubConfig:

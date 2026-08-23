@@ -11,6 +11,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
+from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.composition.channel_control import build_channel_provider
 from hub.composition.device_onboarding import build_device_onboarding
@@ -20,6 +21,17 @@ from hub.composition.resources import (
     open_runtime_resources,
 )
 from hub.config import HubConfig, load_hub_config
+from hub.device_control.application import (
+    AcknowledgeDeviceEraseOperation,
+    BindDeviceOperationKey,
+    PeriodicDeviceEraseReconcile,
+    PullDeviceEraseOperation,
+    ReconcileDeviceEraseOperations,
+)
+from hub.device_control.http import (
+    DeviceEraseHttpServices,
+    create_device_erase_router,
+)
 from hub.interfaces.http.routers.device_management import (
     DeviceManagementHttpServices,
     create_device_management_router,
@@ -34,6 +46,7 @@ from hub.interfaces.http.routers.device_onboarding import (
 class ComposedHttpRuntime:
     device_onboarding: DeviceOnboardingHttpServices
     management: DeviceManagementHttpServices
+    device_erase: DeviceEraseHttpServices
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
@@ -84,6 +97,38 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     seconds=app_config.onboarding.retrieval_window_seconds
                 ),
             )
+            erase_reconcile = ReconcileDeviceEraseOperations(
+                ledger=resources.repositories.device_erase,
+                clock=resources.clock,
+                operation_ttl=timedelta(
+                    seconds=app_config.device_control.erase_operation_ttl_seconds
+                ),
+            )
+            device_erase = DeviceEraseHttpServices(
+                bind_key=BindDeviceOperationKey(
+                    devices=resources.repositories.devices,
+                    tokens=Sha256RetrievalTokenHasher(),
+                    ledger=resources.repositories.device_erase,
+                    clock=resources.clock,
+                ),
+                pull=PullDeviceEraseOperation(
+                    ledger=resources.repositories.device_erase,
+                    clock=resources.clock,
+                ),
+                acknowledge=AcknowledgeDeviceEraseOperation(
+                    ledger=resources.repositories.device_erase,
+                    clock=resources.clock,
+                ),
+                reconcile=erase_reconcile,
+                ledger=resources.repositories.device_erase,
+                authorizer=management.authorizer,
+            )
+            periodic_erase = PeriodicDeviceEraseReconcile(
+                erase_reconcile,
+                interval_seconds=app_config.device_control.erase_reconcile_poll_seconds,
+            )
+            await periodic_erase.start()
+            stack.push_async_callback(periodic_erase.stop)
 
             if device_onboarding.mdns_advertiser is not None:
                 await device_onboarding.mdns_advertiser.start()
@@ -92,6 +137,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             runtime = ComposedHttpRuntime(
                 device_onboarding=device_onboarding.http_services,
                 management=management,
+                device_erase=device_erase,
             )
             yield
         finally:
@@ -126,6 +172,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     )
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
+    )
+    app.include_router(
+        create_device_erase_router(services=lambda: require_runtime().device_erase)
     )
 
     @app.get("/health")

@@ -42,6 +42,7 @@ def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
     allowed = {
         Path("hub/adapters/security/owner_directory.py"),
         Path("hub/contracts/bindings/onboarding.py"),
+        Path("hub/contracts/bindings/device.py"),
     }
     violations = []
     for path in (ROOT / "hub").rglob("*.py"):
