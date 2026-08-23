@@ -15,6 +15,13 @@ class ManagementPrincipal:
     subject_id: str
     owner_id: str | None
     roles: frozenset[str]
+    scopes: frozenset[str] = frozenset()
+    actor_ref: str | None = None
+    intent_id: str | None = None
+    target_device_id: str | None = None
+    target_claim_generation: int | None = None
+    target_trust_epoch: int | None = None
+    target_manifest_digest: str | None = None
 
     def __post_init__(self) -> None:
         if not self.subject_id.strip() or len(self.subject_id) > 255:
@@ -23,6 +30,8 @@ class ManagementPrincipal:
             raise ValueError("management principal owner_id is invalid")
         if not self.roles or any(not role.strip() for role in self.roles):
             raise ValueError("management principal roles are invalid")
+        if any(not scope.strip() for scope in self.scopes):
+            raise ValueError("management principal scopes are invalid")
 
 
 class ManagementPermission(StrEnum):
@@ -31,6 +40,8 @@ class ManagementPermission(StrEnum):
     DEVICE_LIST = "device:list"
     DEVICE_GET = "device:get"
     DEVICE_EVENTS = "device:events"
+    DEVICE_CONTROL_GET = "device-control:get"
+    CLAIM_EVENTS = "claim:events"
     DEVICE_APPROVE = "device:approve"
     DEVICE_REVOKE = "device:revoke"
 

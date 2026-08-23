@@ -7,6 +7,8 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, RootModel
 
+from . import claim_revocation_result_schema
+
 
 class DeviceApprovalRequest(BaseModel):
     model_config = ConfigDict(
@@ -23,8 +25,10 @@ class DeviceRevocationRequest(BaseModel):
         extra="forbid",
         frozen=True,
     )
-    operation: Literal["device.revocation"]
-    request_id: Annotated[str, Field(max_length=96, min_length=1)]
+    operation: Literal["device.claim-revocation"]
+    command_id: Annotated[str, Field(max_length=128, min_length=1)]
+    correlation_id: Annotated[str, Field(max_length=128, min_length=1)]
+    device_ref: claim_revocation_result_schema.DeviceRef
     reason: Annotated[str | None, Field(max_length=256, min_length=1)] = "operator-request"
 
 

@@ -30,6 +30,8 @@ class ProjectDeviceDirectory:
             enrolled_at=device.enrolled_at,
             updated_at=device.updated_at,
             retrieval_expires_at=device.retrieval_expires_at,
+            claim_generation=device.claim_generation,
+            trust_epoch=device.trust_epoch,
         )
         return await self._directory.upsert(entry)
 

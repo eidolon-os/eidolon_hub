@@ -17,7 +17,6 @@ from hub.config import (
     DiscoveryConfig,
     HubConfig,
     MdnsDiscoveryConfig,
-    OnboardingConfig,
     PersistenceConfig,
 )
 
@@ -39,10 +38,12 @@ InMemoryMountProjection = importlib.import_module(
     "eidolon_kernel.adapters.projection.memory"
 ).InMemoryMountProjection
 SystemClock = importlib.import_module("eidolon_kernel.adapters.runtime").SystemClock
-ReconcileMountPrerequisites = importlib.import_module(
+ReconcileClaimEvents = importlib.import_module(
     "eidolon_kernel.application.device_mounts"
-).ReconcileMountPrerequisites
-DeviceMount = importlib.import_module("eidolon_kernel.domain.model").DeviceMount
+).ReconcileClaimEvents
+kernel_model = importlib.import_module("eidolon_kernel.domain.model")
+DeviceMount = kernel_model.DeviceMount
+KernelDeviceRef = kernel_model.DeviceRef
 
 
 class _UnexpectedCompanionAuthority:
@@ -50,13 +51,14 @@ class _UnexpectedCompanionAuthority:
         raise AssertionError("revoked Device must short-circuit Companion lookup")
 
 
-def _token(*, secret: str, subject: str, role: str) -> str:
+def _token(*, secret: str, subject: str, role: str, **claims) -> str:
     return jwt.encode(
         {
             "sub": subject,
-            "aud": "eidolon-hub",
+            "aud": "eidolon-admission",
             "roles": [role],
             "exp": datetime.now(UTC) + timedelta(minutes=5),
+            **claims,
         },
         secret,
         algorithm="HS256",
@@ -141,6 +143,15 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
             mounted = DeviceMount.first(
                 device_id="joint-device-1",
                 owner_id="joint-owner-1",
+                device_ref=KernelDeviceRef(
+                    device_instance_id=admission.device_ref.device_instance_id,
+                    owner_domain_id=admission.device_ref.owner_domain_id,
+                    claim_generation=admission.device_ref.claim_generation,
+                    trust_epoch=admission.device_ref.trust_epoch,
+                    accepted_manifest_digest=(
+                        admission.device_ref.accepted_manifest_digest
+                    ),
+                ),
                 at=datetime.now(UTC),
                 request_id="joint-mount-1",
                 fingerprint="sha256:" + "a" * 64,
@@ -165,21 +176,49 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                     "device_id": "joint-device-1",
                 }
             )
+            removal_claims = {
+                "owner_id": admission.device_ref.owner_domain_id,
+                "scopes": ["device.claim.revoke"],
+                "presenter": "joint-contract/admin-workflow",
+                "actor_ref": "controller:joint-contract",
+                "intent_id": "joint-removal-intent-1",
+                "target_device_id": admission.device_ref.device_instance_id,
+                "target_claim_generation": admission.device_ref.claim_generation,
+                "target_trust_epoch": admission.device_ref.trust_epoch,
+                "target_manifest_digest": (
+                    admission.device_ref.accepted_manifest_digest
+                ),
+            }
+            removal_token = _token(
+                secret=management_secret,
+                subject="joint-contract/admin-workflow",
+                role="device-manager",
+                **removal_claims,
+            )
             revocation = await hub_client.post(
                 "/api/device-management/v1/devices/joint-device-1/revocation",
-                headers={"Authorization": f"Bearer {admin_token}"},
+                headers={"Authorization": f"Bearer {removal_token}"},
                 json={
-                    "operation": "device.revocation",
-                    "request_id": "joint-revocation-1",
+                    "operation": "device.claim-revocation",
+                    "command_id": "joint-revocation-1",
+                    "correlation_id": "joint-removal-intent-1",
+                    "device_ref": {
+                        "device_instance_id": admission.device_ref.device_instance_id,
+                        "owner_domain_id": admission.device_ref.owner_domain_id,
+                        "claim_generation": admission.device_ref.claim_generation,
+                        "trust_epoch": admission.device_ref.trust_epoch,
+                        "accepted_manifest_digest": (
+                            admission.device_ref.accepted_manifest_digest
+                        ),
+                    },
                     "reason": "joint-contract-test",
                 },
             )
             assert revocation.status_code == 200, revocation.text
-            reconciliation = await ReconcileMountPrerequisites(
+            reconciliation = await ReconcileClaimEvents(
                 mount_store,
                 projection,
                 authority,
-                _UnexpectedCompanionAuthority(),
                 SystemClock(),
             ).execute()
             reconciled_mount = mount_store.get("joint-device-1")

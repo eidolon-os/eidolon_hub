@@ -75,6 +75,9 @@ class OnboardingConfig(_StrictConfig):
 
 class ChannelProviderConfig(_StrictConfig):
     contract_url: str = "http://127.0.0.1:8767/v1"
+    revoke_delivery_poll_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    revoke_retry_base_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
+    revoke_retry_max_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
 
     @model_validator(mode="after")
     def validate_contract_url(self) -> ChannelProviderConfig:
@@ -90,6 +93,8 @@ class ChannelProviderConfig(_StrictConfig):
             raise ValueError("channel_provider.contract_url must be a plain HTTP(S) base URL")
         if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
             raise ValueError("remote Channel Provider must use HTTPS")
+        if self.revoke_retry_max_seconds < self.revoke_retry_base_seconds:
+            raise ValueError("revoke retry maximum must not be below the base delay")
         return self
 
 

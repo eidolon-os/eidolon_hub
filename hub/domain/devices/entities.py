@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
+from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
@@ -31,6 +32,9 @@ class ManagedDevice:
     updated_at: datetime
     last_enrollment_request_id: str = ""
     last_enrollment_fingerprint: str = ""
+    claim_generation: int = 1
+    trust_epoch: int = 1
+    aggregate_revision: int = 1
     owner_id: str | None = None
     lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.PENDING_APPROVAL
     last_management_request_id: str = ""
@@ -48,6 +52,8 @@ class ManagedDevice:
             raise ValueError("device timestamps must be timezone-aware")
         if self.owner_id is not None and not self.owner_id.strip():
             raise ValueError("owner_id must be null or non-empty")
+        if min(self.claim_generation, self.trust_epoch, self.aggregate_revision) < 1:
+            raise ValueError("claim, trust and aggregate generations must be positive")
         if self.lifecycle_state is DeviceLifecycleState.APPROVED and self.owner_id is None:
             raise ValueError("approved device requires an owner")
         if (
@@ -63,6 +69,18 @@ class ManagedDevice:
     @property
     def manifest_revision(self) -> str:
         return self.manifest.revision
+
+    @property
+    def device_ref(self) -> DeviceRef | None:
+        if self.owner_id is None:
+            return None
+        return DeviceRef(
+            device_instance_id=self.identity.device_id,
+            owner_domain_id=self.owner_id,
+            claim_generation=self.claim_generation,
+            trust_epoch=self.trust_epoch,
+            accepted_manifest_digest=self.manifest_revision,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +109,8 @@ class DeviceDirectoryEntry:
     #: that is the deadline for collecting the enrollment, and a listing has to
     #: know it: an enrollment past it can no longer be approved.
     retrieval_expires_at: datetime
+    claim_generation: int
+    trust_epoch: int
 
     def __post_init__(self) -> None:
         if not self.device_id.strip() or not self.owner_scope.strip():
@@ -100,6 +120,18 @@ class DeviceDirectoryEntry:
             for value in (self.enrolled_at, self.updated_at, self.retrieval_expires_at)
         ):
             raise ValueError("directory timestamps must be timezone-aware")
+        if min(self.claim_generation, self.trust_epoch) < 1:
+            raise ValueError("directory claim and trust generations must be positive")
+
+    @property
+    def device_ref(self) -> DeviceRef:
+        return DeviceRef(
+            device_instance_id=self.device_id,
+            owner_domain_id=self.owner_scope,
+            claim_generation=self.claim_generation,
+            trust_epoch=self.trust_epoch,
+            accepted_manifest_digest=self.manifest_revision,
+        )
 
     def awaits_approval(self, *, now: datetime) -> bool:
         """Whether approving this device could still do anything.

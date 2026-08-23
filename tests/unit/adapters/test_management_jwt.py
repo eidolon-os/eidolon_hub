@@ -38,13 +38,20 @@ class _Devices:
         return self.device if device_id == self.device.identity.device_id else None
 
 
-def _credential(*, owner_id="owner-1", roles=None, secret=SECRET):
+def _credential(*, owner_id="owner-1", roles=None, scopes=None, secret=SECRET):
     token = jwt.encode(
         {
             "sub": "eidolon-agent/test",
             "owner_id": owner_id,
             "roles": roles or ["device-manager"],
-            "aud": "eidolon-hub",
+            "scopes": scopes
+            or [
+                "device.read",
+                "device.claim.approve",
+                "device.claim.revoke",
+                "device.events.read",
+            ],
+            "aud": "eidolon-admission",
             "exp": int(time.time()) + 600,
         },
         secret,
@@ -143,7 +150,7 @@ async def test_device_registry_reader_can_only_read_one_exact_device() -> None:
         ManagementPermission.DEVICE_APPROVE,
         ManagementPermission.DEVICE_REVOKE,
     ):
-        with pytest.raises(PermissionError, match="exact device reads"):
+        with pytest.raises(PermissionError, match="exact reads"):
             await authorizer.authorize(
                 credential=credential,
                 permission=permission,

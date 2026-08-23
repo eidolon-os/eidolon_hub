@@ -77,6 +77,7 @@ class ApproveDevice:
             updated_at=now,
             last_management_request_id=request_id,
             last_management_fingerprint=fingerprint,
+            aggregate_revision=current.aggregate_revision + 1,
         )
         persisted = await self._mutations.commit(
             expected=current,

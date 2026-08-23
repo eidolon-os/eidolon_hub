@@ -5,7 +5,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from hub.application.idempotency import mutation_fingerprint
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.rename_device import RenameDevice
@@ -13,6 +12,7 @@ from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.ports.claim_lifecycle import ClaimCommandResult
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
 PRINCIPAL = "owner-operator"
@@ -54,12 +54,51 @@ class _Recorder:
         return value
 
 
-class _Provider:
-    def __init__(self):
-        self.revocations = []
+class _Ids:
+    def new(self, prefix):
+        return f"{prefix}-1"
 
-    async def revoke_channels(self, revocation):
-        self.revocations.append(revocation)
+
+class _Claims:
+    def __init__(self, devices):
+        self.devices = devices
+        self.commands = {}
+        self.events = []
+
+    async def get_command(self, *, owner_domain_id, command_type, command_id):
+        value = self.commands.get((owner_domain_id, command_type, command_id))
+        return None if value is None else replace(value, outcome="replayed")
+
+    async def commit_revoke(self, *, expected, revoked, command_id, fingerprint, event):
+        assert self.devices.device == expected
+        self.devices.device = revoked
+        value = ClaimCommandResult(
+            command_id=command_id,
+            fingerprint=fingerprint,
+            outcome="committed",
+            device_ref=event.device_ref,
+            aggregate_revision=event.aggregate_revision,
+            occurred_at=event.occurred_at,
+            event_id=event.event_id,
+        )
+        self.commands[(event.device_ref.owner_domain_id, "device.claim.revoke", command_id)] = value
+        self.events.append(event)
+        return value
+
+    async def commit_terminal_result(
+        self, *, device, command_id, fingerprint, occurred_at
+    ):
+        value = ClaimCommandResult(
+            command_id=command_id,
+            fingerprint=fingerprint,
+            outcome="committed",
+            device_ref=device.device_ref,
+            aggregate_revision=device.aggregate_revision,
+            occurred_at=occurred_at,
+            event_id=None,
+        )
+        self.commands[(device.owner_id, "device.claim.revoke", command_id)] = value
+        return value
 
 
 def _device(**changes):
@@ -118,60 +157,46 @@ async def test_approval_rejects_invalid_owner_missing_device_and_revoked_device(
 
 
 async def test_revoke_missing_and_replay_metadata_guards() -> None:
-    devices, provider = _Devices(), _Provider()
+    devices = _Devices()
+    claims = _Claims(devices)
     revoke = RevokeDevice(
         devices=devices,
-        provider=provider,
-        owner_domain_id="hub-1",
-        mutations=devices,
+        claims=claims,
         clock=_Clock(),
+        ids=_Ids(),
         directory_projector=_Recorder(),
     )
+    missing_ref = _device(
+        owner_id="owner-1", lifecycle_state=DeviceLifecycleState.APPROVED
+    ).device_ref
     with pytest.raises(KeyError):
         await revoke.execute(
-            owner_scope=None,
-            device_id="missing",
+            device_ref=missing_ref.model_copy(update={"device_instance_id": "missing"}),
             reason="test",
-            request_id="revoke-1",
+            command_id="revoke-1",
+            correlation_id="intent-1",
             principal_id=PRINCIPAL,
         )
 
     devices.device = _device(
         lifecycle_state=DeviceLifecycleState.REVOKED,
-        last_management_request_id="revoke-1",
-        last_management_fingerprint=mutation_fingerprint(
-            "device.revoke", {"reason": "test", "principal_id": PRINCIPAL}
-        ),
-    )
-    replay = await revoke.execute(
-        owner_scope=None,
-            device_id="device-1",
-        reason="test",
-        request_id="revoke-1",
-        principal_id=PRINCIPAL,
-    )
-    assert replay.lifecycle_state is DeviceLifecycleState.REVOKED
-    assert len(provider.revocations) == 1
-    with pytest.raises(ValueError, match="reused"):
-        await revoke.execute(
-            owner_scope=None,
-            device_id="device-1",
-            reason="other",
-            request_id="revoke-1",
-            principal_id=PRINCIPAL,
-        )
-
-    devices.device = replace(
-        devices.device,
-        lifecycle_state=DeviceLifecycleState.APPROVED,
         owner_id="owner-1",
     )
-    with pytest.raises(RuntimeError, match="inconsistent"):
+    replay = await revoke.execute(
+        device_ref=devices.device.device_ref,
+        reason="test",
+        command_id="revoke-1",
+        correlation_id="intent-1",
+        principal_id=PRINCIPAL,
+    )
+    assert replay.event_id is None
+    assert claims.events == []
+    with pytest.raises(ValueError, match="reused"):
         await revoke.execute(
-            owner_scope=None,
-            device_id="device-1",
-            reason="test",
-            request_id="revoke-1",
+            device_ref=devices.device.device_ref,
+            reason="other",
+            command_id="revoke-1",
+            correlation_id="intent-1",
             principal_id=PRINCIPAL,
         )
 
@@ -197,32 +222,34 @@ async def test_revoking_names_an_owner_and_the_hub_holds_it_to_that() -> None:
     )
     revoke = RevokeDevice(
         devices=devices,
-        provider=_Provider(),
-        owner_domain_id="hub-local",
-        mutations=devices,
+        claims=_Claims(devices),
         clock=_Clock(),
+        ids=_Ids(),
         directory_projector=_Recorder(),
     )
 
     with pytest.raises(PermissionError):
         await revoke.execute(
-            device_id="device-1",
-            owner_scope="owner-somebody-else",
+            device_ref=devices.device.device_ref.model_copy(
+                update={"owner_domain_id": "owner-somebody-else"}
+            ),
             reason="test",
-            request_id="revoke-1",
+            command_id="revoke-1",
+            correlation_id="intent-1",
             principal_id=PRINCIPAL,
         )
 
     # Still revocable by the owner who has it, and by an operator who is
     # withdrawing without naming one.
-    revoked = await revoke.execute(
-        device_id="device-1",
-        owner_scope="owner-1",
+    result = await revoke.execute(
+        device_ref=devices.device.device_ref,
         reason="test",
-        request_id="revoke-1",
+        command_id="revoke-1",
+        correlation_id="intent-1",
         principal_id=PRINCIPAL,
     )
-    assert revoked.lifecycle_state is DeviceLifecycleState.REVOKED
+    assert result.outcome == "committed"
+    assert devices.device.lifecycle_state is DeviceLifecycleState.REVOKED
 
 
 @pytest.mark.asyncio

@@ -20,10 +20,12 @@
     "DeviceRevocationRequest": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "request_id"],
+      "required": ["operation", "command_id", "correlation_id", "device_ref"],
       "properties": {
-        "operation": { "const": "device.revocation" },
-        "request_id": { "type": "string", "minLength": 1, "maxLength": 96 },
+        "operation": { "const": "device.claim-revocation" },
+        "command_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "correlation_id": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "device_ref": { "$ref": "claim-revocation-result.schema.json#/$defs/DeviceRef" },
         "reason": { "type": "string", "minLength": 1, "maxLength": 256, "default": "operator-request" }
       }
     }

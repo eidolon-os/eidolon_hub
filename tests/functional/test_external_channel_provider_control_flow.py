@@ -7,6 +7,10 @@ import httpx
 from fastapi import FastAPI
 
 from hub.adapters.channels.provider_client import ChannelProviderHttpClient, HttpRequestReplyClient
+from hub.adapters.persistence.database import HubDatabase
+from hub.adapters.persistence.models import DeviceRow
+from hub.adapters.persistence.repositories import SqlDeviceRepository, SqlHubRepositories
+from hub.application.device_control_delivery import DeliverDeviceControlOperations
 from hub.application.use_cases.provision_device_channels import ProvisionDeviceChannels
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.contracts.bindings.channel import (
@@ -55,6 +59,11 @@ class _Projector:
         self.device_id = device_id
 
 
+class _Ids:
+    def new(self, prefix):
+        return f"{prefix}-1"
+
+
 def _provider_app(provisions, revocations):
     app = FastAPI()
 
@@ -93,38 +102,83 @@ def _provider_app(provisions, revocations):
     return app
 
 
-async def test_provision_relay_and_revoke_are_control_only() -> None:
+async def test_claim_commit_and_provider_delivery_are_separate_recoverable_boundaries(
+    tmp_path,
+) -> None:
     provisions, revocations = [], []
     transport = httpx.ASGITransport(app=_provider_app(provisions, revocations))
-    async with httpx.AsyncClient(transport=transport, base_url="http://provider.test") as client:
-        provider = ChannelProviderHttpClient(
-            HttpRequestReplyClient(client), contract_url="http://provider.test/v1"
-        )
-        devices = _Devices()
-        assignments = await ProvisionDeviceChannels(
-            owner_domain_id="hub-local",
-            provider=provider,
-            clock=_Clock(),
-        ).execute(
-            device=devices.device,
-            operation_id="enrollment-1",
-        )
-        assert assignments.grants[0].opaque_binding.relay_bytes().endswith(b'"provider-secret"}')
-        assert "provider-secret" not in repr(assignments)
-        await RevokeDevice(
-            devices=devices,
-            provider=provider,
-            owner_domain_id="hub-local",
-            mutations=devices,
-            clock=_Clock(),
-            directory_projector=_Projector(),
-        ).execute(
-            owner_scope=None,
-        device_id="device-1",
-            reason="operator-request",
-            request_id="revoke-1",
-            principal_id="owner-operator",
-        )
+    database = HubDatabase.sqlite(tmp_path / "hub.sqlite3")
+    await database.initialize_schema()
+    repositories = SqlHubRepositories(database)
+    device = _Devices().device
+    async with database.sessions.begin() as session:
+        session.add(DeviceRow(**SqlDeviceRepository._values(device)))
+    try:
+        async with httpx.AsyncClient(
+            transport=transport, base_url="http://provider.test"
+        ) as client:
+            provider = ChannelProviderHttpClient(
+                HttpRequestReplyClient(client), contract_url="http://provider.test/v1"
+            )
+            assignments = await ProvisionDeviceChannels(
+                owner_domain_id="hub-local",
+                provider=provider,
+                clock=_Clock(),
+            ).execute(
+                device=device,
+                operation_id="enrollment-1",
+            )
+            assert assignments.grants[0].opaque_binding.relay_bytes().endswith(
+                b'"provider-secret"}'
+            )
+            assert "provider-secret" not in repr(assignments)
+
+            result = await RevokeDevice(
+                devices=repositories.devices,
+                claims=repositories.claim_lifecycle,
+                clock=_Clock(),
+                ids=_Ids(),
+                directory_projector=_Projector(),
+            ).execute(
+                device_ref=device.device_ref,
+                reason="operator-request",
+                command_id="revoke-1",
+                correlation_id="intent-1",
+                principal_id="owner-operator",
+            )
+
+            # Claim authority commits without synchronously touching Delivery.
+            assert result.outcome == "committed"
+            assert revocations == []
+
+            await repositories.device_control.materialize_claim_events(now=NOW)
+            pending = await repositories.device_control.get_by_event_id(
+                event_id=result.event_id
+            )
+            assert pending is not None
+            assert pending.state == "pending"
+
+            delivered = await DeliverDeviceControlOperations(
+                store=repositories.device_control,
+                provider=provider,
+                clock=_Clock(),
+            ).execute()
+            completed = await repositories.device_control.get_by_event_id(
+                event_id=result.event_id
+            )
+            replayed_delivery = await DeliverDeviceControlOperations(
+                store=repositories.device_control,
+                provider=provider,
+                clock=_Clock(),
+            ).execute()
+    finally:
+        await database.close()
 
     assert provisions[0].device.device_id == "device-1"
+    assert delivered == 1
+    assert completed is not None
+    assert completed.state == "delivered"
+    assert completed.delivered_at == NOW
+    assert replayed_delivery == 0
     assert revocations[0].device_id == "device-1"
+    assert len(revocations) == 1

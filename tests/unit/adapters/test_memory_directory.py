@@ -20,6 +20,8 @@ def _entry(device_id="device-1", owner_scope="owner-1"):
             {"schema_version": 1, "title": "Device"}
         ),
         lifecycle_state=DeviceLifecycleState.APPROVED,
+        claim_generation=1,
+        trust_epoch=1,
         enrolled_at=NOW,
         updated_at=NOW,
         retrieval_expires_at=NOW + timedelta(hours=1),

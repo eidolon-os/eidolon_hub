@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Literal
 
 from eidolon_sdk.device_foundation.v1 import (
+    ClaimEventPage,
     DeviceEraseContractError,
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
@@ -15,9 +16,19 @@ from eidolon_sdk.device_foundation.v1 import (
     canonical_bytes,
     operation_fingerprint,
     operation_key_id,
+    revoke_claim_fingerprint,
     verify_device_erase_ack,
     verify_operation_key_proof,
     verify_p256_signature,
+)
+from eidolon_sdk.device_foundation.v1 import (
+    ClaimEventRecord as ClaimEvent,
+)
+from eidolon_sdk.device_foundation.v1 import (
+    RevokeClaim as DeviceRevocationRequest,
+)
+from eidolon_sdk.device_foundation.v1 import (
+    RevokeClaimResult as ClaimRevocationResult,
 )
 from pydantic import Field, field_validator
 
@@ -26,15 +37,21 @@ from hub.contracts.bindings.common import ContractModel, JsonObject
 DeviceLifecycleState = Literal["pending-approval", "approved", "revoked"]
 
 __all__ = [
+    "ClaimEvent",
+    "ClaimEventPage",
+    "ClaimRevocationResult",
+    "DeviceControlOperationStatus",
     "DeviceEraseContractError",
     "DeviceLocalEraseAck",
     "DeviceLocalEraseCommand",
     "DeviceLocalEraseOperationStatus",
     "DeviceOperationKeyProof",
     "DeviceRef",
+    "DeviceRevocationRequest",
     "canonical_bytes",
     "operation_fingerprint",
     "operation_key_id",
+    "revoke_claim_fingerprint",
     "verify_device_erase_ack",
     "verify_operation_key_proof",
     "verify_p256_signature",
@@ -102,21 +119,33 @@ class DeviceRenameRequest(ContractModel):
     owner_scope: str | None = Field(default=None, min_length=1, max_length=64)
 
 
-class DeviceRevocationRequest(ContractModel):
-    operation: Literal["device.revocation"] = "device.revocation"
-    request_id: str = Field(min_length=1, max_length=96)
-    reason: str = Field(default="operator-request", min_length=1, max_length=256)
-    #: Whose device the caller believes this is. Optional because an unclaimed
-    #: enrollment belongs to nobody; when given, the Hub refuses to revoke a
-    #: device held by anyone else.
-    owner_scope: str | None = Field(default=None, min_length=1, max_length=64)
-
-
 class DeviceLifecycleStatus(ContractModel):
     operation: Literal["device.lifecycle-status"] = "device.lifecycle-status"
     device_id: str = Field(min_length=1, max_length=128)
     owner_id: str | None = Field(default=None, max_length=64)
     lifecycle_state: DeviceLifecycleState
+
+
+class DeviceControlOperationStatus(ContractModel):
+    """Read-only status of the current Channel delivery projection.
+
+    This is deliberately not the future device-local erase contract. A
+    successful Channel delivery proves platform channel access was revoked;
+    it does not prove that an offline device erased local state.
+    """
+
+    operation: Literal["device-control.operation-status"] = (
+        "device-control.operation-status"
+    )
+    event_id: str = Field(min_length=3, max_length=128)
+    operation_id: str = Field(min_length=3, max_length=255)
+    operation_type: Literal["channel.device-access.revoke"]
+    device_ref: DeviceRef
+    state: Literal["pending", "delivered"]
+    attempt_count: int = Field(ge=0)
+    next_attempt_at: datetime
+    delivered_at: datetime | None = None
+    last_error: str = Field(default="", max_length=512)
 
 
 class DeviceDirectoryEntry(ContractModel):
@@ -130,6 +159,7 @@ class DeviceDirectoryEntry(ContractModel):
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
     updated_at: datetime
+    device_ref: DeviceRef | None = None
 
 
 class DeviceDirectoryPage(ContractModel):

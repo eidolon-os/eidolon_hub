@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from ..common import device_lifecycle_state_schema
-from . import manifest_schema
+from . import claim_revocation_result_schema, manifest_schema
 
 
 class DeviceDirectoryEntry(BaseModel):
@@ -26,3 +26,4 @@ class DeviceDirectoryEntry(BaseModel):
     lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState
     enrolled_at: AwareDatetime
     updated_at: AwareDatetime
+    device_ref: claim_revocation_result_schema.DeviceRef | None = None

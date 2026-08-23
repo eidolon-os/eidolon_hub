@@ -27,6 +27,9 @@ class DeviceRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_enrollment_request_id: Mapped[str] = mapped_column(String(255), default="")
     last_enrollment_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    claim_generation: Mapped[int] = mapped_column(Integer, default=1)
+    trust_epoch: Mapped[int] = mapped_column(Integer, default=1)
+    aggregate_revision: Mapped[int] = mapped_column(Integer, default=1)
     owner_id: Mapped[str | None] = mapped_column(String(255), index=True)
     lifecycle_state: Mapped[str] = mapped_column(String(32), index=True)
     last_management_request_id: Mapped[str] = mapped_column(String(255), default="")
@@ -47,6 +50,65 @@ class DeviceManagementEventRow(Base):
     owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     data_json: Mapped[str] = mapped_column(Text)
+
+
+class ClaimCommandResultRow(Base):
+    __tablename__ = "hub_claim_command_results"
+
+    owner_domain_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    command_type: Mapped[str] = mapped_column(String(128), primary_key=True)
+    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(128))
+    outcome: Mapped[str] = mapped_column(String(32))
+    device_id: Mapped[str] = mapped_column(String(255), index=True)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
+    aggregate_revision: Mapped[int] = mapped_column(Integer)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+
+class ClaimEventRow(Base):
+    __tablename__ = "hub_claim_events"
+
+    stream_position: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    event_type: Mapped[str] = mapped_column(String(255), index=True)
+    device_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
+    aggregate_revision: Mapped[int] = mapped_column(Integer)
+    correlation_id: Mapped[str] = mapped_column(String(255))
+    causation_id: Mapped[str] = mapped_column(String(255))
+    actor_principal_id: Mapped[str] = mapped_column(String(255))
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    reason: Mapped[str] = mapped_column(String(256))
+
+
+class DeviceControlOperationRow(Base):
+    """Durable projection of a Claim event into Channel control work."""
+
+    __tablename__ = "hub_device_control_operations"
+
+    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    operation_type: Mapped[str] = mapped_column(String(128), index=True)
+    operation_id: Mapped[str] = mapped_column(String(255), unique=True)
+    device_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
+    reason: Mapped[str] = mapped_column(String(256))
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    last_error: Mapped[str] = mapped_column(String(512), default="")
 
 
 class DeviceOperationKeyBindingRow(Base):

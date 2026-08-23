@@ -13,8 +13,7 @@ from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.rename_device import RenameDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.interfaces.http.routers.device_management import DeviceManagementHttpServices
-from hub.ports.channels import ChannelProviderControl
-from hub.ports.identity import Clock
+from hub.ports.identity import Clock, IdGenerator
 from hub.ports.repositories import DeviceDirectoryRepository
 
 
@@ -23,11 +22,10 @@ def build_device_management(
     repositories: SqlHubRepositories,
     directory: DeviceDirectoryRepository,
     projector: ProjectDeviceDirectory,
-    provider: ChannelProviderControl,
-    owner_domain_id: str,
     management_jwt_secret: bytes,
     device_registry_reader_token: str,
     clock: Clock,
+    ids: IdGenerator,
     handoff_ttl: timedelta,
 ) -> DeviceManagementHttpServices:
     return DeviceManagementHttpServices(
@@ -47,10 +45,9 @@ def build_device_management(
         ),
         revoke_device=RevokeDevice(
             devices=repositories.devices,
-            provider=provider,
-            owner_domain_id=owner_domain_id,
-            mutations=repositories.device_mutations,
+            claims=repositories.claim_lifecycle,
             clock=clock,
+            ids=ids,
             directory_projector=projector,
         ),
         authorizer=JwtOwnerManagementAuthorizer(
@@ -59,4 +56,6 @@ def build_device_management(
             device_registry_reader_token=device_registry_reader_token,
         ),
         event_stream=repositories.management_events,
+        claim_events=repositories.claim_lifecycle,
+        device_control=repositories.device_control,
     )

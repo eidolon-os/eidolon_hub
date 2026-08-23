@@ -8,12 +8,15 @@ import json
 
 from hub.contracts.bindings.channel import ChannelAssignment
 from hub.contracts.bindings.device import (
-    DeviceDirectoryEntry as DeviceDirectoryEntryWire,
-)
-from hub.contracts.bindings.device import (
+    ClaimEvent,
+    ClaimRevocationResult,
+    DeviceControlOperationStatus,
     DeviceLifecycleStatus,
     DeviceManagementEvent,
     DeviceManifest,
+)
+from hub.contracts.bindings.device import (
+    DeviceDirectoryEntry as DeviceDirectoryEntryWire,
 )
 from hub.contracts.bindings.onboarding import (
     DeviceEnrollment,
@@ -28,6 +31,8 @@ from hub.domain.devices.entities import (
 )
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.ports.claim_lifecycle import ClaimCommandResult, StoredClaimEvent
+from hub.ports.device_control import DeviceControlOperation
 from hub.ports.management_events import StoredDeviceManagementEvent
 
 
@@ -117,6 +122,59 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         lifecycle_state=entry.lifecycle_state.value,
         enrolled_at=entry.enrolled_at,
         updated_at=entry.updated_at,
+        device_ref=(
+            {
+                "device_instance_id": entry.device_ref.device_instance_id,
+                "owner_domain_id": entry.device_ref.owner_domain_id,
+                "claim_generation": entry.device_ref.claim_generation,
+                "trust_epoch": entry.device_ref.trust_epoch,
+                "accepted_manifest_digest": entry.device_ref.accepted_manifest_digest,
+            }
+            if entry.lifecycle_state.value != "pending-approval"
+            else None
+        ),
+    )
+
+
+def claim_result_to_wire(result: ClaimCommandResult) -> ClaimRevocationResult:
+    return ClaimRevocationResult(
+        command_id=result.command_id,
+        outcome=result.outcome,
+        device_ref=result.device_ref,
+        aggregate_revision=result.aggregate_revision,
+        occurred_at=result.occurred_at,
+        event_id=result.event_id,
+    )
+
+
+def stored_claim_event_to_wire(stored: StoredClaimEvent) -> ClaimEvent:
+    event = stored.event
+    return ClaimEvent(
+        stream_position=stored.stream_position,
+        event_id=event.event_id,
+        event_type=event.event_type,
+        device_ref=event.device_ref,
+        aggregate_revision=event.aggregate_revision,
+        correlation_id=event.correlation_id,
+        causation_id=event.causation_id,
+        occurred_at=event.occurred_at,
+        reason=event.reason,
+    )
+
+
+def device_control_operation_to_wire(
+    operation: DeviceControlOperation,
+) -> DeviceControlOperationStatus:
+    return DeviceControlOperationStatus(
+        event_id=operation.event_id,
+        operation_id=operation.operation_id,
+        operation_type=operation.operation_type,
+        device_ref=operation.device_ref,
+        state=operation.state,
+        attempt_count=operation.attempt_count,
+        next_attempt_at=operation.next_attempt_at,
+        delivered_at=operation.delivered_at,
+        last_error=operation.last_error,
     )
 
 

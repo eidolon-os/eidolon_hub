@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/claim-event-page.schema.json",
+  "title": "Claim Event Page",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operation", "next_stream_position", "events"],
+  "properties": {
+    "operation": { "const": "device.claim-event-page" },
+    "next_stream_position": { "type": "integer", "minimum": 0 },
+    "events": {
+      "type": "array",
+      "maxItems": 500,
+      "items": { "$ref": "claim-event.schema.json" }
+    }
+  }
+}

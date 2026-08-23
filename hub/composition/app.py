@@ -12,6 +12,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
+from hub.application.device_control_delivery import (
+    DeliverDeviceControlOperations,
+    PeriodicDeviceControlDelivery,
+)
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.composition.channel_control import build_channel_provider
 from hub.composition.device_onboarding import build_device_onboarding
@@ -88,15 +92,33 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 repositories=resources.repositories,
                 directory=resources.directory,
                 projector=projector,
-                provider=channel_provider,
-                owner_domain_id=app_config.onboarding.owner_domain_id,
                 management_jwt_secret=secrets.management_jwt,
                 device_registry_reader_token=secrets.device_registry_reader_token,
                 clock=resources.clock,
+                ids=resources.ids,
                 handoff_ttl=timedelta(
                     seconds=app_config.onboarding.retrieval_window_seconds
                 ),
             )
+            device_control_delivery = PeriodicDeviceControlDelivery(
+                DeliverDeviceControlOperations(
+                    store=resources.repositories.device_control,
+                    provider=channel_provider,
+                    clock=resources.clock,
+                    retry_base_seconds=(
+                        app_config.channel_provider.revoke_retry_base_seconds
+                    ),
+                    retry_max_seconds=(
+                        app_config.channel_provider.revoke_retry_max_seconds
+                    ),
+                ),
+                interval_seconds=(
+                    app_config.channel_provider.revoke_delivery_poll_seconds
+                ),
+            )
+            await device_control_delivery.start()
+            stack.push_async_callback(device_control_delivery.stop)
+
             erase_reconcile = ReconcileDeviceEraseOperations(
                 ledger=resources.repositories.device_erase,
                 clock=resources.clock,

@@ -7,6 +7,7 @@ import pytest
 
 from hub.application.queries.get_device import GetDevice
 from hub.application.queries.list_devices import DeviceListQuery, ListDevices
+from hub.contracts.mappers import directory_entry_to_wire
 from hub.domain.devices.entities import (
     DeviceDirectoryEntry,
     DeviceLifecycleState,
@@ -31,10 +32,19 @@ def _entry(
             {
                 "schema_version": 1,
                 "title": "Display",
-                "actions": [{"name": "display.render"}],
+                "actions": [
+                    {
+                        "name": "display.render",
+                        "version": 1,
+                        "input_schema": {},
+                        "output_schema": {},
+                    }
+                ],
             }
         ),
         lifecycle_state=lifecycle_state,
+        claim_generation=1,
+        trust_epoch=1,
         enrolled_at=NOW,
         updated_at=NOW,
         retrieval_expires_at=retrieval_expires_at,
@@ -69,6 +79,13 @@ class _Directory:
 
     async def list(self, *, owner_scope):
         return tuple(entry for entry in self.entries if entry.owner_scope == owner_scope)
+
+
+def test_directory_wire_accepts_deployed_mac_style_device_id() -> None:
+    wire = directory_entry_to_wire(_entry("10:51:db:7e:24:44"))
+
+    assert wire.device_ref is not None
+    assert wire.device_ref.device_instance_id == "10:51:db:7e:24:44"
 
 
 @pytest.mark.asyncio

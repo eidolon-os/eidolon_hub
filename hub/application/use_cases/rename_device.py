@@ -64,7 +64,12 @@ class RenameDevice:
         if current.display_name == name:
             return current
         now = self._clock.now()
-        renamed = replace(current, display_name=name, updated_at=now)
+        renamed = replace(
+            current,
+            display_name=name,
+            updated_at=now,
+            aggregate_revision=current.aggregate_revision + 1,
+        )
         return await self._mutations.commit(
             expected=current,
             device=renamed,

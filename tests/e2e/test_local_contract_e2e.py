@@ -14,7 +14,6 @@ from hub.config import (
     DiscoveryConfig,
     HubConfig,
     MdnsDiscoveryConfig,
-    OnboardingConfig,
     PersistenceConfig,
 )
 
@@ -25,7 +24,7 @@ def _admin_credential(secret: str) -> str:
     token = jwt.encode(
         {
             "sub": "e2e-admin",
-            "aud": "eidolon-hub",
+            "aud": "eidolon-admission",
             "roles": ["hub-admin"],
             "exp": datetime.now(UTC) + timedelta(minutes=5),
         },
@@ -198,8 +197,10 @@ def test_local_enrollment_handoff_and_directory_survive_restart(
                 "/api/device-management/v1/devices/e2e-device-1/revocation",
                 headers={"Authorization": registry_reader},
                 json={
-                    "operation": "device.revocation",
-                    "request_id": "e2e-reader-revocation-1",
+                    "operation": "device.claim-revocation",
+                    "command_id": "e2e-reader-revocation-1",
+                    "correlation_id": "e2e-reader-removal-intent-1",
+                    "device_ref": detail.json()["device_ref"],
                     "reason": "must-not-run",
                 },
             ),

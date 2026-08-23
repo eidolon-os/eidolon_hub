@@ -80,6 +80,9 @@ class EnrollDevice:
             updated_at=now,
             last_enrollment_request_id=enrollment.request_id,
             last_enrollment_fingerprint=fingerprint,
+            claim_generation=(current.claim_generation + 1 if current is not None else 1),
+            trust_epoch=(current.trust_epoch if current is not None else 1),
+            aggregate_revision=(current.aggregate_revision + 1 if current is not None else 1),
         )
         persisted = await self._mutations.commit(
             expected=current,

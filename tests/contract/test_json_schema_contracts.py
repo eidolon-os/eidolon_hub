@@ -6,9 +6,10 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
+from eidolon_sdk.device_foundation.v1 import DeviceRef as CanonicalDeviceRef
+from eidolon_sdk.device_foundation.v1 import OwnerDomainDescriptor
 from hypothesis import given, settings
 from hypothesis_jsonschema import from_schema
-from eidolon_sdk.device_foundation.v1 import OwnerDomainDescriptor
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
@@ -19,6 +20,9 @@ from hub.contracts.bindings.device import (
     DeviceLifecycleStatus,
     DeviceManagementEvent,
     DeviceManifest,
+)
+from hub.contracts.bindings.device import (
+    DeviceRef as HubDeviceRef,
 )
 from hub.contracts.bindings.onboarding import (
     DeviceEnrollment,
@@ -32,6 +36,7 @@ from hub.contracts.generated.schema_models.device.manifest_schema import (
 from hub.contracts.generated.schema_models.onboarding.handoff_schema import (
     DeviceHandoffOutcome as GeneratedDeviceHandoffOutcome,
 )
+from hub.domain.devices.entities import DeviceRef as DomainDeviceRef
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMAS = ROOT / "hub" / "contracts" / "schemas"
@@ -139,6 +144,11 @@ def test_descriptor_binding_is_owned_by_canonical_sdk_contract() -> None:
         "eidolon_sdk.device_foundation.v1"
     )
     assert not (SCHEMAS / "onboarding" / "descriptor.schema.json").exists()
+
+
+def test_device_ref_binding_and_domain_use_the_canonical_sdk_type() -> None:
+    assert HubDeviceRef is CanonicalDeviceRef
+    assert DomainDeviceRef is CanonicalDeviceRef
 
 
 def test_enrollment_request_and_receipt_conform_to_same_contract() -> None:

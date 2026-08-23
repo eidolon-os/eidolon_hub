@@ -62,6 +62,47 @@ class HubDatabase:
             Base.metadata.create_all(connection)
             return
 
+        # One audited, in-place cutover from the pre-Claim ledger.  This is not
+        # a runtime compatibility mode: after these statements complete the
+        # database has only the current schema, and the strict validation below
+        # rejects every partial or unknown shape.
+        legacy_tables = {"hub_devices", "hub_events"}
+        legacy_device_columns = {
+            "device_id",
+            "enrollment_id",
+            "retrieval_token_hash",
+            "retrieval_expires_at",
+            "display_name",
+            "device_kind",
+            "manifest_json",
+            "manifest_revision",
+            "enrolled_at",
+            "updated_at",
+            "last_enrollment_request_id",
+            "last_enrollment_fingerprint",
+            "owner_id",
+            "lifecycle_state",
+            "last_management_request_id",
+            "last_management_fingerprint",
+        }
+        if actual_tables == legacy_tables:
+            actual_device_columns = {
+                value["name"] for value in schema.get_columns("hub_devices")
+            }
+            if actual_device_columns == legacy_device_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE hub_devices ADD COLUMN claim_generation INTEGER NOT NULL DEFAULT 1"
+                )
+                connection.exec_driver_sql(
+                    "ALTER TABLE hub_devices ADD COLUMN trust_epoch INTEGER NOT NULL DEFAULT 1"
+                )
+                connection.exec_driver_sql(
+                    "ALTER TABLE hub_devices ADD COLUMN aggregate_revision INTEGER NOT NULL DEFAULT 1"
+                )
+                Base.metadata.create_all(connection, checkfirst=True)
+                schema = inspect(connection)
+                actual_tables = set(schema.get_table_names())
+
         problems: list[str] = []
         if actual_tables != expected_tables:
             missing = sorted(expected_tables - actual_tables)
