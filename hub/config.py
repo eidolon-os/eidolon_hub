@@ -34,6 +34,7 @@ class DiscoveryConfig(_StrictConfig):
 
 class OnboardingConfig(_StrictConfig):
     owner_domain_id: str = Field(default="owner-local", min_length=1, max_length=128)
+    owner_domain_generation: int = Field(default=1, ge=1)
     trust_epoch: int = Field(default=1, ge=1)
     descriptor_uri: str = (
         "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
@@ -106,6 +107,8 @@ class PersistenceConfig(_StrictConfig):
         ),
         min_length=1,
     )
+    authority_anchor_path: str | None = Field(default=None, min_length=1)
+    authority_bootstrap_path: str | None = Field(default=None, min_length=1)
 
 
 class DeviceControlConfig(_StrictConfig):
@@ -167,6 +170,18 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     persistence = value.get("persistence")
     if isinstance(persistence, dict) and isinstance(persistence.get("path"), str):
         persistence["path"] = os.path.expandvars(os.path.expanduser(persistence["path"]))
+    if isinstance(persistence, dict) and isinstance(
+        persistence.get("authority_anchor_path"), str
+    ):
+        persistence["authority_anchor_path"] = os.path.expandvars(
+            os.path.expanduser(persistence["authority_anchor_path"])
+        )
+    if isinstance(persistence, dict) and isinstance(
+        persistence.get("authority_bootstrap_path"), str
+    ):
+        persistence["authority_bootstrap_path"] = os.path.expandvars(
+            os.path.expanduser(persistence["authority_bootstrap_path"])
+        )
     return value
 
 

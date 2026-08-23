@@ -212,6 +212,8 @@ def create_device_management_router(
                 raise KeyError(event_id)
             if "hub-admin" not in principal.roles and (
                 principal.intent_id is None
+                or principal.target_owner_domain_generation
+                != operation.device_ref.owner_domain_generation
                 or principal.target_claim_generation
                 != operation.device_ref.claim_generation
                 or principal.target_trust_epoch != operation.device_ref.trust_epoch
@@ -310,6 +312,8 @@ def create_device_management_router(
                 if (
                     principal.intent_id != payload.correlation_id
                     or principal.target_device_id != device_id
+                    or principal.target_owner_domain_generation
+                    != payload.device_ref.owner_domain_generation
                     or principal.target_claim_generation
                     != payload.device_ref.claim_generation
                     or principal.target_trust_epoch != payload.device_ref.trust_epoch

@@ -81,6 +81,14 @@ def test_runtime_bindings_conform_to_generated_shapes() -> None:
         device_id="device-1",
         manifest_revision="sha256:revision",
         lifecycle_state="approved",
+        device_ref={
+            "device_instance_id": "device-1",
+            "owner_domain_id": "owner-1",
+            "owner_domain_generation": 1,
+            "claim_generation": 1,
+            "trust_epoch": 1,
+            "accepted_manifest_digest": "sha256:" + "a" * 64,
+        },
         channels=(
             ChannelAssignment(
                 channel_id="channel-1",
@@ -193,9 +201,10 @@ def test_handoff_request_and_outcome_conform_to_same_contract() -> None:
             request_id="handoff-1",
             enrollment_id="enrollment-1",
             device_id="device-1",
-            manifest_revision="sha256:revision",
-            lifecycle_state="pending-approval",
-        ),
+                manifest_revision="sha256:revision",
+                lifecycle_state="pending-approval",
+                device_ref=None,
+            ),
     )
     for value in values:
         _validate("onboarding/handoff.schema.json", value)

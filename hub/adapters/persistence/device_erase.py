@@ -36,7 +36,8 @@ def _aware(value: datetime) -> datetime:
 def _operation_id(event: ClaimEventRow) -> str:
     semantic = (
         f"device-local.erase\0{event.event_id}\0{event.device_id}\0"
-        f"{event.owner_domain_id}\0{event.claim_generation}\0{event.trust_epoch}\0"
+        f"{event.owner_domain_id}\0{event.owner_domain_generation}\0"
+        f"{event.claim_generation}\0{event.trust_epoch}\0"
         f"{event.accepted_manifest_digest}"
     )
     return "erase_" + hashlib.sha256(semantic.encode()).hexdigest()[:48]
@@ -80,12 +81,13 @@ class SqlDeviceEraseLedger:
         self,
         *,
         enrollment_id: str,
+        owner_domain_generation: int,
         claim_generation: int,
         proof,
         key_id: str,
         bound_at: datetime,
     ) -> None:
-        key = (proof.device_instance_id, claim_generation)
+        key = (proof.device_instance_id, owner_domain_generation, claim_generation)
         async with self._lock:
             async with self._database.sessions.begin() as session:
                 existing = await session.get(DeviceOperationKeyBindingRow, key)
@@ -103,6 +105,7 @@ class SqlDeviceEraseLedger:
                 session.add(
                     DeviceOperationKeyBindingRow(
                         device_id=proof.device_instance_id,
+                        owner_domain_generation=owner_domain_generation,
                         claim_generation=claim_generation,
                         enrollment_id=enrollment_id,
                         enrollment_request_id=proof.enrollment_request_id,
@@ -136,6 +139,7 @@ class SqlDeviceEraseLedger:
                         device_ref=DeviceRef(
                             device_instance_id=event.device_id,
                             owner_domain_id=event.owner_domain_id,
+                            owner_domain_generation=event.owner_domain_generation,
                             claim_generation=event.claim_generation,
                             trust_epoch=event.trust_epoch,
                             accepted_manifest_digest=event.accepted_manifest_digest,
@@ -163,7 +167,11 @@ class SqlDeviceEraseLedger:
                         continue
                     binding = await session.get(
                         DeviceOperationKeyBindingRow,
-                        (event.device_id, event.claim_generation),
+                        (
+                            event.device_id,
+                            event.owner_domain_generation,
+                            event.claim_generation,
+                        ),
                     )
                     has_key = binding is not None
                     session.add(
@@ -173,6 +181,7 @@ class SqlDeviceEraseLedger:
                             request_fingerprint=fingerprint,
                             device_id=event.device_id,
                             owner_domain_id=event.owner_domain_id,
+                            owner_domain_generation=event.owner_domain_generation,
                             claim_generation=event.claim_generation,
                             trust_epoch=event.trust_epoch,
                             accepted_manifest_digest=event.accepted_manifest_digest,
@@ -249,6 +258,8 @@ class SqlDeviceEraseLedger:
                 select(DeviceEraseOperationRow).where(
                     DeviceEraseOperationRow.device_id == device_ref.device_instance_id,
                     DeviceEraseOperationRow.owner_domain_id == device_ref.owner_domain_id,
+                    DeviceEraseOperationRow.owner_domain_generation
+                    == device_ref.owner_domain_generation,
                     DeviceEraseOperationRow.claim_generation == device_ref.claim_generation,
                     DeviceEraseOperationRow.trust_epoch == device_ref.trust_epoch,
                     DeviceEraseOperationRow.accepted_manifest_digest
@@ -256,6 +267,22 @@ class SqlDeviceEraseLedger:
                 )
             )
         return None if row is None else self._decode(row)
+
+    async def operation_key_for(
+        self, *, device_ref: DeviceRef
+    ) -> tuple[str, str] | None:
+        async with self._database.sessions() as session:
+            binding = await session.get(
+                DeviceOperationKeyBindingRow,
+                (
+                    device_ref.device_instance_id,
+                    device_ref.owner_domain_generation,
+                    device_ref.claim_generation,
+                ),
+            )
+        if binding is None:
+            return None
+        return binding.public_key_spki, binding.key_id
 
     async def accept_delivery(
         self,

@@ -29,6 +29,7 @@ from hub.device_control.application import (
     AcknowledgeDeviceEraseOperation,
     BindDeviceOperationKey,
     PeriodicDeviceEraseReconcile,
+    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -136,6 +137,11 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
                     clock=resources.clock,
+                ),
+                configuration=PullDeviceConfiguration(
+                    devices=resources.repositories.devices,
+                    ledger=resources.repositories.device_erase,
+                    provision=device_onboarding.provision,
                 ),
                 acknowledge=AcknowledgeDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,

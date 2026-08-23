@@ -12,6 +12,17 @@ class Base(DeclarativeBase):
     pass
 
 
+class AuthorityStateRow(Base):
+    """Singleton binding this database to one Owner Authority lineage."""
+
+    __tablename__ = "hub_authority_state"
+
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(255))
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
+    state_id: Mapped[str] = mapped_column(String(128), unique=True)
+
+
 class DeviceRow(Base):
     __tablename__ = "hub_devices"
 
@@ -27,6 +38,7 @@ class DeviceRow(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     last_enrollment_request_id: Mapped[str] = mapped_column(String(255), default="")
     last_enrollment_fingerprint: Mapped[str] = mapped_column(String(64), default="")
+    owner_domain_generation: Mapped[int] = mapped_column(Integer, default=1)
     claim_generation: Mapped[int] = mapped_column(Integer, default=1)
     trust_epoch: Mapped[int] = mapped_column(Integer, default=1)
     aggregate_revision: Mapped[int] = mapped_column(Integer, default=1)
@@ -61,6 +73,7 @@ class ClaimCommandResultRow(Base):
     fingerprint: Mapped[str] = mapped_column(String(128))
     outcome: Mapped[str] = mapped_column(String(32))
     device_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
     claim_generation: Mapped[int] = mapped_column(Integer)
     trust_epoch: Mapped[int] = mapped_column(Integer)
     accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
@@ -77,6 +90,7 @@ class ClaimEventRow(Base):
     event_type: Mapped[str] = mapped_column(String(255), index=True)
     device_id: Mapped[str] = mapped_column(String(255), index=True)
     owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
     claim_generation: Mapped[int] = mapped_column(Integer)
     trust_epoch: Mapped[int] = mapped_column(Integer)
     accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
@@ -98,6 +112,7 @@ class DeviceControlOperationRow(Base):
     operation_id: Mapped[str] = mapped_column(String(255), unique=True)
     device_id: Mapped[str] = mapped_column(String(255), index=True)
     owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
     claim_generation: Mapped[int] = mapped_column(Integer)
     trust_epoch: Mapped[int] = mapped_column(Integer)
     accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
@@ -117,6 +132,7 @@ class DeviceOperationKeyBindingRow(Base):
     __tablename__ = "hub_device_operation_key_bindings"
 
     device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer, primary_key=True)
     claim_generation: Mapped[int] = mapped_column(Integer, primary_key=True)
     enrollment_id: Mapped[str] = mapped_column(String(255), unique=True)
     enrollment_request_id: Mapped[str] = mapped_column(String(255))
@@ -135,6 +151,7 @@ class DeviceEraseOperationRow(Base):
     request_fingerprint: Mapped[str] = mapped_column(String(128))
     device_id: Mapped[str] = mapped_column(String(255), index=True)
     owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
     claim_generation: Mapped[int] = mapped_column(Integer)
     trust_epoch: Mapped[int] = mapped_column(Integer)
     accepted_manifest_digest: Mapped[str] = mapped_column(String(128))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -52,6 +53,7 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
                 "hub_device_operation_key_bindings",
                 "hub_devices",
                 "hub_events",
+                "hub_authority_state",
             }
         assert "hub_channel_assignments" not in actual
         assert "alembic_version" not in actual
@@ -85,7 +87,7 @@ async def test_legacy_schema_is_rejected_instead_of_upgraded(tmp_path) -> None:
         await database.close()
 
 
-async def test_pre_claim_database_is_cut_over_once_and_preserves_device_rows(tmp_path) -> None:
+async def test_pre_claim_database_requires_explicit_restore_or_reset(tmp_path) -> None:
     database = HubDatabase.sqlite(tmp_path / "pre-claim.sqlite3")
     metadata = MetaData()
     devices = Table(
@@ -149,24 +151,100 @@ async def test_pre_claim_database_is_cut_over_once_and_preserves_device_rows(tmp
                 )
             )
 
-        await database.initialize_schema()
-        await database.initialize_schema()
+        with pytest.raises(RuntimeError, match="explicit RestoreAuthority or ResetAuthority"):
+            await database.initialize_schema()
 
         async with database.engine.connect() as connection:
             row = (
                 await connection.execute(
-                    text(
-                        "SELECT claim_generation, trust_epoch, aggregate_revision "
-                        "FROM hub_devices WHERE device_id = 'device-1'"
-                    )
+                    text("SELECT device_id, owner_id FROM hub_devices")
                 )
             ).one()
-            tables = await connection.run_sync(
-                lambda sync_connection: set(inspect(sync_connection).get_table_names())
-            )
-        assert row == (1, 1, 1)
-        assert "hub_claim_command_results" in tables
-        assert "hub_claim_events" in tables
-        assert "hub_device_erase_operations" in tables
+        assert row == ("device-1", "owner-1")
+    finally:
+        await database.close()
+
+
+async def test_empty_database_cannot_rebootstrap_over_existing_authority_anchor(tmp_path) -> None:
+    path = tmp_path / "hub.sqlite3"
+    first = HubDatabase.sqlite(path)
+    await first.initialize_schema()
+    await first.close()
+    path.unlink()
+
+    replacement = HubDatabase.sqlite(path)
+    try:
+        with pytest.raises(RuntimeError, match="database is empty.*lineage exists"):
+            await replacement.initialize_schema()
+    finally:
+        await replacement.close()
+
+
+async def test_existing_database_requires_its_external_authority_anchor(tmp_path) -> None:
+    path = tmp_path / "hub.sqlite3"
+    first = HubDatabase.sqlite(path)
+    await first.initialize_schema()
+    await first.close()
+    path.with_name(path.name + ".authority-lineage.json").unlink()
+
+    restarted = HubDatabase.sqlite(path)
+    try:
+        with pytest.raises(RuntimeError, match="lineage anchor is missing"):
+            await restarted.initialize_schema()
+    finally:
+        await restarted.close()
+
+
+async def test_database_cannot_start_under_a_different_owner_generation(tmp_path) -> None:
+    path = tmp_path / "hub.sqlite3"
+    first = HubDatabase.sqlite(path, owner_domain_generation=1)
+    await first.initialize_schema()
+    await first.close()
+
+    restarted = HubDatabase.sqlite(path, owner_domain_generation=2)
+    try:
+        with pytest.raises(RuntimeError, match="do not identify the same generation"):
+            await restarted.initialize_schema()
+    finally:
+        await restarted.close()
+
+
+async def test_product_bootstrap_is_explicit_one_shot_and_consumed(tmp_path) -> None:
+    path = tmp_path / "hub.sqlite3"
+    bootstrap = tmp_path / "authority-bootstrap.json"
+    bootstrap.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "operation": "owner-authority.bootstrap",
+                "owner_domain_id": "owner-test",
+                "owner_domain_generation": 1,
+                "state_id": "authority-state_explicit-test",
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = HubDatabase.sqlite(path, authority_bootstrap_path=bootstrap)
+    try:
+        await database.initialize_schema()
+        assert not bootstrap.exists()
+    finally:
+        await database.close()
+
+    restarted = HubDatabase.sqlite(path, authority_bootstrap_path=bootstrap)
+    try:
+        await restarted.initialize_schema()
+    finally:
+        await restarted.close()
+
+
+async def test_product_empty_database_without_bootstrap_fails_closed(tmp_path) -> None:
+    database = HubDatabase.sqlite(
+        tmp_path / "hub.sqlite3",
+        authority_bootstrap_path=tmp_path / "missing-bootstrap.json",
+    )
+    try:
+        with pytest.raises(RuntimeError, match="no matching.*bootstrap capability"):
+            await database.initialize_schema()
     finally:
         await database.close()

@@ -19,6 +19,7 @@ class DeviceEraseLedger(Protocol):
         self,
         *,
         enrollment_id: str,
+        owner_domain_generation: int,
         claim_generation: int,
         proof: DeviceOperationKeyProof,
         key_id: str,
@@ -38,6 +39,10 @@ class DeviceEraseLedger(Protocol):
     async def get_for_device(
         self, *, device_ref: DeviceRef
     ) -> DeviceEraseOperation | None: ...
+
+    async def operation_key_for(
+        self, *, device_ref: DeviceRef
+    ) -> tuple[str, str] | None: ...
 
     async def accept_delivery(
         self,

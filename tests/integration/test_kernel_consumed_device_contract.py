@@ -146,6 +146,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                 device_ref=KernelDeviceRef(
                     device_instance_id=admission.device_ref.device_instance_id,
                     owner_domain_id=admission.device_ref.owner_domain_id,
+                    owner_domain_generation=admission.device_ref.owner_domain_generation,
                     claim_generation=admission.device_ref.claim_generation,
                     trust_epoch=admission.device_ref.trust_epoch,
                     accepted_manifest_digest=(
@@ -183,6 +184,9 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                 "actor_ref": "controller:joint-contract",
                 "intent_id": "joint-removal-intent-1",
                 "target_device_id": admission.device_ref.device_instance_id,
+                "target_owner_domain_generation": (
+                    admission.device_ref.owner_domain_generation
+                ),
                 "target_claim_generation": admission.device_ref.claim_generation,
                 "target_trust_epoch": admission.device_ref.trust_epoch,
                 "target_manifest_digest": (
@@ -195,24 +199,45 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                 role="device-manager",
                 **removal_claims,
             )
+            stale_authority_token = _token(
+                secret=management_secret,
+                subject="joint-contract/admin-workflow",
+                role="device-manager",
+                **{
+                    **removal_claims,
+                    "target_owner_domain_generation": (
+                        admission.device_ref.owner_domain_generation + 1
+                    ),
+                },
+            )
+            revocation_document = {
+                "operation": "device.claim-revocation",
+                "command_id": "joint-revocation-1",
+                "correlation_id": "joint-removal-intent-1",
+                "device_ref": {
+                    "device_instance_id": admission.device_ref.device_instance_id,
+                    "owner_domain_id": admission.device_ref.owner_domain_id,
+                    "owner_domain_generation": (
+                        admission.device_ref.owner_domain_generation
+                    ),
+                    "claim_generation": admission.device_ref.claim_generation,
+                    "trust_epoch": admission.device_ref.trust_epoch,
+                    "accepted_manifest_digest": (
+                        admission.device_ref.accepted_manifest_digest
+                    ),
+                },
+                "reason": "joint-contract-test",
+            }
+            stale_authority = await hub_client.post(
+                "/api/device-management/v1/devices/joint-device-1/revocation",
+                headers={"Authorization": f"Bearer {stale_authority_token}"},
+                json=revocation_document,
+            )
+            assert stale_authority.status_code == 403
             revocation = await hub_client.post(
                 "/api/device-management/v1/devices/joint-device-1/revocation",
                 headers={"Authorization": f"Bearer {removal_token}"},
-                json={
-                    "operation": "device.claim-revocation",
-                    "command_id": "joint-revocation-1",
-                    "correlation_id": "joint-removal-intent-1",
-                    "device_ref": {
-                        "device_instance_id": admission.device_ref.device_instance_id,
-                        "owner_domain_id": admission.device_ref.owner_domain_id,
-                        "claim_generation": admission.device_ref.claim_generation,
-                        "trust_epoch": admission.device_ref.trust_epoch,
-                        "accepted_manifest_digest": (
-                            admission.device_ref.accepted_manifest_digest
-                        ),
-                    },
-                    "reason": "joint-contract-test",
-                },
+                json=revocation_document,
             )
             assert revocation.status_code == 200, revocation.text
             reconciliation = await ReconcileClaimEvents(

@@ -91,7 +91,13 @@ def _required_text(env_name: str) -> str:
 def create_database(config: HubConfig) -> HubDatabase:
     """Create the local SQLite adapter without opening application services."""
 
-    return HubDatabase.sqlite(resolve_database_path(config))
+    return HubDatabase.sqlite(
+        resolve_database_path(config),
+        owner_domain_id=config.onboarding.owner_domain_id,
+        owner_domain_generation=config.onboarding.owner_domain_generation,
+        authority_anchor_path=config.persistence.authority_anchor_path,
+        authority_bootstrap_path=config.persistence.authority_bootstrap_path,
+    )
 
 
 def resolve_database_path(config: HubConfig) -> Path:

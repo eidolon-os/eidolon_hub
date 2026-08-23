@@ -21,6 +21,19 @@ class DeviceHandoffRequest(BaseModel):
     retrieval_token: Annotated[str, Field(max_length=256, min_length=32)]
 
 
+class DeviceRef(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+    )
+    device_instance_id: Annotated[str, Field(max_length=128, min_length=3)]
+    owner_domain_id: Annotated[str, Field(max_length=128, min_length=3)]
+    owner_domain_generation: Annotated[int, Field(ge=1)]
+    claim_generation: Annotated[int, Field(ge=1)]
+    trust_epoch: Annotated[int, Field(ge=1)]
+    accepted_manifest_digest: Annotated[str, Field(pattern="^sha256:[0-9a-f]{64}$")]
+
+
 class DeviceHandoffOutcome(BaseModel):
     model_config = ConfigDict(
         extra="forbid",
@@ -32,6 +45,7 @@ class DeviceHandoffOutcome(BaseModel):
     device_id: Annotated[str, Field(max_length=128, min_length=1)]
     manifest_revision: Annotated[str, Field(max_length=96, min_length=1)]
     lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState
+    device_ref: DeviceRef | None = None
     channels: Annotated[List[assignment_schema.ChannelAssignment], Field(max_length=16)]
 
 

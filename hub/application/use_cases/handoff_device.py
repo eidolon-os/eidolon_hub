@@ -39,18 +39,19 @@ class HandoffDevice:
             raise KeyError(enrollment_id)
         if not self._tokens.verify(retrieval_token, device.retrieval_token_hash):
             raise PermissionError("invalid enrollment retrieval token")
+        if device.retrieval_expires_at <= self._clock.now():
+            # Enrollment is a bounded Grant-delivery/ACK bridge, never a
+            # permanent device credential. Established Claims refresh through
+            # signed Device Control using the bound operation key.
+            raise TimeoutError("enrollment retrieval window expired")
         if device.lifecycle_state is DeviceLifecycleState.REVOKED:
             return DeviceHandoffOutcome(device=device, assignments=None)
         if device.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL:
             # The window bounds how long an enrollment nobody has approved may
             # sit waiting to be collected. Past it, the device must enroll again.
-            if device.retrieval_expires_at <= self._clock.now():
-                raise TimeoutError("enrollment retrieval window expired")
             return DeviceHandoffOutcome(device=device, assignments=None)
-        # An approved device asks for channel credentials every time it opens a
-        # conversation, for as long as it is in service. What ends that service
-        # is the owner revoking it — not the clock that was started to bound a
-        # pickup nobody had performed yet.
+        # This is the first bounded Claim Grant collection. Later channel
+        # credentials come from signed Device Control, never this capability.
         assignments = await self._provision.execute(
             device=device,
             operation_id=device.enrollment_id,

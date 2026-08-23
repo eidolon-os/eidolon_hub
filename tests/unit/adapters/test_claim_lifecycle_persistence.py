@@ -165,6 +165,7 @@ async def test_claim_transaction_rolls_back_state_result_and_audit_on_event_conf
                 event_type="live.eidolon.device.claim-revoked.v1",
                 device_id="other-device",
                 owner_domain_id="owner-1",
+                owner_domain_generation=1,
                 claim_generation=1,
                 trust_epoch=1,
                 accepted_manifest_digest=device.manifest_revision,

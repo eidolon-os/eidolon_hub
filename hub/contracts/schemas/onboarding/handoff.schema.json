@@ -20,7 +20,7 @@
     "DeviceHandoffOutcome": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["operation", "request_id", "enrollment_id", "device_id", "manifest_revision", "lifecycle_state", "channels"],
+      "required": ["operation", "request_id", "enrollment_id", "device_id", "manifest_revision", "lifecycle_state", "device_ref", "channels"],
       "properties": {
         "operation": {"const": "device.handoff-outcome"},
         "request_id": {"type": "string", "minLength": 1, "maxLength": 96},
@@ -28,7 +28,26 @@
         "device_id": {"type": "string", "minLength": 1, "maxLength": 128},
         "manifest_revision": {"type": "string", "minLength": 1, "maxLength": 96},
         "lifecycle_state": {"$ref": "../common/device-lifecycle-state.schema.json"},
+        "device_ref": {
+          "oneOf": [
+            {"$ref": "#/$defs/DeviceRef"},
+            {"type": "null"}
+          ]
+        },
         "channels": {"type": "array", "maxItems": 16, "items": {"$ref": "../channel/assignment.schema.json"}}
+      }
+    },
+    "DeviceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_instance_id", "owner_domain_id", "owner_domain_generation", "claim_generation", "trust_epoch", "accepted_manifest_digest"],
+      "properties": {
+        "device_instance_id": {"type": "string", "minLength": 3, "maxLength": 128},
+        "owner_domain_id": {"type": "string", "minLength": 3, "maxLength": 128},
+        "owner_domain_generation": {"type": "integer", "minimum": 1},
+        "claim_generation": {"type": "integer", "minimum": 1},
+        "trust_epoch": {"type": "integer", "minimum": 1},
+        "accepted_manifest_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
       }
     }
   }

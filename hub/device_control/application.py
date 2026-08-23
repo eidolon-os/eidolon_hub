@@ -8,6 +8,7 @@ import logging
 from dataclasses import dataclass
 from datetime import timedelta
 
+from hub.application.use_cases.provision_device_channels import ProvisionDeviceChannels
 from hub.contracts.bindings.device import (
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
@@ -19,6 +20,7 @@ from hub.contracts.bindings.device import (
     verify_operation_key_proof,
     verify_p256_signature,
 )
+from hub.domain.channels.entities import ChannelAssignmentSet
 from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.identity import Clock, RetrievalTokenHasher
 from hub.ports.repositories import DeviceRepository
@@ -77,6 +79,7 @@ class BindDeviceOperationKey:
         key_id = operation_key_id(proof.public_key_spki)
         await self._ledger.bind_operation_key(
             enrollment_id=enrollment_id,
+            owner_domain_generation=device.owner_domain_generation,
             claim_generation=device.claim_generation,
             proof=proof,
             key_id=key_id,
@@ -150,6 +153,65 @@ class PullDeviceEraseOperation:
         return DeviceEraseDelivery(
             delivery_attempt_id=attempt_id,
             command=accepted.command,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceConfigurationOutcome:
+    device_ref: DeviceRef
+    lifecycle_state: DeviceLifecycleState
+    assignments: ChannelAssignmentSet | None
+
+
+class PullDeviceConfiguration:
+    """Serve an established Claim through Device Control, not Enrollment."""
+
+    def __init__(
+        self,
+        *,
+        devices: DeviceRepository,
+        ledger: DeviceEraseLedger,
+        provision: ProvisionDeviceChannels,
+    ) -> None:
+        self._devices = devices
+        self._ledger = ledger
+        self._provision = provision
+
+    async def execute(
+        self,
+        *,
+        device_ref: DeviceRef,
+        public_key_spki: str,
+        nonce: str,
+        signature: str,
+    ) -> DeviceConfigurationOutcome:
+        device = await self._devices.get(device_ref.device_instance_id)
+        if device is None or device.device_ref != device_ref:
+            raise KeyError(device_ref.device_instance_id)
+        binding = await self._ledger.operation_key_for(device_ref=device_ref)
+        if binding is None or binding[0] != public_key_spki:
+            raise PermissionError("configuration key does not match the Claim generation")
+        verify_p256_signature(
+            public_key_spki=public_key_spki,
+            signing_document={
+                "device_ref": device_ref.model_dump(mode="json"),
+                "nonce": nonce,
+                "operation_type": "device-control.configuration",
+            },
+            signature=signature,
+        )
+        assignments = None
+        if device.lifecycle_state is DeviceLifecycleState.APPROVED:
+            semantic = canonical_bytes(device_ref)
+            operation_id = "claim-config_" + hashlib.sha256(semantic).hexdigest()[:48]
+            assignments = await self._provision.execute(
+                device=device,
+                operation_id=operation_id,
+            )
+        return DeviceConfigurationOutcome(
+            device_ref=device_ref,
+            lifecycle_state=device.lifecycle_state,
+            assignments=assignments,
         )
 
 

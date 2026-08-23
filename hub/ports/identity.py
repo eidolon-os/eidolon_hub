@@ -19,6 +19,7 @@ class ManagementPrincipal:
     actor_ref: str | None = None
     intent_id: str | None = None
     target_device_id: str | None = None
+    target_owner_domain_generation: int | None = None
     target_claim_generation: int | None = None
     target_trust_epoch: int | None = None
     target_manifest_digest: str | None = None

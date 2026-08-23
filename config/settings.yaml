@@ -10,6 +10,7 @@ onboarding:
   # The Owner identity and signed directory survive Host replacement. Only the
   # candidate descriptor URI is rewritten when transport location changes.
   owner_domain_id: owner-local
+  owner_domain_generation: 1
   trust_epoch: 1
   descriptor_uri: https://eidolon-hub.local/api/device-onboarding/v1/descriptor
   descriptor_path: /etc/eidolon/owner-domain/owner_domain_descriptor.json
@@ -27,3 +28,5 @@ channel_provider:
 persistence:
   # Hub owns this database file; it does not share the legacy eidolon.sqlite3.
   path: $EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3
+  authority_anchor_path: $EIDOLON_STATE_ROOT/hub/authority-lineage.json
+  authority_bootstrap_path: $EIDOLON_STATE_ROOT/hub/authority-bootstrap.json

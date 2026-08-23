@@ -91,6 +91,7 @@ def _use_case(devices, events, projector, clock=None):
         ids=_Ids(),
         tokens=Sha256RetrievalTokenHasher(),
         enrollment_ttl=timedelta(minutes=30),
+        owner_domain_generation=1,
         directory_projector=projector,
     )
 

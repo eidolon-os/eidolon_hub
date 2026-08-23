@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from typing import Literal
-from eidolon_sdk.device_foundation.v1 import OwnerDomainDescriptor
+
+from eidolon_sdk.device_foundation.v1 import DeviceRef, OwnerDomainDescriptor
 from pydantic import Field, field_validator
 
 from hub.contracts.bindings.channel import ChannelAssignment
@@ -51,6 +52,7 @@ class DeviceHandoffOutcome(ContractModel):
     device_id: str = Field(min_length=1, max_length=128)
     manifest_revision: str = Field(min_length=1, max_length=96)
     lifecycle_state: DeviceLifecycleState
+    device_ref: DeviceRef | None
     channels: tuple[ChannelAssignment, ...] = Field(default=(), max_length=16)
 
     @field_validator("channels", mode="before")

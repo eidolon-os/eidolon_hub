@@ -15,6 +15,7 @@ class DeviceRef(BaseModel):
     )
     device_instance_id: Annotated[str, Field(max_length=128, min_length=1)]
     owner_domain_id: Annotated[str, Field(max_length=64, min_length=1)]
+    owner_domain_generation: Annotated[int, Field(ge=1)]
     claim_generation: Annotated[int, Field(ge=1)]
     trust_epoch: Annotated[int, Field(ge=1)]
     accepted_manifest_digest: Annotated[str, Field(max_length=128, min_length=1)]

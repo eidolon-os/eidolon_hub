@@ -23,6 +23,7 @@ from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
 from hub.device_control.application import (
     AcknowledgeDeviceEraseOperation,
     BindDeviceOperationKey,
+    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -31,7 +32,7 @@ from hub.device_control.domain import (
     DeviceEraseIdempotencyConflict,
     DeviceEraseState,
 )
-from hub.domain.devices.entities import ManagedDevice
+from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
@@ -54,6 +55,9 @@ class EnrollmentDeviceRepository:
 
     async def get_by_enrollment_id(self, enrollment_id: str) -> ManagedDevice | None:
         return self.device if enrollment_id == self.device.enrollment_id else None
+
+    async def get(self, device_id: str) -> ManagedDevice | None:
+        return self.device if device_id == self.device.identity.device_id else None
 
 
 def _b64(value: bytes) -> str:
@@ -79,6 +83,7 @@ def _ref(generation: int = 7) -> DeviceRef:
     return DeviceRef(
         device_instance_id="device_erase_01",
         owner_domain_id="owner_01",
+        owner_domain_generation=1,
         claim_generation=generation,
         trust_epoch=4,
         accepted_manifest_digest=MANIFEST,
@@ -100,6 +105,7 @@ async def _seed_event(
                 event_type="live.eidolon.device.claim-revoked.v1",
                 device_id="device_erase_01",
                 owner_domain_id="owner_01",
+                owner_domain_generation=1,
                 claim_generation=generation,
                 trust_epoch=4,
                 accepted_manifest_digest=MANIFEST,
@@ -128,6 +134,7 @@ async def _bind(
     )
     await ledger.bind_operation_key(
         enrollment_id=f"enrollment_{generation}",
+        owner_domain_generation=1,
         claim_generation=generation,
         proof=proof,
         key_id=operation_key_id(proof.public_key_spki),
@@ -254,6 +261,64 @@ async def test_enrollment_binds_signed_operation_key_to_claim_generation(databas
     assert operation is not None
     assert operation.key_id == key_id
     assert operation.public_key_spki == proof.public_key_spki
+
+
+async def test_established_claim_uses_device_control_not_enrollment(database) -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    device = ManagedDevice(
+        identity=DeviceIdentity("device_erase_01"),
+        enrollment_id="enrollment_7",
+        retrieval_token_hash="retired-after-claim-active",
+        retrieval_expires_at=NOW - timedelta(days=1),
+        display_name="Established device",
+        device_kind="simulator",
+        manifest=DeviceManifestDocument.from_mapping(
+            {"schema_version": 1, "title": "Established device"}
+        ),
+        enrolled_at=NOW - timedelta(days=2),
+        updated_at=NOW,
+        owner_domain_generation=1,
+        claim_generation=7,
+        trust_epoch=4,
+        owner_id="owner_01",
+        lifecycle_state=DeviceLifecycleState.REVOKED,
+    )
+    assert device.device_ref is not None
+    ledger = SqlDeviceEraseLedger(database)
+    await _bind(ledger, key)
+
+    class MustNotProvision:
+        async def execute(self, **_kwargs):
+            raise AssertionError("revoked Claim must not provision a channel")
+
+    service = PullDeviceConfiguration(
+        devices=EnrollmentDeviceRepository(device),
+        ledger=ledger,
+        provision=MustNotProvision(),
+    )
+    nonce = "configuration_nonce_0001"
+    document = {
+        "device_ref": device.device_ref.model_dump(mode="json"),
+        "nonce": nonce,
+        "operation_type": "device-control.configuration",
+    }
+    result = await service.execute(
+        device_ref=device.device_ref,
+        public_key_spki=_spki(key),
+        nonce=nonce,
+        signature=_sign(key, document),
+    )
+    assert result.lifecycle_state is DeviceLifecycleState.REVOKED
+    assert result.assignments is None
+
+    stale = device.device_ref.model_copy(update={"claim_generation": 6})
+    with pytest.raises(KeyError):
+        await service.execute(
+            device_ref=stale,
+            public_key_spki=_spki(key),
+            nonce=nonce,
+            signature=_sign(key, {**document, "device_ref": stale.model_dump(mode="json")}),
+        )
 
 
 async def test_offline_restart_and_host_relocation_keep_original_operation_id(database) -> None:

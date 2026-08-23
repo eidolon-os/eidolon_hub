@@ -55,6 +55,10 @@ def load_owner_directory(config: OnboardingConfig, *, now: datetime) -> OwnerDir
         raise RuntimeError(
             "signed descriptor Owner Domain does not match Hub configuration"
         )
+    if descriptor.owner_domain_generation != config.owner_domain_generation:
+        raise RuntimeError(
+            "signed descriptor Owner Domain generation does not match Hub configuration"
+        )
     anchor = OwnerDomainTrustAnchor(
         owner_domain_id=config.owner_domain_id,
         owner_root_certificate_pem=root_path.read_text(encoding="ascii"),

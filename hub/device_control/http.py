@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from hub.contracts.bindings.channel import ChannelAssignment
 from hub.contracts.bindings.device import (
     DeviceEraseContractError,
+    DeviceLifecycleState,
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
     DeviceLocalEraseOperationStatus,
@@ -21,6 +24,7 @@ from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 from .application import (
     AcknowledgeDeviceEraseOperation,
     BindDeviceOperationKey,
+    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -56,10 +60,26 @@ class EraseOperationDelivery(_AdapterModel):
     command: DeviceLocalEraseCommand
 
 
+class PullDeviceConfigurationRequest(_AdapterModel):
+    device_ref: DeviceRef
+    nonce: str = Field(min_length=16, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")
+    public_key_spki: str = Field(min_length=120, max_length=256)
+    device_signature: str = Field(min_length=86, max_length=86)
+
+
+class DeviceConfigurationResult(_AdapterModel):
+    operation: str = "device-control.configuration"
+    nonce: str
+    device_ref: DeviceRef
+    lifecycle_state: DeviceLifecycleState
+    channels: tuple[ChannelAssignment, ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceEraseHttpServices:
     bind_key: BindDeviceOperationKey
     pull: PullDeviceEraseOperation
+    configuration: PullDeviceConfiguration
     acknowledge: AcknowledgeDeviceEraseOperation
     reconcile: ReconcileDeviceEraseOperations
     ledger: DeviceEraseLedger
@@ -91,6 +111,48 @@ def create_device_erase_router(
         except DeviceEraseIdempotencyConflict as exc:
             raise HTTPException(status_code=409, detail="IDEMPOTENCY_CONFLICT") from exc
         return BindOperationKeyResult(key_id=key_id)
+
+    @router.post(
+        "/configuration:pull",
+        response_model=DeviceConfigurationResult,
+    )
+    async def pull_configuration(
+        payload: PullDeviceConfigurationRequest,
+    ) -> DeviceConfigurationResult:
+        try:
+            outcome = await current().configuration.execute(
+                device_ref=payload.device_ref,
+                public_key_spki=payload.public_key_spki,
+                nonce=payload.nonce,
+                signature=payload.device_signature,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="STALE_GENERATION") from exc
+        except (PermissionError, DeviceEraseContractError) as exc:
+            raise HTTPException(status_code=403, detail="device proof rejected") from exc
+        return DeviceConfigurationResult(
+            nonce=payload.nonce,
+            device_ref=outcome.device_ref,
+            lifecycle_state=outcome.lifecycle_state,
+            channels=tuple(
+                ChannelAssignment(
+                    channel_id=grant.channel_id,
+                    purpose=grant.purpose,
+                    kinds=tuple(sorted(kind.value for kind in grant.kinds)),
+                    binding_format=grant.binding_format,
+                    issued_at_ms=int(grant.issued_at.timestamp() * 1000),
+                    expires_at_ms=int(grant.expires_at.timestamp() * 1000),
+                    opaque_binding=base64.b64encode(
+                        grant.opaque_binding.relay_bytes()
+                    ).decode("ascii"),
+                )
+                for grant in (
+                    outcome.assignments.grants
+                    if outcome.assignments is not None
+                    else ()
+                )
+            ),
+        )
 
     @router.post(
         "/erase-operations:pull",

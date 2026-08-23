@@ -88,6 +88,11 @@ def handoff_outcome_to_wire(
         device_id=device.identity.device_id,
         manifest_revision=device.manifest_revision,
         lifecycle_state=device.lifecycle_state.value,
+        device_ref=(
+            device.device_ref
+            if device.lifecycle_state.value != "pending-approval"
+            else None
+        ),
         channels=tuple(
             ChannelAssignment(
                 channel_id=grant.channel_id,
@@ -126,6 +131,7 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
             {
                 "device_instance_id": entry.device_ref.device_instance_id,
                 "owner_domain_id": entry.device_ref.owner_domain_id,
+                "owner_domain_generation": entry.device_ref.owner_domain_generation,
                 "claim_generation": entry.device_ref.claim_generation,
                 "trust_epoch": entry.device_ref.trust_epoch,
                 "accepted_manifest_digest": entry.device_ref.accepted_manifest_digest,

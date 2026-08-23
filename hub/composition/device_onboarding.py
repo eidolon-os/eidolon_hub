@@ -35,6 +35,7 @@ def _mdns_target_hostname(owner_domain_id: str, public_hostname: str) -> str:
 class DeviceOnboardingGraph:
     http_services: DeviceOnboardingHttpServices
     mdns_advertiser: ZeroconfAuthorityCandidateAdvertiser | None
+    provision: ProvisionDeviceChannels
 
 
 def build_device_onboarding(
@@ -64,6 +65,7 @@ def build_device_onboarding(
                 ids=ids,
                 tokens=tokens,
                 enrollment_ttl=retrieval_window,
+                owner_domain_generation=owner_directory.descriptor.owner_domain_generation,
                 directory_projector=projector,
             ),
             handoff=HandoffDevice(
@@ -74,6 +76,7 @@ def build_device_onboarding(
             ),
         ),
         mdns_advertiser=_mdns_advertiser(config),
+        provision=provision,
     )
 
 

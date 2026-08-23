@@ -4,13 +4,13 @@ import base64
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 from eidolon_sdk.device_foundation.v1 import (
     AuthorityEndpoint,
     LogicalAuthority,
     OwnerDomainDescriptor,
 )
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 
 from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
 from hub.application.use_cases.enroll_device import EnrollDevice
@@ -92,6 +92,7 @@ def _runtime():
     services = DeviceOnboardingHttpServices(
         descriptor=OwnerDomainDescriptor(
             owner_domain_id="owner-local",
+            owner_domain_generation=1,
             directory_revision=1,
             trust_root_refs=("sha256:" + "a" * 64,),
             endpoints=(
@@ -115,6 +116,7 @@ def _runtime():
             ids=_Ids(),
             tokens=tokens,
             enrollment_ttl=timedelta(minutes=30),
+            owner_domain_generation=1,
             directory_projector=_Projector(),
         ),
         handoff=HandoffDevice(

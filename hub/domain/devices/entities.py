@@ -30,6 +30,7 @@ class ManagedDevice:
     manifest: DeviceManifestDocument
     enrolled_at: datetime
     updated_at: datetime
+    owner_domain_generation: int = 1
     last_enrollment_request_id: str = ""
     last_enrollment_fingerprint: str = ""
     claim_generation: int = 1
@@ -52,8 +53,13 @@ class ManagedDevice:
             raise ValueError("device timestamps must be timezone-aware")
         if self.owner_id is not None and not self.owner_id.strip():
             raise ValueError("owner_id must be null or non-empty")
-        if min(self.claim_generation, self.trust_epoch, self.aggregate_revision) < 1:
-            raise ValueError("claim, trust and aggregate generations must be positive")
+        if min(
+            self.owner_domain_generation,
+            self.claim_generation,
+            self.trust_epoch,
+            self.aggregate_revision,
+        ) < 1:
+            raise ValueError("Owner, claim, trust and aggregate generations must be positive")
         if self.lifecycle_state is DeviceLifecycleState.APPROVED and self.owner_id is None:
             raise ValueError("approved device requires an owner")
         if (
@@ -77,6 +83,7 @@ class ManagedDevice:
         return DeviceRef(
             device_instance_id=self.identity.device_id,
             owner_domain_id=self.owner_id,
+            owner_domain_generation=self.owner_domain_generation,
             claim_generation=self.claim_generation,
             trust_epoch=self.trust_epoch,
             accepted_manifest_digest=self.manifest_revision,
@@ -111,6 +118,7 @@ class DeviceDirectoryEntry:
     retrieval_expires_at: datetime
     claim_generation: int
     trust_epoch: int
+    owner_domain_generation: int = 1
 
     def __post_init__(self) -> None:
         if not self.device_id.strip() or not self.owner_scope.strip():
@@ -120,14 +128,17 @@ class DeviceDirectoryEntry:
             for value in (self.enrolled_at, self.updated_at, self.retrieval_expires_at)
         ):
             raise ValueError("directory timestamps must be timezone-aware")
-        if min(self.claim_generation, self.trust_epoch) < 1:
-            raise ValueError("directory claim and trust generations must be positive")
+        if min(
+            self.owner_domain_generation, self.claim_generation, self.trust_epoch
+        ) < 1:
+            raise ValueError("directory Owner, claim and trust generations must be positive")
 
     @property
     def device_ref(self) -> DeviceRef:
         return DeviceRef(
             device_instance_id=self.device_id,
             owner_domain_id=self.owner_scope,
+            owner_domain_generation=self.owner_domain_generation,
             claim_generation=self.claim_generation,
             trust_epoch=self.trust_epoch,
             accepted_manifest_digest=self.manifest_revision,

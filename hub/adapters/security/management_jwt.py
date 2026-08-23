@@ -111,9 +111,16 @@ class JwtOwnerManagementAuthorizer:
         presenter = str(claims.get("presenter") or "").strip()
         if not is_admin and presenter and presenter != subject_id:
             raise PermissionError("management credential presenter mismatch")
+        owner_generation = claims.get("target_owner_domain_generation")
         generation = claims.get("target_claim_generation")
         trust_epoch = claims.get("target_trust_epoch")
         manifest_digest = str(claims.get("target_manifest_digest") or "") or None
+        if owner_generation is not None and (
+            not isinstance(owner_generation, int)
+            or isinstance(owner_generation, bool)
+            or owner_generation < 1
+        ):
+            raise PermissionError("management credential Owner generation is invalid")
         if generation is not None and (not isinstance(generation, int) or generation < 1):
             raise PermissionError("management credential Claim generation is invalid")
         if trust_epoch is not None and (
@@ -150,6 +157,7 @@ class JwtOwnerManagementAuthorizer:
             actor_ref=(str(claims.get("actor_ref") or "").strip() or None),
             intent_id=(str(claims.get("intent_id") or "").strip() or None),
             target_device_id=target_device_id,
+            target_owner_domain_generation=owner_generation,
             target_claim_generation=generation,
             target_trust_epoch=trust_epoch,
             target_manifest_digest=manifest_digest,

@@ -31,6 +31,7 @@ class EnrollDevice:
         ids: IdGenerator,
         tokens: RetrievalTokenHasher,
         enrollment_ttl: timedelta,
+        owner_domain_generation: int,
         directory_projector: DeviceDirectoryProjector,
     ) -> None:
         self._devices = devices
@@ -39,6 +40,7 @@ class EnrollDevice:
         self._ids = ids
         self._tokens = tokens
         self._enrollment_ttl = enrollment_ttl
+        self._owner_domain_generation = owner_domain_generation
         self._directory_projector = directory_projector
 
     async def execute(self, enrollment: DeviceEnrollmentIntent) -> ManagedDevice:
@@ -78,6 +80,7 @@ class EnrollDevice:
             manifest=enrollment.manifest,
             enrolled_at=now,
             updated_at=now,
+            owner_domain_generation=self._owner_domain_generation,
             last_enrollment_request_id=enrollment.request_id,
             last_enrollment_fingerprint=fingerprint,
             claim_generation=(current.claim_generation + 1 if current is not None else 1),

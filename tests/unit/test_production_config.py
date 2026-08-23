@@ -75,7 +75,9 @@ def test_checked_in_settings_loads_as_the_only_configuration(tmp_path, monkeypat
     config = HubConfig.load()
 
     assert config.persistence == PersistenceConfig(
-        path=str(state_root / "hub/eidolon-hub.sqlite3")
+        path=str(state_root / "hub/eidolon-hub.sqlite3"),
+        authority_anchor_path=str(state_root / "hub/authority-lineage.json"),
+        authority_bootstrap_path=str(state_root / "hub/authority-bootstrap.json"),
     )
     assert config.discovery.mdns.enabled is True
 
