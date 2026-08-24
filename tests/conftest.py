@@ -85,7 +85,7 @@ def owner_directory_config(tmp_path):
                     AuthorityEndpoint(
                         authority=LogicalAuthority.ADMISSION,
                         logical_audience="eidolon-admission",
-                        uri=f"https://{host}/api/device-onboarding/v1",
+                        uri=f"https://{host}/api/admission/v1",
                         transport_profile="https-json",
                         priority=10,
                     ),
