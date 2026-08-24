@@ -39,6 +39,13 @@ def test_identity_and_manifest_values() -> None:
         DeviceManifestDocument("{", "sha256:bad")
     with pytest.raises(ValueError, match="schema_version"):
         DeviceManifestDocument.from_mapping({"schema_version": 2})
+    # A canonical Manifest is opaque to the Authority that accepted it, and the
+    # owner-facing directory only projects it. Requiring this vocabulary's own
+    # version field of a document authored elsewhere made a projection row able
+    # to kill Hub at startup — for a Manifest it had already admitted.
+    canonical = DeviceManifestDocument.from_mapping({"endpoints": []})
+    assert canonical.canonical_json == '{"endpoints":[]}'
+    assert not canonical.declares_capability("anything")
     with pytest.raises(ValueError, match="revision"):
         DeviceManifestDocument(manifest.canonical_json, "sha256:bad")
 

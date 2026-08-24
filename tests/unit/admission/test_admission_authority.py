@@ -209,7 +209,7 @@ def actor(
     )
 
 
-def create_payload(handoff_key, operational_key, setup_secret) -> dict:
+def create_payload(handoff_key, operational_key, setup_secret, manifest_document=None) -> dict:
     candidate_id = instance_id(operational_key)
     operational_public_key = spki(operational_key)
     evidence_document = {
@@ -221,7 +221,10 @@ def create_payload(handoff_key, operational_key, setup_secret) -> dict:
     evidence = rfc8785.dumps(evidence_document).decode() + "." + sign(
         operational_key, evidence_document
     )
-    manifest_document = {
+    # The Authority does not author this; a device does, in whatever vocabulary
+    # its firmware uses. The default here is this repository's own shape, and a
+    # caller can pass what a real board actually sends.
+    manifest_document = manifest_document or {
         "schema_version": 1,
         "title": "Box-3",
         "properties": [],
@@ -269,14 +272,16 @@ def create_payload(handoff_key, operational_key, setup_secret) -> dict:
     }
 
 
-async def create_and_approve(harness):
+async def create_and_approve(harness, manifest_document=None):
     _database, authority, _clock, secret = harness
     handoff_key = ec.derive_private_key(0x123456789, ec.SECP256R1())
     operational_key = ec.derive_private_key(0x234567891, ec.SECP256R1())
     created = await authority.create_enrollment(
         command_id="create_01",
         correlation_id="intent_01",
-        payload=create_payload(handoff_key, operational_key, secret),
+        payload=create_payload(
+            handoff_key, operational_key, secret, manifest_document
+        ),
     )
     decision = await authority.decide_enrollment(
         command_id="decide_01",
@@ -297,9 +302,11 @@ async def create_and_approve(harness):
     return created, decision, handoff_key, operational_key
 
 
-async def collect_and_ack(harness):
+async def collect_and_ack(harness, manifest_document=None):
     database, authority, _clock, _secret = harness
-    created, decision, handoff, operational = await create_and_approve(harness)
+    created, decision, handoff, operational = await create_and_approve(
+        harness, manifest_document
+    )
     collection_document = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
@@ -1544,3 +1551,28 @@ async def test_collecting_before_a_decision_says_a_decision_is_required(harness)
 
     assert waiting.value.code == "DECISION_REQUIRED"
     assert waiting.value.status == 409
+
+
+async def test_a_claimed_device_can_be_hydrated_into_the_owner_directory(harness) -> None:
+    """The Authority must survive reading back what it just admitted.
+
+    The owner-facing directory hydrates every row at startup. The first device
+    ever claimed canonically sent a Manifest with no `schema_version` — a field
+    that belongs to Hub's own manifest vocabulary, not to the canonical one —
+    so Hub stored a document it could not decode and crash-looped on boot,
+    admitting nothing and answering nothing.
+    """
+
+    database, _authority, _clock, _secret = harness
+    _created, _decision, _collected, device_ref, _proof, _active = await collect_and_ack(
+        harness, {"endpoints": []}
+    )
+
+    repositories = SqlHubRepositories(database)
+    directory = InMemoryDeviceDirectoryRepository()
+    projected = await ProjectDeviceDirectory(
+        devices=repositories.devices, directory=directory
+    ).execute_all()
+
+    assert [entry.device_id for entry in projected] == [device_ref.device_instance_id]
+    assert projected[0].lifecycle_state == "approved"

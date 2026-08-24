@@ -24,7 +24,20 @@ class DeviceManifestDocument:
             value = json.loads(self.canonical_json)
         except json.JSONDecodeError as exc:
             raise ValueError("device manifest must contain valid JSON") from exc
-        if not isinstance(value, dict) or value.get("schema_version") != 1:
+        if not isinstance(value, dict):
+            raise ValueError("device manifest must be a JSON object")
+        # `schema_version` is what a manifest authored against *this* vocabulary
+        # declares, and it is checked when one is. It is not required, because
+        # this type also reads manifests it did not author: a device's accepted
+        # canonical Manifest is an opaque document to the Authority, and the
+        # owner-facing directory is a projection of it.
+        #
+        # Requiring it made a projection row able to kill the Authority. The
+        # first device ever claimed canonically sent `{"endpoints":[]}`, the
+        # directory hydrated every row at startup, and Hub crash-looped on boot
+        # — admitting nothing, answering nothing, for a document it had already
+        # accepted.
+        if "schema_version" in value and value["schema_version"] != 1:
             raise ValueError("device manifest schema_version 1 is required")
         expected = "sha256:" + hashlib.sha256(self.canonical_json.encode()).hexdigest()
         if self.revision != expected:
