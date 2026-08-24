@@ -212,7 +212,11 @@ class SqlAdmissionStore:
         if not isinstance(document, dict):
             raise AdmissionProblem("INVALID_ARGUMENT", "Manifest document must be an object")
         title = document.get("title")
-        display_name = title.strip() if isinstance(title, str) and title.strip() else device_ref.device_instance_id
+        display_name = (
+            title.strip()
+            if isinstance(title, str) and title.strip()
+            else device_ref.device_instance_id
+        )
         row = await session.get(DeviceRow, device_ref.device_instance_id)
         values = {
             "display_name": row.display_name if row is not None else display_name,

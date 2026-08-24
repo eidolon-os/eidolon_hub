@@ -36,13 +36,9 @@ class OnboardingConfig(_StrictConfig):
     owner_domain_id: str = Field(default="owner-local", min_length=1, max_length=128)
     owner_domain_generation: int = Field(default=1, ge=1)
     trust_epoch: int = Field(default=1, ge=1)
-    descriptor_uri: str = (
-        "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
-    )
+    descriptor_uri: str = "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
     descriptor_path: str = "/etc/eidolon/owner-domain/owner_domain_descriptor.json"
-    owner_root_certificate_path: str = (
-        "/etc/eidolon/owner-domain/owner_domain_root_ca.pem"
-    )
+    owner_root_certificate_path: str = "/etc/eidolon/owner-domain/owner_domain_root_ca.pem"
     authority_signing_certificate_path: str = (
         "/etc/eidolon/owner-domain/authority_signing_certificate.pem"
     )
@@ -102,12 +98,11 @@ class CommissioningProofConfig(_StrictConfig):
             raise ValueError(
                 "commissioning_proof.setup_secret_registry_path is required for development-hmac"
             )
-        if self.setup_secret_registry_path is not None and not Path(
-            self.setup_secret_registry_path
-        ).is_absolute():
-            raise ValueError(
-                "commissioning_proof.setup_secret_registry_path must be absolute"
-            )
+        if (
+            self.setup_secret_registry_path is not None
+            and not Path(self.setup_secret_registry_path).is_absolute()
+        ):
+            raise ValueError("commissioning_proof.setup_secret_registry_path must be absolute")
         return self
 
 
@@ -118,9 +113,7 @@ class HubConfig(_StrictConfig):
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
     device_control: DeviceControlConfig = Field(default_factory=DeviceControlConfig)
-    commissioning_proof: CommissioningProofConfig = Field(
-        default_factory=CommissioningProofConfig
-    )
+    commissioning_proof: CommissioningProofConfig = Field(default_factory=CommissioningProofConfig)
 
     @classmethod
     def load(cls) -> HubConfig:
@@ -167,9 +160,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     persistence = value.get("persistence")
     if isinstance(persistence, dict) and isinstance(persistence.get("path"), str):
         persistence["path"] = os.path.expandvars(os.path.expanduser(persistence["path"]))
-    if isinstance(persistence, dict) and isinstance(
-        persistence.get("authority_anchor_path"), str
-    ):
+    if isinstance(persistence, dict) and isinstance(persistence.get("authority_anchor_path"), str):
         persistence["authority_anchor_path"] = os.path.expandvars(
             os.path.expanduser(persistence["authority_anchor_path"])
         )

@@ -49,9 +49,7 @@ class RuntimeResources:
 def load_runtime_secrets() -> RuntimeSecrets:
     return RuntimeSecrets(
         management_jwt=_required_bytes("EIDOLON_HUB_MANAGEMENT_JWT_SECRET"),
-        device_registry_reader_token=_required_text(
-            "EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN"
-        ),
+        device_registry_reader_token=_required_text("EIDOLON_HUB_DEVICE_REGISTRY_READER_TOKEN"),
     )
 
 

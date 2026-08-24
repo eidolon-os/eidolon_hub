@@ -44,19 +44,19 @@ class ManagedDevice:
     def __post_init__(self) -> None:
         if not self.device_kind.strip():
             raise ValueError("device_kind is required")
-        if any(
-            value.tzinfo is None
-            for value in (self.enrolled_at, self.updated_at)
-        ):
+        if any(value.tzinfo is None for value in (self.enrolled_at, self.updated_at)):
             raise ValueError("device timestamps must be timezone-aware")
         if self.owner_id is not None and not self.owner_id.strip():
             raise ValueError("owner_id must be null or non-empty")
-        if min(
-            self.owner_domain_generation,
-            self.claim_generation,
-            self.trust_epoch,
-            self.aggregate_revision,
-        ) < 1:
+        if (
+            min(
+                self.owner_domain_generation,
+                self.claim_generation,
+                self.trust_epoch,
+                self.aggregate_revision,
+            )
+            < 1
+        ):
             raise ValueError("Owner, claim, trust and aggregate generations must be positive")
         if self.owner_id is None:
             raise ValueError("Claim projection requires an owner")
@@ -102,14 +102,9 @@ class DeviceDirectoryEntry:
     def __post_init__(self) -> None:
         if not self.device_id.strip() or not self.owner_scope.strip():
             raise ValueError("directory device_id and owner_scope are required")
-        if any(
-            value.tzinfo is None
-            for value in (self.enrolled_at, self.updated_at)
-        ):
+        if any(value.tzinfo is None for value in (self.enrolled_at, self.updated_at)):
             raise ValueError("directory timestamps must be timezone-aware")
-        if min(
-            self.owner_domain_generation, self.claim_generation, self.trust_epoch
-        ) < 1:
+        if min(self.owner_domain_generation, self.claim_generation, self.trust_epoch) < 1:
             raise ValueError("directory Owner, claim and trust generations must be positive")
 
     @property

@@ -44,6 +44,7 @@ class DeviceRow(Base):
     last_management_request_id: Mapped[str] = mapped_column(String(255), default="")
     last_management_fingerprint: Mapped[str] = mapped_column(String(128), default="")
 
+
 class DeviceManagementEventRow(Base):
     __tablename__ = "hub_events"
 

@@ -123,9 +123,7 @@ class JwtOwnerManagementAuthorizer:
             raise PermissionError("management credential Owner generation is invalid")
         if generation is not None and (not isinstance(generation, int) or generation < 1):
             raise PermissionError("management credential Claim generation is invalid")
-        if trust_epoch is not None and (
-            not isinstance(trust_epoch, int) or trust_epoch < 1
-        ):
+        if trust_epoch is not None and (not isinstance(trust_epoch, int) or trust_epoch < 1):
             raise PermissionError("management credential trust epoch is invalid")
         if manifest_digest is not None and (
             len(manifest_digest) != 71
@@ -134,10 +132,14 @@ class JwtOwnerManagementAuthorizer:
         ):
             raise PermissionError("management credential manifest digest is invalid")
 
-        if permission in {
-            ManagementPermission.DEVICE_APPROVE,
-            ManagementPermission.DEVICE_REVOKE,
-        } and not is_admin:
+        if (
+            permission
+            in {
+                ManagementPermission.DEVICE_APPROVE,
+                ManagementPermission.DEVICE_REVOKE,
+            }
+            and not is_admin
+        ):
             if not is_manager or device_id is None:
                 raise PermissionError("device-manager role required for device mutation")
             device = await self._devices.get(device_id)

@@ -54,9 +54,7 @@ def _mdns_advertiser(
         advertisement_id="mdns-local",
         service_type=_MDNS_SERVICE_TYPE,
         service_name=f"{config.onboarding.owner_domain_id}.{_MDNS_SERVICE_TYPE}",
-        hostname=_mdns_target_hostname(
-            config.onboarding.owner_domain_id, public_hostname
-        ),
+        hostname=_mdns_target_hostname(config.onboarding.owner_domain_id, public_hostname),
         port=public_url.port or 443,
         owner_domain_id=config.onboarding.owner_domain_id,
         owner_domain_descriptor_uri=config.onboarding.descriptor_uri,
