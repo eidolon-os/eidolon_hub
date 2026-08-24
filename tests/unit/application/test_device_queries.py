@@ -80,10 +80,17 @@ class _Directory:
 
 
 def test_directory_wire_accepts_deployed_mac_style_device_id() -> None:
-    wire = directory_entry_to_wire(_entry("10:51:db:7e:24:44"))
+    entry = replace(
+        _entry("10:51:db:7e:24:44"),
+        owner_scope="business_owner_account_1",
+        owner_domain_id="owner-domain_01",
+    )
+    wire = directory_entry_to_wire(entry)
 
     assert wire.device_ref is not None
     assert wire.device_ref.device_instance_id == "10:51:db:7e:24:44"
+    assert str(wire.device_ref.owner_domain_id) == "owner-domain_01"
+    assert str(wire.device_ref.owner_domain_id) != wire.owner_scope
 
 
 @pytest.mark.asyncio

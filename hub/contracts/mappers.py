@@ -9,7 +9,6 @@ from hub.contracts.bindings.device import (
     DeviceLifecycleStatus,
     DeviceManagementEvent,
     DeviceManifest,
-    DeviceRef,
 )
 from hub.domain.devices.entities import (
     DeviceDirectoryEntry,
@@ -37,13 +36,7 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         lifecycle_state=entry.lifecycle_state.value,
         enrolled_at=entry.enrolled_at,
         updated_at=entry.updated_at,
-        device_ref=DeviceRef(
-            device_instance_id=entry.device_ref.device_instance_id,
-            owner_domain_id=entry.owner_scope,
-            owner_domain_generation=entry.device_ref.owner_domain_generation,
-            claim_generation=entry.device_ref.claim_generation,
-            trust_epoch=entry.device_ref.trust_epoch,
-        ),
+        device_ref=entry.device_ref,
     )
 
 
