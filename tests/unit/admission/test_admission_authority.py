@@ -1213,7 +1213,9 @@ async def test_claim_stream_dataschema_cursor_replay_publish_failure_and_restart
     database, authority, _clock, _secret = harness
     _created, _decision, _collected, device_ref, _proof, _active = await collect_and_ack(harness)
     first = await authority.claim_event_page(
-        cursor=ClaimEventCursor(stream_position=0), limit=100, context=actor()
+        cursor=ClaimEventCursor(stream_position=0),
+        limit=100,
+        owner_domain_id=OwnerDomainId("owner-domain_01"),
     )
     assert isinstance(first, ClaimEventPage)
     assert [item.stream_position for item in first.events] == [1]
@@ -1236,7 +1238,9 @@ async def test_claim_stream_dataschema_cursor_replay_publish_failure_and_restart
         context=actor(),
     )
     replay = await authority.claim_event_page(
-        cursor=ClaimEventCursor(stream_position=0), limit=100, context=actor()
+        cursor=ClaimEventCursor(stream_position=0),
+        limit=100,
+        owner_domain_id=OwnerDomainId("owner-domain_01"),
     )
     assert [item.stream_position for item in replay.events] == [1, 2]
     assert replay.events[0].event.model_dump(mode="json") == activated.model_dump(mode="json")
@@ -1251,12 +1255,16 @@ async def test_claim_stream_dataschema_cursor_replay_publish_failure_and_restart
         commissioning_proofs=authority.commissioning_proofs,
     )
     resumed = await restarted.claim_event_page(
-        cursor=ClaimEventCursor(stream_position=1), limit=100, context=actor()
+        cursor=ClaimEventCursor(stream_position=1),
+        limit=100,
+        owner_domain_id=OwnerDomainId("owner-domain_01"),
     )
     assert [item.stream_position for item in resumed.events] == [2]
     with pytest.raises(AdmissionProblem, match="ahead") as gap:
         await restarted.claim_event_page(
-            cursor=ClaimEventCursor(stream_position=99), limit=100, context=actor()
+            cursor=ClaimEventCursor(stream_position=99),
+            limit=100,
+            owner_domain_id=OwnerDomainId("owner-domain_01"),
         )
     assert gap.value.code == "CURSOR_GAP"
     async with database.sessions() as session:

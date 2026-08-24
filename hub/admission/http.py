@@ -29,11 +29,13 @@ from hub.contracts.bindings.admission import (
     DeviceProblem,
     EnrollmentProposalQuery,
     EnrollmentProposalState,
+    OwnerDomainId,
     RevokeClaim,
     RevokeClaimResult,
 )
 
 ActorProvider = Callable[[Request], Awaitable[ActorContext]]
+ClaimEventReaderProvider = Callable[[Request], Awaitable[OwnerDomainId]]
 
 
 def _invalid(exc: Exception) -> AdmissionProblem:
@@ -97,11 +99,19 @@ def create_admission_router(
     *,
     authority: AdmissionAuthority | Callable[[], AdmissionAuthority],
     actor_provider: ActorProvider,
+    claim_event_reader_provider: ClaimEventReaderProvider | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/admission/v1", tags=["canonical-admission"])
 
     def current() -> AdmissionAuthority:
         return authority() if callable(authority) else authority
+
+    async def claim_event_owner(request: Request) -> OwnerDomainId:
+        if claim_event_reader_provider is not None:
+            return await claim_event_reader_provider(request)
+        context = await actor_provider(request)
+        context.require_scope("device.claim.events.read")
+        return context.owner_domain_id
 
     @router.post("/enrollments")
     async def create(payload: dict) -> JSONResponse:
@@ -440,7 +450,7 @@ def create_admission_router(
         request: Request, after_stream_position: int = 0, limit: int = 100
     ) -> JSONResponse:
         try:
-            context = await actor_provider(request)
+            owner_domain_id = await claim_event_owner(request)
             if not 1 <= limit <= 500:
                 raise AdmissionProblem(
                     "INVALID_ARGUMENT",
@@ -451,7 +461,7 @@ def create_admission_router(
             page = await current().claim_event_page(
                 cursor=ClaimEventCursor(stream_position=after_stream_position),
                 limit=limit,
-                context=context,
+                owner_domain_id=owner_domain_id,
             )
             return JSONResponse(status_code=200, content=page.model_dump(mode="json"))
         except (AdmissionProblem, ValueError) as exc:

@@ -56,6 +56,15 @@ def test_composition_starts_with_only_hub_owned_sqlite(
     with TestClient(create_composed_app(config)) as client:
         assert client.get("/health").json() == {"status": "ok"}
 
+        unauthorized_events = client.get("/api/admission/v1/claim-events")
+        assert unauthorized_events.status_code == 401
+        authorized_events = client.get(
+            "/api/admission/v1/claim-events",
+            headers={"Authorization": f"Bearer {'r' * 32}"},
+        )
+        assert authorized_events.status_code == 200
+        assert authorized_events.json()["events"] == []
+
         assert client.get("/ready").status_code == 503
         rejected_secret = "commissioning-proof-must-not-be-reflected"
         invalid = client.post(

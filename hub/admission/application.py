@@ -1518,10 +1518,9 @@ class AdmissionAuthority:
         )
 
     async def claim_event_page(
-        self, *, cursor: ClaimEventCursor, limit: int, context: ActorContext
+        self, *, cursor: ClaimEventCursor, limit: int, owner_domain_id: OwnerDomainId
     ) -> ClaimEventPage:
-        context.require_scope("device.claim.events.read")
-        if context.owner_domain_id != self.owner_domain_id:
+        if owner_domain_id != self.owner_domain_id:
             raise AdmissionProblem(
                 "NOT_FOUND", "Claim event stream not found", status=404, category="missing"
             )

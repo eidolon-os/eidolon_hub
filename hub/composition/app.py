@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse
 
 from hub.admission.application import AdmissionAuthority
 from hub.admission.auth import JwtAdmissionActorProvider
+from hub.admission.domain import AdmissionProblem
 from hub.admission.http import create_admission_router
 from hub.admission.persistence import SqlAdmissionStore
 from hub.application.projections.device_directory import ProjectDeviceDirectory
@@ -49,6 +50,7 @@ from hub.interfaces.http.routers.device_onboarding import (
     DeviceOnboardingHttpServices,
     create_device_onboarding_router,
 )
+from hub.ports.identity import ManagementPermission
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,10 +204,29 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     async def admission_actor(request: Request):
         return await require_runtime().admission_actor(request)
 
+    async def claim_event_reader(request: Request):
+        credential = request.headers.get("Authorization", "")
+        try:
+            await require_runtime().management.authorizer.authorize(
+                credential=credential,
+                permission=ManagementPermission.CLAIM_EVENTS,
+                owner_scope=None,
+                device_id=None,
+            )
+        except PermissionError as exc:
+            raise AdmissionProblem(
+                "UNAUTHENTICATED",
+                "invalid Claim event reader credential",
+                status=401,
+                category="auth",
+            ) from exc
+        return require_runtime().admission.owner_domain_id
+
     app.include_router(
         create_admission_router(
             authority=lambda: require_runtime().admission,
             actor_provider=admission_actor,
+            claim_event_reader_provider=claim_event_reader,
         )
     )
     app.include_router(
