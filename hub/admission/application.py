@@ -823,13 +823,20 @@ class AdmissionAuthority:
                     )
                 was_delivered = grant is not None and grant.wire_envelope_json is not None
                 decision = await self.store.get_decision_for_enrollment(session, enrollment_id)
-                expected_collection_revision = (
-                    decision.expected_proposal_revision if decision is not None else None
-                )
-                if expected_collection_revision != proposal_revision:
-                    raise AdmissionProblem("REVISION_CONFLICT", "proposal revision is stale")
-                if proposal.state not in {"approved_awaiting_handoff", "grant_delivered"}:
+                if decision is None or proposal.state not in {
+                    "approved_awaiting_handoff",
+                    "grant_delivered",
+                }:
+                    # Asked before this file first, because "nobody has decided
+                    # yet" is the normal state of a device waiting to be added,
+                    # and it used to be answered REVISION_CONFLICT: an
+                    # undecided Proposal has no expected revision, so the
+                    # comparison below could only fail. A device reading its own
+                    # normal wait as a stale-revision conflict is a device that
+                    # stops waiting.
                     raise AdmissionProblem("DECISION_REQUIRED", "approved Decision is required")
+                if decision.expected_proposal_revision != proposal_revision:
+                    raise AdmissionProblem("REVISION_CONFLICT", "proposal revision is stale")
                 if (
                     proposal.collection_challenge_hash
                     != hashlib.sha256(collection_challenge.encode()).hexdigest()

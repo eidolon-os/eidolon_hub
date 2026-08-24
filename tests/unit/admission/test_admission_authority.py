@@ -1504,3 +1504,43 @@ async def test_only_an_approver_can_see_what_is_waiting_to_be_approved(harness) 
         enrollment_id=created["enrollment_id"], context=actor()
     )
     assert opened.proposal.enrollment_id == created["enrollment_id"]
+
+
+async def test_collecting_before_a_decision_says_a_decision_is_required(harness) -> None:
+    """The normal wait of a device nobody has approved yet must read as one.
+
+    An undecided Proposal has no expected revision, so comparing revisions
+    first could only fail — and it answered REVISION_CONFLICT, which a device
+    reads as terminal for this Proposal. It is not terminal; it is the state
+    every device passes through between being plugged in and being approved.
+    """
+
+    _database, authority, _clock, secret = harness
+    handoff_key = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational_key = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    created = await authority.create_enrollment(
+        command_id="create_wait_01",
+        correlation_id="intent_wait_01",
+        payload=create_payload(handoff_key, operational_key, secret),
+    )
+
+    with pytest.raises(AdmissionProblem) as waiting:
+        await authority.collect_claim_grant(
+            command_id="collect_wait_01",
+            correlation_id="intent_wait_01",
+            enrollment_id=created["enrollment_id"],
+            proposal_revision=created["proposal_revision"],
+            collection_challenge=created["collection_challenge"],
+            handoff_key_proof=sign(
+                handoff_key,
+                {
+                    "contract": "eidolon.device-foundation.claim-grant-collection",
+                    "enrollment_id": created["enrollment_id"],
+                    "proposal_revision": created["proposal_revision"],
+                    "collection_challenge": created["collection_challenge"],
+                },
+            ),
+        )
+
+    assert waiting.value.code == "DECISION_REQUIRED"
+    assert waiting.value.status == 409
