@@ -164,15 +164,13 @@ class HubDatabase:
             )
             return True, marker, True
 
-        # Admission migrations are physical-only and forward-additive. The
-        # canonical target remains off default traffic until coordinated cutover.
-        # The old ciphertext column is deliberately not copied: its opaque blob
-        # does not contain the frozen pre-open AAD and is not a canonical wire
-        # envelope. It remains isolated for later physical removal.
+        # Admission physical migration adds only the canonical wire envelope.
+        # No legacy ciphertext is read, copied or interpreted by the activated
+        # writer; an existing Authority lineage remains unchanged.
         grant_table = "admission_claim_grants_v1"
         if grant_table in actual_tables:
             grant_columns = {value["name"] for value in schema.get_columns(grant_table)}
-            if "sealed_grant" in grant_columns and "wire_envelope_json" not in grant_columns:
+            if "wire_envelope_json" not in grant_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE admission_claim_grants_v1 ADD COLUMN wire_envelope_json TEXT"
                 )

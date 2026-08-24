@@ -75,6 +75,21 @@ class HmacCommissioningProofVerifier:
         return hmac.compare_digest(expected, proof)
 
 
+class RejectingCommissioningProofVerifier:
+    """Fail closed until deployment supplies a real commissioning verifier.
+
+    The canonical Admission route is allowed to be the production route before
+    a board-specific proof adapter is installed, but an unconfigured Hub must
+    never turn an opaque commissioning string into a trusted Proposal.
+    """
+
+    def verify(
+        self, *, device_instance_id: str, owner_domain_id: str, nonce: str, proof: str
+    ) -> bool:
+        del device_instance_id, owner_domain_id, nonce, proof
+        return False
+
+
 class AdmissionAuthority:
     SOURCE = "urn:eidolon:authority:admission"
 
@@ -912,6 +927,15 @@ class AdmissionAuthority:
                     updated_at=now,
                     revoked_at=None,
                 )
+                await self.store.project_active_claim(
+                    session,
+                    device_ref=device_ref,
+                    business_owner_id=decision.target_business_owner_id,
+                    manifest_id=proposal.manifest_id,
+                    manifest_json=proposal.manifest_json,
+                    manifest_digest=proposal.manifest_digest,
+                    activated_at=now,
+                )
                 proposal.state = "grant_acknowledged"
                 proposal.revision += 1
                 proposal.updated_at = now
@@ -1116,6 +1140,9 @@ class AdmissionAuthority:
                         if active_grant is not None:
                             active_grant.revoked_at = now
                         revision = claim.revision
+                await self.store.project_revoked_claim(
+                    session, device_ref=device_ref, revoked_at=now
+                )
                 event_id = self.ids.new("admission-event")
                 result = {
                     "operation": "device.claim-revocation-result",

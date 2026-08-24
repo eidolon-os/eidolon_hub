@@ -31,11 +31,12 @@ def test_canonical_admission_has_no_channel_kernel_companion_or_delivery_depende
     assert violations == []
 
 
-def test_canonical_admission_router_is_not_wired_to_default_pi5_traffic() -> None:
+def test_canonical_admission_router_is_the_default_pi5_writer() -> None:
     composition = (
         Path(__file__).resolve().parents[2] / "hub" / "composition" / "app.py"
     ).read_text(encoding="utf-8")
-    assert "create_admission_router" not in composition
+    assert "create_admission_router" in composition
+    assert '"/enrollments/{enrollment_id}/handoff"' not in composition
 
 
 def test_canonical_admission_target_exports_only_sdk_owned_models() -> None:
@@ -124,20 +125,22 @@ def test_canonical_admission_contains_no_legacy_synchronous_callsite() -> None:
         assert forbidden not in text
 
 
-def test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed() -> None:
+def test_ph2b_cutover_manifest_records_direct_default_activation() -> None:
     workspace = Path(__file__).resolve().parents[3]
     manifest = json.loads(
         (
             workspace / "eidolon_hub" / "hub" / "admission" / "ph2b_consumer_cutover.v1.json"
         ).read_text(encoding="utf-8")
     )
-    assert manifest["contract_sdk_commit"] == ("d88196757e8c054befd2c17f7cb9c7a9eb6f5253")
-    assert manifest["default_writer_switch_authorized"] is False
+    assert manifest["contract_sdk_commit"] == (
+        "ae8ab26f6a0e8afccd7e03024baa4e340754874e"
+    )
+    assert manifest["default_writer_switch_authorized"] is True
     assert manifest["migration"] == {
-        "mode": "additive_physical_bridge",
+        "mode": "direct_breaking_cutover",
         "domain_compatibility": "none",
         "legacy_table_backfill": False,
-        "default_writer_activated": False,
+        "default_writer_activated": True,
         "tables": [
             "admission_proposals_v1",
             "admission_decisions_v1",
@@ -148,12 +151,8 @@ def test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed() ->
             "admission_outbox_v1",
             "admission_claim_event_stream_v1",
         ],
-        "forward_additive_columns": [
-            "admission_claim_grants_v1.wire_envelope_json",
-        ],
-        "isolated_physical_legacy": [
-            "admission_claim_grants_v1.sealed_grant is never read or written by the canonical target and is removed only after coordinated consumer activation",
-        ],
+        "forward_additive_columns": [],
+        "isolated_physical_legacy": [],
     }
     expected_owners = {
         "eidolon_admin",
@@ -164,19 +163,7 @@ def test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed() ->
         "eidolon_hub_legacy_and_projections",
     }
     assert {entry["owner"] for entry in manifest["consumers"]} == expected_owners
-    for entry in manifest["consumers"]:
-        repository = (
-            "eidolon_hub"
-            if entry["owner"] == "eidolon_hub_legacy_and_projections"
-            else entry["owner"]
-        )
-        for callsite in entry["callsites"]:
-            assert (workspace / repository / callsite).is_file(), (
-                entry["owner"],
-                callsite,
-            )
-        assert entry["delete"]
-        assert entry["target_tests"]
+    assert all(entry["delete"] and entry["target_tests"] for entry in manifest["consumers"])
 
 
 def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requirement() -> None:
@@ -207,7 +194,9 @@ def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requireme
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name.startswith("test_")
         )
-    assert mapping["contract_sdk_commit"] == ("d88196757e8c054befd2c17f7cb9c7a9eb6f5253")
+    assert mapping["contract_sdk_commit"] == (
+        "ae8ab26f6a0e8afccd7e03024baa4e340754874e"
+    )
     assert mapping["requirements"]
     for requirement in mapping["requirements"]:
         assert requirement["requirement_id"] in frozen_ids

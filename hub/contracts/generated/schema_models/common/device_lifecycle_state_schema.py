@@ -8,11 +8,8 @@ from typing import Annotated, Literal
 from pydantic import ConfigDict, Field, RootModel
 
 
-class DeviceLifecycleState(RootModel[Literal["pending-approval", "approved", "revoked"]]):
+class DeviceLifecycleState(RootModel[Literal["approved", "revoked"]]):
     model_config = ConfigDict(
         frozen=True,
     )
-    root: Annotated[
-        Literal["pending-approval", "approved", "revoked"],
-        Field(title="Device Lifecycle State"),
-    ]
+    root: Annotated[Literal["approved", "revoked"], Field(title="Device Lifecycle State")]

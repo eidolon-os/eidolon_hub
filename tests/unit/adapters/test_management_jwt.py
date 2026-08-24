@@ -22,9 +22,6 @@ class _Devices:
     def __init__(self):
         self.device = ManagedDevice(
             identity=DeviceIdentity("device-1"),
-            enrollment_id="enrollment-1",
-            retrieval_token_hash="a" * 64,
-            retrieval_expires_at=NOW,
             display_name="Device",
             device_kind="generic",
             manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),
@@ -92,21 +89,17 @@ async def test_device_manager_is_limited_to_its_owner_and_approved_devices() -> 
             owner_scope="owner-2",
             device_id=None,
         )
-    devices.device = replace(
-        devices.device,
-        owner_id=None,
-        lifecycle_state=DeviceLifecycleState.PENDING_APPROVAL,
-    )
+    devices.device = replace(devices.device, owner_id="owner-2")
     with pytest.raises(PermissionError, match="cannot access"):
         await authorizer.authorize(
             credential=_credential(),
-            permission=ManagementPermission.DEVICE_APPROVE,
+            permission=ManagementPermission.DEVICE_REVOKE,
             owner_scope=None,
             device_id="device-1",
         )
 
 
-async def test_hub_admin_can_manage_cross_owner_and_unclaimed_scopes() -> None:
+async def test_hub_admin_can_manage_cross_owner_scopes() -> None:
     authorizer = JwtOwnerManagementAuthorizer(
         secret=SECRET,
         devices=_Devices(),
@@ -117,7 +110,7 @@ async def test_hub_admin_can_manage_cross_owner_and_unclaimed_scopes() -> None:
     await authorizer.authorize(
         credential=credential,
         permission=ManagementPermission.DEVICE_LIST,
-        owner_scope="unclaimed",
+        owner_scope="owner-2",
         device_id=None,
     )
     await authorizer.authorize(

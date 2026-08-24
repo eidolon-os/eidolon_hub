@@ -16,14 +16,9 @@ onboarding:
   descriptor_path: /etc/eidolon/owner-domain/owner_domain_descriptor.json
   owner_root_certificate_path: /etc/eidolon/owner-domain/owner_domain_root_ca.pem
   authority_signing_certificate_path: /etc/eidolon/owner-domain/authority_signing_certificate.pem
-  retrieval_window_seconds: 1800
-
 discovery:
   mdns:
     enabled: true
-
-channel_provider:
-  contract_url: http://127.0.0.1:8767/v1
 
 persistence:
   # Hub owns this database file; it does not share the legacy eidolon.sqlite3.

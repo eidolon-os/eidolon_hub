@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 import pytest
 
@@ -30,9 +30,6 @@ async def database(tmp_path):
 def _device():
     return ManagedDevice(
         identity=DeviceIdentity("device-1"),
-        enrollment_id="enrollment-1",
-        retrieval_token_hash="secret-hash-not-public",
-        retrieval_expires_at=NOW + timedelta(minutes=30),
         display_name="Device",
         device_kind="generic",
         manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),

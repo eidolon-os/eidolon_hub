@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
@@ -12,19 +12,20 @@ from hub.domain.devices.manifest import DeviceManifestDocument
 
 
 class DeviceLifecycleState(StrEnum):
-    PENDING_APPROVAL = "pending-approval"
     APPROVED = "approved"
     REVOKED = "revoked"
 
 
 @dataclass(frozen=True, slots=True)
 class ManagedDevice:
-    """Authoritative onboarding, capability and policy aggregate."""
+    """Owner-facing projection of one canonical Claim.
+
+    Admission is authoritative for Claim lifecycle and identity.  This value
+    only carries the query/rename projection required by device-management;
+    it deliberately contains no enrollment or retrieval capability.
+    """
 
     identity: DeviceIdentity
-    enrollment_id: str
-    retrieval_token_hash: str = field(repr=False)
-    retrieval_expires_at: datetime
     display_name: str
     device_kind: str
     manifest: DeviceManifestDocument
@@ -32,24 +33,20 @@ class ManagedDevice:
     updated_at: datetime
     owner_domain_id: str = "owner-test"
     owner_domain_generation: int = 1
-    last_enrollment_request_id: str = ""
-    last_enrollment_fingerprint: str = ""
     claim_generation: int = 1
     trust_epoch: int = 1
     aggregate_revision: int = 1
     owner_id: str | None = None
-    lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.PENDING_APPROVAL
+    lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.APPROVED
     last_management_request_id: str = ""
     last_management_fingerprint: str = ""
 
     def __post_init__(self) -> None:
-        if not self.enrollment_id.strip() or not self.retrieval_token_hash.strip():
-            raise ValueError("enrollment_id and retrieval token hash are required")
         if not self.device_kind.strip():
             raise ValueError("device_kind is required")
         if any(
             value.tzinfo is None
-            for value in (self.retrieval_expires_at, self.enrolled_at, self.updated_at)
+            for value in (self.enrolled_at, self.updated_at)
         ):
             raise ValueError("device timestamps must be timezone-aware")
         if self.owner_id is not None and not self.owner_id.strip():
@@ -61,13 +58,8 @@ class ManagedDevice:
             self.aggregate_revision,
         ) < 1:
             raise ValueError("Owner, claim, trust and aggregate generations must be positive")
-        if self.lifecycle_state is DeviceLifecycleState.APPROVED and self.owner_id is None:
-            raise ValueError("approved device requires an owner")
-        if (
-            self.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
-            and self.owner_id is not None
-        ):
-            raise ValueError("pending device cannot already have an owner")
+        if self.owner_id is None:
+            raise ValueError("Claim projection requires an owner")
 
     @property
     def manifest_json(self) -> str:
@@ -91,16 +83,6 @@ class ManagedDevice:
 
 
 @dataclass(frozen=True, slots=True)
-class DeviceEnrollmentIntent:
-    request_id: str
-    retrieval_token: str = field(repr=False)
-    identity: DeviceIdentity
-    display_name: str
-    device_kind: str
-    manifest: DeviceManifestDocument
-
-
-@dataclass(frozen=True, slots=True)
 class DeviceDirectoryEntry:
     """Safe, provider-neutral projection exposed to Eidolon OS consumers."""
 
@@ -112,10 +94,6 @@ class DeviceDirectoryEntry:
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
     updated_at: datetime
-    #: When this device's current window closes. While it is pending approval
-    #: that is the deadline for collecting the enrollment, and a listing has to
-    #: know it: an enrollment past it can no longer be approved.
-    retrieval_expires_at: datetime
     claim_generation: int
     trust_epoch: int
     owner_domain_generation: int = 1
@@ -126,7 +104,7 @@ class DeviceDirectoryEntry:
             raise ValueError("directory device_id and owner_scope are required")
         if any(
             value.tzinfo is None
-            for value in (self.enrolled_at, self.updated_at, self.retrieval_expires_at)
+            for value in (self.enrolled_at, self.updated_at)
         ):
             raise ValueError("directory timestamps must be timezone-aware")
         if min(
@@ -142,19 +120,6 @@ class DeviceDirectoryEntry:
             owner_domain_generation=self.owner_domain_generation,
             claim_generation=self.claim_generation,
             trust_epoch=self.trust_epoch,
-        )
-
-    def awaits_approval(self, *, now: datetime) -> bool:
-        """Whether approving this device could still do anything.
-
-        A pending enrollment past its window is not waiting for anyone: the Hub
-        refuses it, and the device replaces it by enrolling again. Offering it
-        as claimable is offering something that can only fail.
-        """
-
-        return (
-            self.lifecycle_state is DeviceLifecycleState.PENDING_APPROVAL
-            and now < self.retrieval_expires_at
         )
 
     @property

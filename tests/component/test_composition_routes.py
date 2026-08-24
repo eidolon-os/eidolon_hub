@@ -17,8 +17,12 @@ def test_public_contract_routes_exist_before_lifespan_start() -> None:
     paths = app.openapi()["paths"]
 
     assert "/api/device-onboarding/v1/descriptor" in paths
-    assert "/api/device-onboarding/v1/enrollments" in paths
-    assert "/api/device-onboarding/v1/enrollments/{enrollment_id}/handoff" in paths
+    assert "/api/device-onboarding/v1/enrollments" not in paths
+    assert "/api/device-onboarding/v1/enrollments/{enrollment_id}/handoff" not in paths
+    assert "/api/admission/v1/enrollments" in paths
+    assert "/api/admission/v1/enrollments/{enrollment_id}/claim-grants:collect" in paths
+    assert "/api/admission/v1/enrollments/{enrollment_id}/claim-grants/{grant_id}:ack" in paths
+    assert "/api/admission/v1/claims/{device_instance_id}:revoke" in paths
     assert not any(path.startswith("/api/device-access/") for path in paths)
     assert not any("signals" in path for path in paths)
     assert "/api/device-management/v1/owners/{owner_scope}/devices" in paths
@@ -29,8 +33,9 @@ def test_public_contract_routes_exist_before_lifespan_start() -> None:
     assert "/api/device-management/v1/devices/{device_id}/channels/{profile_name}" not in paths
     assert "/api/device-management/v1/devices/{device_id}/commands" not in paths
     assert "/api/device-management/v1/commands/{command_id}" not in paths
-    assert "/api/device-management/v1/devices/{device_id}/approval" in paths
-    assert "/api/device-management/v1/devices/{device_id}/revocation" in paths
+    assert "/api/device-management/v1/devices/{device_id}/approval" not in paths
+    assert "/api/device-management/v1/devices/{device_id}/revocation" not in paths
+    assert "/api/device-management/v1/claim-events" not in paths
     assert not any("pairing-claims" in path for path in paths)
     assert "/api/provider/v1/data/inbound" not in paths
     assert not any(path.startswith("/api/provider/") for path in paths)
@@ -51,16 +56,14 @@ def test_composition_starts_with_only_hub_owned_sqlite(
     with TestClient(create_composed_app(config)) as client:
         assert client.get("/health").json() == {"status": "ok"}
 
-        rejected_secret = "retrieval-secret-must-not-be-reflected"
+        assert client.get("/ready").status_code == 503
+        rejected_secret = "commissioning-proof-must-not-be-reflected"
         invalid = client.post(
-            "/api/device-onboarding/v1/enrollments",
+            "/api/admission/v1/enrollments",
             json={
-                "operation": "device.enrollment",
-                "request_id": "invalid-secret-1",
-                "retrieval_token": rejected_secret + "x" * 300,
-                "identity": {"device_id": "device-1"},
-                "manifest": {"schema_version": 1},
-                "device_kind": "generic",
+                "command_id": "invalid-secret-1",
+                "correlation_id": "intent-1",
+                "commissioning_proof": rejected_secret,
             },
         )
         assert invalid.status_code == 422

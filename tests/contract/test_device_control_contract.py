@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 from hub.contracts.bindings.common import DeviceIdentity
 from hub.contracts.bindings.device import DeviceDirectoryEntry, DeviceManifest
-from hub.contracts.bindings.onboarding import DeviceEnrollment, DeviceHandoffRequest
 
 NOW = datetime(2026, 8, 4, tzinfo=UTC)
 
@@ -19,21 +18,6 @@ def test_device_identity_contains_only_stable_device_id() -> None:
         DeviceIdentity.model_validate(
             {"device_id": "device-1", "tenant_id": "device-selected-scope"}
         )
-
-
-def test_enrollment_requires_high_entropy_retrieval_token() -> None:
-    with pytest.raises(ValidationError, match="at least 32"):
-        DeviceEnrollment(
-            request_id="enroll-1",
-            retrieval_token="short",
-            identity=DeviceIdentity(device_id="device-1"),
-            manifest=DeviceManifest(title="Device"),
-        )
-    request = DeviceHandoffRequest(
-        request_id="handoff-1",
-        retrieval_token="device-generated-random-token-000001",
-    )
-    assert "retrieval_token" not in repr(request)
 
 
 def test_public_directory_exposes_no_session_online_or_retrieval_facts() -> None:

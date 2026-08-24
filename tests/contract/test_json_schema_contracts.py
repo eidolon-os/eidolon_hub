@@ -13,7 +13,6 @@ from hypothesis_jsonschema import from_schema
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from hub.contracts.bindings.channel import ChannelAssignment
 from hub.contracts.bindings.device import (
     DeviceDirectoryEntry,
     DeviceDirectoryPage,
@@ -24,17 +23,8 @@ from hub.contracts.bindings.device import (
 from hub.contracts.bindings.device import (
     DeviceRef as HubDeviceRef,
 )
-from hub.contracts.bindings.onboarding import (
-    DeviceEnrollment,
-    DeviceEnrollmentReceipt,
-    DeviceHandoffOutcome,
-    DeviceHandoffRequest,
-)
 from hub.contracts.generated.schema_models.device.manifest_schema import (
     DeviceManifest as GeneratedDeviceManifest,
-)
-from hub.contracts.generated.schema_models.onboarding.handoff_schema import (
-    DeviceHandoffOutcome as GeneratedDeviceHandoffOutcome,
 )
 from hub.domain.devices.entities import DeviceRef as DomainDeviceRef
 
@@ -73,37 +63,9 @@ def test_generated_contract_shapes_are_current() -> None:
     )
 
 
-def test_runtime_bindings_conform_to_generated_shapes() -> None:
+def test_runtime_manifest_binding_conforms_to_generated_shape() -> None:
     manifest = DeviceManifest(title="Generic Device")
-    outcome = DeviceHandoffOutcome(
-        request_id="handoff-1",
-        enrollment_id="enrollment-1",
-        device_id="device-1",
-        manifest_revision="sha256:revision",
-        lifecycle_state="approved",
-        device_ref={
-            "device_instance_id": "device-1",
-            "owner_domain_id": "owner-1",
-                "owner_domain_generation": 1,
-                "claim_generation": 1,
-                "trust_epoch": 1,
-                "accepted_manifest_digest": "sha256:" + "a" * 64,
-            },
-        channels=(
-            ChannelAssignment(
-                channel_id="channel-1",
-                purpose="provider-selected",
-                kinds=("reliable-data",),
-                binding_format="application/test+json",
-                issued_at_ms=1,
-                expires_at_ms=2,
-                opaque_binding="b3BhcXVl",
-            ),
-        ),
-    )
-
     GeneratedDeviceManifest.model_validate(manifest.model_dump(mode="json"))
-    GeneratedDeviceHandoffOutcome.model_validate(outcome.model_dump(mode="json"))
 
 
 def test_public_status_bindings_conform_to_schema_sources() -> None:
@@ -157,63 +119,6 @@ def test_descriptor_binding_is_owned_by_canonical_sdk_contract() -> None:
 def test_device_ref_binding_and_domain_use_the_canonical_sdk_type() -> None:
     assert HubDeviceRef is CanonicalDeviceRef
     assert DomainDeviceRef is CanonicalDeviceRef
-
-
-def test_enrollment_request_and_receipt_conform_to_same_contract() -> None:
-    values = (
-        DeviceEnrollment(
-            request_id="enroll-1",
-            retrieval_token="device-generated-random-token-000001",
-            identity={"device_id": "device-1"},
-            manifest=DeviceManifest(title="Device"),
-        ),
-        DeviceEnrollmentReceipt(
-            request_id="enroll-1",
-            enrollment_id="enrollment-1",
-            device_id="device-1",
-            lifecycle_state="pending-approval",
-            retrieval_expires_at_ms=1,
-        ),
-    )
-    for value in values:
-        _validate("onboarding/enrollment.schema.json", value)
-
-
-def test_manual_admission_contract_has_no_device_display_or_owner_secret() -> None:
-    definitions = _schema("onboarding/enrollment.schema.json")["$defs"]
-
-    request_fields = set(definitions["DeviceEnrollment"]["properties"])
-    receipt_fields = set(definitions["DeviceEnrollmentReceipt"]["properties"])
-
-    assert "identity_proof" not in request_fields
-    assert "pairing_proof" not in request_fields
-    assert "pairing_secret" not in request_fields
-    assert "pairing_claim_uri" not in receipt_fields
-
-
-def test_handoff_request_and_outcome_conform_to_same_contract() -> None:
-    values = (
-        DeviceHandoffRequest(
-            request_id="handoff-1",
-            retrieval_token="device-generated-random-token-000001",
-        ),
-        DeviceHandoffOutcome(
-            request_id="handoff-1",
-            enrollment_id="enrollment-1",
-            device_id="device-1",
-                manifest_revision="sha256:revision",
-                lifecycle_state="pending-approval",
-                device_ref=None,
-            ),
-    )
-    for value in values:
-        _validate("onboarding/handoff.schema.json", value)
-
-
-def test_golden_enrollment_example_is_accepted() -> None:
-    DeviceEnrollment.model_validate_json(
-        (EXAMPLES / "device-enrollment.json").read_text(encoding="utf-8")
-    )
 
 
 @settings(max_examples=12, deadline=None)

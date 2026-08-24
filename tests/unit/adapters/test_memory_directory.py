@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 
 from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
 from hub.domain.devices.entities import DeviceDirectoryEntry, DeviceLifecycleState
@@ -24,7 +24,6 @@ def _entry(device_id="device-1", owner_scope="owner-1"):
         trust_epoch=1,
         enrolled_at=NOW,
         updated_at=NOW,
-        retrieval_expires_at=NOW + timedelta(hours=1),
     )
 
 

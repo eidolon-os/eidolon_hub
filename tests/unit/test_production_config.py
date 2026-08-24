@@ -7,7 +7,6 @@ from pydantic import ValidationError
 
 import hub.config as config_module
 from hub.config import (
-    ChannelProviderConfig,
     HubConfig,
     OnboardingConfig,
     PersistenceConfig,
@@ -21,7 +20,6 @@ def test_default_config_knows_only_local_behavior_and_public_contract_addresses(
     monkeypatch.setenv("EIDOLON_STATE_ROOT", str(state_root))
     config = HubConfig()
 
-    assert config.channel_provider.contract_url == "http://127.0.0.1:8767/v1"
     assert config.onboarding.owner_domain_id == "owner-local"
     assert config.onboarding.descriptor_uri == (
         "https://eidolon-hub.local/api/device-onboarding/v1/descriptor"
@@ -37,22 +35,6 @@ def test_onboarding_requires_https() -> None:
         OnboardingConfig(
             descriptor_uri="http://hub.example/api/device-onboarding/v1/descriptor"
         )
-
-
-@pytest.mark.parametrize("seconds", (59, 86_401))
-def test_retrieval_window_is_bounded(seconds) -> None:
-    with pytest.raises(ValidationError):
-        OnboardingConfig(retrieval_window_seconds=seconds)
-
-
-def test_channel_provider_contract_address_is_strictly_bounded() -> None:
-    with pytest.raises(ValidationError, match=r"plain HTTP\(S\) base URL"):
-        ChannelProviderConfig(contract_url="https://user:secret@provider.example/v1?redirect=evil")
-
-
-def test_remote_channel_provider_requires_https() -> None:
-    with pytest.raises(ValidationError, match="remote Channel Provider must use HTTPS"):
-        ChannelProviderConfig(contract_url="http://provider.example/v1")
 
 
 def test_mdns_allows_a_publicly_trusted_https_hostname() -> None:
@@ -88,8 +70,6 @@ def test_explicit_settings_path_is_the_simple_override(tmp_path, monkeypatch) ->
         """
 onboarding:
   descriptor_uri: https://custom.local/api/device-onboarding/v1/descriptor
-channel_provider:
-  contract_url: https://provider.example/v1
 persistence:
   path: /tmp/eidolon-hub-custom.sqlite3
 """.strip(),
@@ -103,7 +83,6 @@ persistence:
     assert config.onboarding.descriptor_uri == (
         "https://custom.local/api/device-onboarding/v1/descriptor"
     )
-    assert config.channel_provider.contract_url == "https://provider.example/v1"
     assert config.persistence.path == "/tmp/eidolon-hub-custom.sqlite3"
 
 

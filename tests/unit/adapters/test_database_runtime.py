@@ -54,13 +54,9 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
                 "admission_grant_acks_v1",
                 "admission_outbox_v1",
                 "admission_proposals_v1",
-                "hub_claim_command_results",
-                "hub_claim_events",
-                "hub_device_control_operations",
                 "hub_device_erase_ack_evidence",
                 "hub_device_erase_operations",
-                "hub_device_operation_key_bindings",
-                "hub_devices",
+                    "hub_device_directory_v1",
                 "hub_events",
                 "hub_authority_state",
             }
@@ -143,7 +139,8 @@ async def test_ph2_admission_physical_migration_is_additive_and_preserves_author
                     for column in inspect(sync_connection).get_columns("admission_claim_grants_v1")
                 }
             )
-        assert {"sealed_grant", "wire_envelope_json"} <= grant_columns
+        assert "wire_envelope_json" in grant_columns
+        assert "sealed_grant" not in grant_columns
         assert after_marker == ("owner-domain_01", 3, "authority-state_existing")
         assert not bootstrap_path.exists()
     finally:

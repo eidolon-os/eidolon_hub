@@ -48,6 +48,7 @@ from hub.adapters.persistence.models import (
     AdmissionGrantRow,
     AdmissionOutboxRow,
     AdmissionProposalRow,
+    DeviceRow,
 )
 from hub.admission import crypto as admission_crypto
 from hub.admission.application import AdmissionAuthority, HmacCommissioningProofVerifier
@@ -190,7 +191,14 @@ def actor(
 
 def create_payload(handoff_key, operational_key, setup_secret) -> dict:
     evidence = "manufacturer-evidence-device-01"
-    manifest_document = {"endpoints": []}
+    manifest_document = {
+        "schema_version": 1,
+        "title": "Box-3",
+        "properties": [],
+        "actions": [],
+        "events": [],
+        "media": [],
+    }
     nonce = "commissioning-nonce-01"
     message = f"device_01\0owner-domain_01\0{nonce}".encode()
     proof = (
@@ -403,6 +411,11 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
         async with restarted_database.sessions() as session:
             assert await session.scalar(select(func.count()).select_from(AdmissionGrantAckRow)) == 1
             assert await session.scalar(select(func.count()).select_from(AdmissionClaimRow)) == 1
+            directory = await session.get(DeviceRow, device_ref.device_instance_id)
+            assert directory.owner_id == "owner_01"
+            assert directory.lifecycle_state == "approved"
+            assert directory.claim_generation == device_ref.claim_generation
+            assert directory.display_name == "Box-3"
             activated = await session.scalar(
                 select(func.count())
                 .select_from(AdmissionOutboxRow)

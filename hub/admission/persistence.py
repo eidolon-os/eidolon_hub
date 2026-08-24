@@ -19,6 +19,7 @@ from hub.adapters.persistence.models import (
     AdmissionGrantRow,
     AdmissionOutboxRow,
     AdmissionProposalRow,
+    DeviceRow,
 )
 from hub.admission.domain import AdmissionProblem
 
@@ -188,6 +189,73 @@ class SqlAdmissionStore:
     @staticmethod
     def add_claim(session, **values) -> None:
         session.add(AdmissionClaimRow(**values))
+
+    @staticmethod
+    async def project_active_claim(
+        session,
+        *,
+        device_ref,
+        business_owner_id: str,
+        manifest_id: str,
+        manifest_json: str,
+        manifest_digest: str,
+        activated_at: datetime,
+    ) -> None:
+        """Update the owner-facing read model in the Claim ACK transaction.
+
+        This table is not a second lifecycle authority.  It contains only
+        query and naming data derived after the canonical Claim becomes active;
+        notably there is no enrollment id or retrieval capability to dual-write.
+        """
+
+        document = json.loads(manifest_json)
+        if not isinstance(document, dict):
+            raise AdmissionProblem("INVALID_ARGUMENT", "Manifest document must be an object")
+        title = document.get("title")
+        display_name = title.strip() if isinstance(title, str) and title.strip() else device_ref.device_instance_id
+        row = await session.get(DeviceRow, device_ref.device_instance_id)
+        values = {
+            "display_name": row.display_name if row is not None else display_name,
+            "device_kind": manifest_id,
+            "manifest_json": manifest_json,
+            "manifest_revision": manifest_digest,
+            "enrolled_at": activated_at,
+            "updated_at": activated_at,
+            "owner_domain_generation": device_ref.owner_domain_generation,
+            "claim_generation": device_ref.claim_generation,
+            "trust_epoch": device_ref.trust_epoch,
+            "aggregate_revision": 1 if row is None else row.aggregate_revision + 1,
+            "owner_id": business_owner_id,
+            "lifecycle_state": "approved",
+            "last_management_request_id": "",
+            "last_management_fingerprint": "",
+        }
+        if row is None:
+            session.add(DeviceRow(device_id=device_ref.device_instance_id, **values))
+            return
+        for name, value in values.items():
+            setattr(row, name, value)
+
+    @staticmethod
+    async def project_revoked_claim(session, *, device_ref, revoked_at: datetime) -> None:
+        """Mark only the matching Claim generation's directory row revoked."""
+
+        row = await session.get(DeviceRow, device_ref.device_instance_id)
+        if row is None:
+            return
+        if (
+            row.owner_domain_generation,
+            row.claim_generation,
+            row.trust_epoch,
+        ) != (
+            device_ref.owner_domain_generation,
+            device_ref.claim_generation,
+            device_ref.trust_epoch,
+        ):
+            return
+        row.lifecycle_state = "revoked"
+        row.updated_at = revoked_at
+        row.aggregate_revision += 1
 
     async def load_claim(self, *, device_instance_id: str):
         async with self.database.sessions() as session:

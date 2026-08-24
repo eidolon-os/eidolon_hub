@@ -1,13 +1,13 @@
 {
   "artifact": "eidolon-device-foundation-ph2b-consumer-cutover",
-  "contract_sdk_commit": "d88196757e8c054befd2c17f7cb9c7a9eb6f5253",
-  "default_writer_switch_authorized": false,
-  "required_completion_gate": "coordinated producer/consumer cutover plus Mobile-to-Hub-to-device E2E",
+  "contract_sdk_commit": "ae8ab26f6a0e8afccd7e03024baa4e340754874e",
+  "default_writer_switch_authorized": true,
+  "required_completion_gate": "default canonical writer activated; deploy and Mobile-to-Hub-to-device E2E remain release gates",
   "migration": {
-    "mode": "additive_physical_bridge",
+    "mode": "direct_breaking_cutover",
     "domain_compatibility": "none",
     "legacy_table_backfill": false,
-    "default_writer_activated": false,
+    "default_writer_activated": true,
     "tables": [
       "admission_proposals_v1",
       "admission_decisions_v1",
@@ -18,12 +18,8 @@
       "admission_outbox_v1",
       "admission_claim_event_stream_v1"
     ],
-    "forward_additive_columns": [
-      "admission_claim_grants_v1.wire_envelope_json"
-    ],
-    "isolated_physical_legacy": [
-      "admission_claim_grants_v1.sealed_grant is never read or written by the canonical target and is removed only after coordinated consumer activation"
-    ]
+    "forward_additive_columns": [],
+    "isolated_physical_legacy": []
   },
   "consumers": [
     {

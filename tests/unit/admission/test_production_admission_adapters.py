@@ -1,0 +1,127 @@
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import stat
+from types import SimpleNamespace
+
+import pytest
+from jose import jwt
+from starlette.requests import Request
+
+from hub.admission.auth import JwtAdmissionActorProvider
+from hub.admission.domain import AdmissionProblem
+from hub.composition.resources import load_commissioning_proof_verifier
+from hub.config import CommissioningProofConfig, HubConfig
+
+
+def _request(token: str) -> Request:
+    return Request(
+        {
+            "type": "http",
+            "method": "GET",
+            "path": "/",
+            "headers": [(b"authorization", f"Bearer {token}".encode())],
+        }
+    )
+
+
+async def test_admission_actor_is_verified_from_short_lived_credential() -> None:
+    secret = b"admission-owner-secret-value-000001"
+    claims = {
+        "sub": "eidolon-admin/admission-consumer",
+        "presenter": "eidolon-admin/admission-consumer",
+        "aud": "eidolon-admission",
+        "actor": {
+            "principal_id": "controller_01",
+            "owner_domain_id": "owner-domain_01",
+            "granted_scopes": ["device.read", "device.claim.approve"],
+            "authentication_strength": "software",
+        },
+        "owner_domain_id": "owner-domain_01",
+        "business_owner_id": "owner_01",
+        "scopes": ["device.read", "device.claim.approve"],
+        "exp": 4_000_000_000,
+    }
+    token = jwt.encode(claims, secret, algorithm="HS256")
+    context = await JwtAdmissionActorProvider(secret=secret)(_request(token))
+    assert context.actor.principal_id == "controller_01"
+    assert str(context.business_owner_id) == "owner_01"
+
+    crossed = jwt.encode(
+        {**claims, "owner_domain_id": "owner-domain_02"}, secret, algorithm="HS256"
+    )
+    with pytest.raises(AdmissionProblem) as rejected:
+        await JwtAdmissionActorProvider(secret=secret)(_request(crossed))
+    assert rejected.value.code == "UNAUTHENTICATED"
+
+
+def test_manufacturer_profile_is_not_ready_without_real_verifier() -> None:
+    verifier, ready = load_commissioning_proof_verifier(HubConfig())
+    assert ready is False
+    assert not verifier.verify(
+        device_instance_id="device_01",
+        owner_domain_id="owner-domain_01",
+        nonce="nonce_01",
+        proof="opaque-proof",
+    )
+
+
+def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_closed(
+    tmp_path, monkeypatch
+) -> None:
+    setup_secret = b"box-3-development-setup-secret"
+    encoded = base64.urlsafe_b64encode(setup_secret).rstrip(b"=").decode()
+    path = tmp_path / "commissioning-secrets.json"
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "eidolon-development-hmac-commissioning-v1",
+                "devices": {"box-3": encoded},
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_stat = type(path).stat
+
+    def root_owned(candidate):
+        value = real_stat(candidate)
+        if candidate == path:
+            return SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o640)
+        return value
+
+    monkeypatch.setattr(type(path), "stat", root_owned)
+    config = HubConfig(
+        commissioning_proof=CommissioningProofConfig(
+            profile="development-hmac",
+            setup_secret_registry_path=str(path),
+        )
+    )
+    verifier, ready = load_commissioning_proof_verifier(config)
+    assert ready is True
+    nonce = "physical-presence-nonce"
+    proof = (
+        base64.urlsafe_b64encode(
+            hmac.new(
+                setup_secret,
+                f"box-3\0owner-local\0{nonce}".encode(),
+                hashlib.sha256,
+            ).digest()
+        )
+        .rstrip(b"=")
+        .decode()
+    )
+    assert verifier.verify(
+        device_instance_id="box-3",
+        owner_domain_id="owner-local",
+        nonce=nonce,
+        proof=proof,
+    )
+    assert not verifier.verify(
+        device_instance_id="unknown",
+        owner_domain_id="owner-local",
+        nonce=nonce,
+        proof=proof,
+    )

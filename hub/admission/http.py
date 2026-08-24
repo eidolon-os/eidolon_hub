@@ -94,9 +94,14 @@ def problem_response(problem: AdmissionProblem, *, command_id: str | None = None
 
 
 def create_admission_router(
-    *, authority: AdmissionAuthority, actor_provider: ActorProvider
+    *,
+    authority: AdmissionAuthority | Callable[[], AdmissionAuthority],
+    actor_provider: ActorProvider,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/admission/v1", tags=["canonical-admission"])
+
+    def current() -> AdmissionAuthority:
+        return authority() if callable(authority) else authority
 
     @router.post("/enrollments")
     async def create(payload: dict) -> JSONResponse:
@@ -112,7 +117,7 @@ def create_admission_router(
                     if key in CreateEnrollment.model_fields
                 }
             )
-            result = await authority.create_enrollment(
+            result = await current().create_enrollment(
                 command_id=command_id,
                 correlation_id=correlation_id,
                 payload=command.model_dump(mode="json"),
@@ -152,7 +157,7 @@ def create_admission_router(
                     category="invalid",
                 )
             context = await actor_provider(request)
-            result = await authority.decide_enrollment(
+            result = await current().decide_enrollment(
                 command_id=command_id,
                 correlation_id=payload["correlation_id"],
                 enrollment_id=enrollment_id,
@@ -199,7 +204,7 @@ def create_admission_router(
                     category="invalid",
                 )
             context = await actor_provider(request)
-            result = await authority.cancel_enrollment(
+            result = await current().cancel_enrollment(
                 command_id=command_id,
                 correlation_id=payload["correlation_id"],
                 enrollment_id=enrollment_id,
@@ -242,7 +247,7 @@ def create_admission_router(
                     status=422,
                     category="invalid",
                 )
-            result = await authority.collect_claim_grant(
+            result = await current().collect_claim_grant(
                 command_id=command_id,
                 correlation_id=payload["correlation_id"],
                 enrollment_id=enrollment_id,
@@ -275,7 +280,7 @@ def create_admission_router(
                     status=422,
                     category="invalid",
                 )
-            result = await authority.ack_claim_grant(
+            result = await current().ack_claim_grant(
                 command_id=command_id,
                 correlation_id=payload["correlation_id"],
                 enrollment_id=enrollment_id,
@@ -317,7 +322,7 @@ def create_admission_router(
                     category="invalid",
                 )
             context = await actor_provider(request)
-            result = await authority.revoke_claim(
+            result = await current().revoke_claim(
                 command_id=command_id,
                 correlation_id=command.correlation_id,
                 device_ref=device_ref,
@@ -342,7 +347,7 @@ def create_admission_router(
     async def get_claim(device_instance_id: str, request: Request) -> JSONResponse:
         try:
             context = await actor_provider(request)
-            claim = await authority.get_claim(
+            claim = await current().get_claim(
                 device_instance_id=device_instance_id, context=context
             )
             return JSONResponse(status_code=200, content=claim.model_dump(mode="json"))
@@ -357,7 +362,7 @@ def create_admission_router(
     async def get_enrollment(enrollment_id: str, request: Request) -> JSONResponse:
         try:
             context = await actor_provider(request)
-            projection = await authority.get_enrollment_recovery(
+            projection = await current().get_enrollment_recovery(
                 enrollment_id=enrollment_id, context=context
             )
             return JSONResponse(status_code=200, content=projection.model_dump(mode="json"))
@@ -396,7 +401,7 @@ def create_admission_router(
                 cursor=cursor,
                 limit=limit,
             )
-            page = await authority.list_enrollment_recovery(query=query, context=context)
+            page = await current().list_enrollment_recovery(query=query, context=context)
             return JSONResponse(status_code=200, content=page.model_dump(mode="json"))
         except (AdmissionProblem, ValueError) as exc:
             return problem_response(exc if isinstance(exc, AdmissionProblem) else _invalid(exc))
@@ -433,7 +438,7 @@ def create_admission_router(
                 cursor=cursor,
                 limit=limit,
             )
-            page = await authority.list_claims(query=query, context=context)
+            page = await current().list_claims(query=query, context=context)
             return JSONResponse(status_code=200, content=page.model_dump(mode="json"))
         except (AdmissionProblem, ValueError) as exc:
             return problem_response(exc if isinstance(exc, AdmissionProblem) else _invalid(exc))
@@ -451,7 +456,7 @@ def create_admission_router(
                     status=422,
                     category="invalid",
                 )
-            page = await authority.claim_event_page(
+            page = await current().claim_event_page(
                 cursor=ClaimEventCursor(stream_position=after_stream_position),
                 limit=limit,
                 context=context,

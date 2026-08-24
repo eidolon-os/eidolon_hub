@@ -6,7 +6,10 @@ from datetime import datetime
 from typing import Literal
 
 from eidolon_sdk.device_foundation.v1 import (
+    DeliverEnvelope,
+    DeliveryAcceptance,
     DeviceEraseContractError,
+    DeviceEvidenceEnvelope,
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
     DeviceLocalEraseOperationStatus,
@@ -31,15 +34,17 @@ from pydantic import Field, field_validator
 
 from hub.contracts.bindings.common import ContractModel, JsonObject
 
-DeviceLifecycleState = Literal["pending-approval", "approved", "revoked"]
+DeviceLifecycleState = Literal["approved", "revoked"]
 
 __all__ = [
     "ClaimRevocationResult",
-    "DeviceControlOperationStatus",
     "DeviceEraseContractError",
     "DeviceLocalEraseAck",
     "DeviceLocalEraseCommand",
     "DeviceLocalEraseOperationStatus",
+    "DeliverEnvelope",
+    "DeliveryAcceptance",
+    "DeviceEvidenceEnvelope",
     "DeviceOperationKeyProof",
     "DeviceRef",
     "OwnerDomainId",
@@ -52,64 +57,6 @@ __all__ = [
     "verify_operation_key_proof",
     "verify_p256_signature",
 ]
-
-
-class LegacyDeviceRef(ContractModel):
-    """Existing PH1 wire shape kept only on routes awaiting PH2-B cutover."""
-
-    device_instance_id: str = Field(min_length=1, max_length=128)
-    owner_domain_id: str = Field(min_length=1, max_length=128)
-    owner_domain_generation: int = Field(ge=1)
-    claim_generation: int = Field(ge=1)
-    trust_epoch: int = Field(ge=1)
-    accepted_manifest_digest: str = Field(min_length=1, max_length=128)
-
-
-class LegacyDeviceRevocationRequest(ContractModel):
-    """Existing management route input; removed by the PH2-B cutover."""
-
-    operation: Literal["device.claim-revocation"] = "device.claim-revocation"
-    command_id: str = Field(min_length=3, max_length=128)
-    correlation_id: str = Field(min_length=3, max_length=128)
-    device_ref: LegacyDeviceRef
-    reason: str = Field(min_length=1, max_length=256)
-
-
-class LegacyClaimRevocationResult(ContractModel):
-    operation: Literal["device.claim-revocation-result"] = (
-        "device.claim-revocation-result"
-    )
-    command_id: str = Field(min_length=1, max_length=128)
-    outcome: Literal["committed", "replayed"]
-    device_ref: LegacyDeviceRef
-    aggregate_revision: int = Field(ge=1)
-    occurred_at: datetime
-    event_id: str | None = Field(default=None, min_length=1, max_length=128)
-    lifecycle_state: Literal["revoked"] = "revoked"
-
-
-class LegacyClaimEvent(ContractModel):
-    operation: Literal["device.claim-event"] = "device.claim-event"
-    stream_position: int = Field(ge=1)
-    event_id: str = Field(min_length=1, max_length=128)
-    event_type: Literal["live.eidolon.device.claim-revoked.v1"]
-    device_ref: LegacyDeviceRef
-    aggregate_revision: int = Field(ge=1)
-    correlation_id: str = Field(min_length=1, max_length=128)
-    causation_id: str = Field(min_length=1, max_length=128)
-    occurred_at: datetime
-    reason: str = Field(min_length=1, max_length=256)
-
-
-class LegacyClaimEventPage(ContractModel):
-    operation: Literal["device.claim-event-page"] = "device.claim-event-page"
-    next_stream_position: int = Field(ge=0)
-    events: tuple[LegacyClaimEvent, ...] = Field(default=(), max_length=500)
-
-    @field_validator("events", mode="before")
-    @classmethod
-    def _event_arrays(cls, value):
-        return tuple(value) if isinstance(value, list) else value
 
 
 class PropertyAffordance(ContractModel):
@@ -157,12 +104,6 @@ class DeviceManifest(ContractModel):
         return tuple(value) if isinstance(value, list) else value
 
 
-class DeviceApprovalRequest(ContractModel):
-    operation: Literal["device.approval"] = "device.approval"
-    request_id: str = Field(min_length=1, max_length=96)
-    owner_id: str = Field(min_length=1, max_length=64)
-
-
 class DeviceRenameRequest(ContractModel):
     """What an Owner calls a device, as the only part of it they decide."""
 
@@ -180,28 +121,6 @@ class DeviceLifecycleStatus(ContractModel):
     lifecycle_state: DeviceLifecycleState
 
 
-class DeviceControlOperationStatus(ContractModel):
-    """Read-only status of the current Channel delivery projection.
-
-    This is deliberately not the future device-local erase contract. A
-    successful Channel delivery proves platform channel access was revoked;
-    it does not prove that an offline device erased local state.
-    """
-
-    operation: Literal["device-control.operation-status"] = (
-        "device-control.operation-status"
-    )
-    event_id: str = Field(min_length=3, max_length=128)
-    operation_id: str = Field(min_length=3, max_length=255)
-    operation_type: Literal["channel.device-access.revoke"]
-    device_ref: DeviceRef
-    state: Literal["pending", "delivered"]
-    attempt_count: int = Field(ge=0)
-    next_attempt_at: datetime
-    delivered_at: datetime | None = None
-    last_error: str = Field(default="", max_length=512)
-
-
 class DeviceDirectoryEntry(ContractModel):
     operation: Literal["device.directory-entry"] = "device.directory-entry"
     device_id: str = Field(min_length=1, max_length=128)
@@ -213,7 +132,7 @@ class DeviceDirectoryEntry(ContractModel):
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
     updated_at: datetime
-    device_ref: LegacyDeviceRef | None = None
+    device_ref: DeviceRef | None = None
 
 
 class DeviceDirectoryPage(ContractModel):

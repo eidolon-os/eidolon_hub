@@ -11,11 +11,12 @@ from sqlalchemy import select
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import (
-    ClaimEventRow,
+    AdmissionClaimEventStreamRow,
+    AdmissionClaimRow,
     DeviceEraseAckEvidenceRow,
     DeviceEraseOperationRow,
-    DeviceOperationKeyBindingRow,
 )
+from hub.contracts.bindings.admission import ClaimRevokedEvent, ManifestRef
 from hub.contracts.bindings.device import (
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
@@ -33,12 +34,12 @@ def _aware(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
-def _operation_id(event: ClaimEventRow) -> str:
+def _operation_id(event: ClaimRevokedEvent) -> str:
+    device_ref = event.data.device_ref
     semantic = (
-        f"device-local.erase\0{event.event_id}\0{event.device_id}\0"
-        f"{event.owner_domain_id}\0{event.owner_domain_generation}\0"
-        f"{event.claim_generation}\0{event.trust_epoch}\0"
-        f"{event.accepted_manifest_digest}"
+        f"device-local.erase\0{event.id}\0{device_ref.device_instance_id}\0"
+        f"{device_ref.owner_domain_id}\0{device_ref.owner_domain_generation}\0"
+        f"{device_ref.claim_generation}\0{device_ref.trust_epoch}"
     )
     return "erase_" + hashlib.sha256(semantic.encode()).hexdigest()[:48]
 
@@ -77,44 +78,6 @@ class SqlDeviceEraseLedger:
             last_error_code=row.last_error_code,
         )
 
-    async def bind_operation_key(
-        self,
-        *,
-        enrollment_id: str,
-        owner_domain_generation: int,
-        claim_generation: int,
-        proof,
-        key_id: str,
-        bound_at: datetime,
-    ) -> None:
-        key = (proof.device_instance_id, owner_domain_generation, claim_generation)
-        async with self._lock:
-            async with self._database.sessions.begin() as session:
-                existing = await session.get(DeviceOperationKeyBindingRow, key)
-                if existing is not None:
-                    if (
-                        existing.enrollment_id != enrollment_id
-                        or existing.enrollment_request_id != proof.enrollment_request_id
-                        or existing.public_key_spki != proof.public_key_spki
-                        or existing.key_id != key_id
-                    ):
-                        raise DeviceEraseIdempotencyConflict(
-                            "Claim generation operation key was rebound with different content"
-                        )
-                    return
-                session.add(
-                    DeviceOperationKeyBindingRow(
-                        device_id=proof.device_instance_id,
-                        owner_domain_generation=owner_domain_generation,
-                        claim_generation=claim_generation,
-                        enrollment_id=enrollment_id,
-                        enrollment_request_id=proof.enrollment_request_id,
-                        public_key_spki=proof.public_key_spki,
-                        key_id=key_id,
-                        bound_at=bound_at,
-                    )
-                )
-
     async def materialize_claim_events(
         self, *, now: datetime, operation_ttl: timedelta
     ) -> int:
@@ -123,26 +86,25 @@ class SqlDeviceEraseLedger:
             raise ValueError("device erase operation TTL must be positive")
         async with self._lock:
             async with self._database.sessions.begin() as session:
-                events = (
+                rows = (
                     await session.scalars(
-                        select(ClaimEventRow)
-                        .where(ClaimEventRow.event_type == self.REVOKE_EVENT_TYPE)
-                        .order_by(ClaimEventRow.stream_position)
+                        select(AdmissionClaimEventStreamRow)
+                        .where(
+                            AdmissionClaimEventStreamRow.event_type
+                            == self.REVOKE_EVENT_TYPE
+                        )
+                        .order_by(AdmissionClaimEventStreamRow.stream_position)
                     )
                 ).all()
                 created = 0
-                for event in events:
+                for stream_row in rows:
+                    event = ClaimRevokedEvent.model_validate_json(stream_row.event_json)
+                    device_ref = event.data.device_ref
                     operation_id = _operation_id(event)
-                    deadline = _aware(event.occurred_at) + operation_ttl
+                    deadline = event.time + operation_ttl
                     command = DeviceLocalEraseCommand(
                         operation_id=operation_id,
-                        device_ref=DeviceRef(
-                            device_instance_id=event.device_id,
-                            owner_domain_id=event.owner_domain_id,
-                            owner_domain_generation=event.owner_domain_generation,
-                            claim_generation=event.claim_generation,
-                            trust_epoch=event.trust_epoch,
-                        ),
+                        device_ref=device_ref,
                         deadline=deadline,
                     )
                     fingerprint = operation_fingerprint(command)
@@ -155,7 +117,7 @@ class SqlDeviceEraseLedger:
                         continue
                     by_event = await session.scalar(
                         select(DeviceEraseOperationRow).where(
-                            DeviceEraseOperationRow.source_event_id == event.event_id
+                            DeviceEraseOperationRow.source_event_id == event.id
                         )
                     )
                     if by_event is not None:
@@ -164,44 +126,47 @@ class SqlDeviceEraseLedger:
                                 "Claim event was projected with different erase content"
                             )
                         continue
-                    binding = await session.get(
-                        DeviceOperationKeyBindingRow,
-                        (
-                            event.device_id,
-                            event.owner_domain_generation,
-                            event.claim_generation,
-                        ),
+                    claim = await session.get(
+                        AdmissionClaimRow, device_ref.device_instance_id
                     )
-                    has_key = binding is not None
+                    if claim is None or (
+                        claim.owner_domain_id != str(device_ref.owner_domain_id)
+                        or claim.owner_domain_generation
+                        != device_ref.owner_domain_generation
+                        or claim.claim_generation != device_ref.claim_generation
+                        or claim.trust_epoch != device_ref.trust_epoch
+                    ):
+                        raise DeviceEraseIdempotencyConflict(
+                            "canonical ClaimRevoked event has no matching Claim generation"
+                        )
+                    manifest_digest = ManifestRef.model_validate_json(
+                        claim.manifest_ref_json
+                    ).digest
                     session.add(
                         DeviceEraseOperationRow(
                             operation_id=operation_id,
-                            source_event_id=event.event_id,
+                            source_event_id=event.id,
                             request_fingerprint=fingerprint,
-                            device_id=event.device_id,
-                            owner_domain_id=event.owner_domain_id,
-                            owner_domain_generation=event.owner_domain_generation,
-                            claim_generation=event.claim_generation,
-                            trust_epoch=event.trust_epoch,
-                            accepted_manifest_digest=event.accepted_manifest_digest,
-                            public_key_spki=(binding.public_key_spki if binding else None),
-                            key_id=(binding.key_id if binding else None),
+                            device_id=device_ref.device_instance_id,
+                            owner_domain_id=str(device_ref.owner_domain_id),
+                            owner_domain_generation=device_ref.owner_domain_generation,
+                            claim_generation=device_ref.claim_generation,
+                            trust_epoch=device_ref.trust_epoch,
+                            accepted_manifest_digest=str(manifest_digest),
+                            public_key_spki=claim.operational_public_key_spki,
+                            key_id=None,
                             command_json=json.dumps(
                                 command.model_dump(mode="json"),
                                 sort_keys=True,
                                 separators=(",", ":"),
                             ),
-                            state=(
-                                DeviceEraseState.ACCEPTED.value
-                                if has_key
-                                else DeviceEraseState.PERMANENT_FAILURE.value
-                            ),
-                            created_at=_aware(event.occurred_at),
+                            state=DeviceEraseState.ACCEPTED.value,
+                            created_at=event.time,
                             deadline=deadline,
                             attempt_count=0,
-                            terminal_result=(None if has_key else "permanent-failure"),
-                            result_code=("" if has_key else "ACK_KEY_NOT_BOUND"),
-                            last_error_code=("" if has_key else "ACK_KEY_NOT_BOUND"),
+                            terminal_result=None,
+                            result_code="",
+                            last_error_code="",
                         )
                     )
                     created += 1
@@ -264,22 +229,6 @@ class SqlDeviceEraseLedger:
                 )
             )
         return None if row is None else self._decode(row)
-
-    async def operation_key_for(
-        self, *, device_ref: DeviceRef
-    ) -> tuple[str, str] | None:
-        async with self._database.sessions() as session:
-            binding = await session.get(
-                DeviceOperationKeyBindingRow,
-                (
-                    device_ref.device_instance_id,
-                    device_ref.owner_domain_generation,
-                    device_ref.claim_generation,
-                ),
-            )
-        if binding is None:
-            return None
-        return binding.public_key_spki, binding.key_id
 
     async def accept_delivery(
         self,

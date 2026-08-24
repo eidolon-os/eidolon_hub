@@ -29,9 +29,6 @@ async def repositories(tmp_path):
 def _device(*, display_name: str = "Device") -> ManagedDevice:
     return ManagedDevice(
         identity=DeviceIdentity("device-1"),
-        enrollment_id="enrollment-1",
-        retrieval_token_hash="a" * 64,
-        retrieval_expires_at=NOW + timedelta(minutes=30),
         display_name=display_name,
         device_kind="generic",
         manifest=DeviceManifestDocument.from_mapping(
@@ -39,6 +36,7 @@ def _device(*, display_name: str = "Device") -> ManagedDevice:
         ),
         enrolled_at=NOW,
         updated_at=NOW,
+        owner_id="owner-1",
     )
 
 
@@ -65,7 +63,7 @@ async def test_invalid_audit_event_rolls_back_device_fact(repositories) -> None:
     assert await repositories.devices.get("device-1") is None
     assert (
         await repositories.management_events.list_after(
-            owner_scope="unclaimed", stream_position=0, limit=100
+            owner_scope="owner-1", stream_position=0, limit=100
         )
         == ()
     )

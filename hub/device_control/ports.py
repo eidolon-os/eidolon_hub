@@ -7,7 +7,6 @@ from typing import Protocol
 
 from hub.contracts.bindings.device import (
     DeviceLocalEraseAck,
-    DeviceOperationKeyProof,
     DeviceRef,
 )
 
@@ -15,17 +14,6 @@ from .domain import DeviceEraseOperation
 
 
 class DeviceEraseLedger(Protocol):
-    async def bind_operation_key(
-        self,
-        *,
-        enrollment_id: str,
-        owner_domain_generation: int,
-        claim_generation: int,
-        proof: DeviceOperationKeyProof,
-        key_id: str,
-        bound_at: datetime,
-    ) -> None: ...
-
     async def materialize_claim_events(
         self, *, now: datetime, operation_ttl: timedelta
     ) -> int: ...
@@ -39,10 +27,6 @@ class DeviceEraseLedger(Protocol):
     async def get_for_device(
         self, *, device_ref: DeviceRef
     ) -> DeviceEraseOperation | None: ...
-
-    async def operation_key_for(
-        self, *, device_ref: DeviceRef
-    ) -> tuple[str, str] | None: ...
 
     async def accept_delivery(
         self,

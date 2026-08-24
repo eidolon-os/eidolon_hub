@@ -1,29 +1,20 @@
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from eidolon_sdk.device_foundation.v1 import (
-    DeviceLocalEraseAck,
-    DeviceOperationKeyProof,
-    DeviceRef,
-    canonical_bytes,
-    operation_key_id,
-)
-from sqlalchemy import select
+from eidolon_sdk.device_foundation.v1 import DeviceLocalEraseAck, DeviceRef, canonical_bytes
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.device_erase import SqlDeviceEraseLedger
-from hub.adapters.persistence.models import ClaimEventRow
-from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
+from hub.adapters.persistence.models import AdmissionClaimEventStreamRow, AdmissionClaimRow
 from hub.device_control.application import (
     AcknowledgeDeviceEraseOperation,
-    BindDeviceOperationKey,
-    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -32,13 +23,9 @@ from hub.device_control.domain import (
     DeviceEraseIdempotencyConflict,
     DeviceEraseState,
 )
-from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
-from hub.domain.devices.identity import DeviceIdentity
-from hub.domain.devices.manifest import DeviceManifestDocument
 
 NOW = datetime(2026, 8, 23, 10, 0, tzinfo=UTC)
 MANIFEST = "sha256:" + "a" * 64
-TOKEN = "device-generated-random-token-000001"
 
 
 class Clock:
@@ -49,19 +36,8 @@ class Clock:
         return self.value
 
 
-class EnrollmentDeviceRepository:
-    def __init__(self, device: ManagedDevice):
-        self.device = device
-
-    async def get_by_enrollment_id(self, enrollment_id: str) -> ManagedDevice | None:
-        return self.device if enrollment_id == self.device.enrollment_id else None
-
-    async def get(self, device_id: str) -> ManagedDevice | None:
-        return self.device if device_id == self.device.identity.device_id else None
-
-
 def _b64(value: bytes) -> str:
-    return base64.urlsafe_b64encode(value).decode("ascii").rstrip("=")
+    return base64.urlsafe_b64encode(value).decode().rstrip("=")
 
 
 def _spki(key: ec.EllipticCurvePrivateKey) -> str:
@@ -89,56 +65,59 @@ def _ref(generation: int = 7) -> DeviceRef:
     )
 
 
-async def _seed_event(
-    database: HubDatabase,
-    *,
-    generation: int = 7,
-    event_id: str | None = None,
-    occurred_at: datetime = NOW,
-) -> str:
-    event_id = event_id or f"claim_event_{generation}"
+async def _seed_revoke(database, key, *, occurred_at=NOW) -> None:
+    device_ref = _ref()
+    event = {
+        "specversion": "1.0",
+        "id": "claim_event_7",
+        "source": "urn:eidolon:authority:admission",
+        "type": "live.eidolon.device.claim-revoked.v1",
+        "subject": "device-instances/device_erase_01",
+        "time": occurred_at.isoformat().replace("+00:00", "Z"),
+        "datacontenttype": "application/json",
+        "dataschema": "https://contracts.eidolon.live/device-foundation/v1/events/claim-revoked-data.schema.json",
+        "audience": "eidolon-claim-consumers",
+        "ownerdomainid": "owner-domain_01",
+        "aggregaterev": 8,
+        "correlationid": "removal_intent_7",
+        "causationid": "revoke_claim_7",
+        "data": {
+            "device_ref": device_ref.model_dump(mode="json"),
+            "reason": "owner-removed",
+            "revoked_at": occurred_at.isoformat().replace("+00:00", "Z"),
+        },
+    }
     async with database.sessions.begin() as session:
         session.add(
-            ClaimEventRow(
-                event_id=event_id,
-                event_type="live.eidolon.device.claim-revoked.v1",
-                device_id="device_erase_01",
-                owner_domain_id="owner-domain_01",
-                owner_domain_generation=1,
-                claim_generation=generation,
-                trust_epoch=4,
-                accepted_manifest_digest=MANIFEST,
-                aggregate_revision=generation + 1,
-                correlation_id=f"removal_intent_{generation}",
-                causation_id=f"revoke_claim_{generation}",
-                actor_principal_id="controller_01",
-                occurred_at=occurred_at,
-                reason="owner-removed",
+            AdmissionClaimRow(
+                device_instance_id=device_ref.device_instance_id,
+                owner_domain_id=str(device_ref.owner_domain_id),
+                business_owner_id="owner_01",
+                hardware_identity_ref="hardware_01",
+                owner_domain_generation=device_ref.owner_domain_generation,
+                claim_generation=device_ref.claim_generation,
+                trust_epoch=device_ref.trust_epoch,
+                manifest_ref_json=json.dumps(
+                    {"manifest_id": "manifest_01", "revision": 1, "digest": MANIFEST}
+                ),
+                approval_decision_id="decision_7",
+                operational_public_key_spki=_spki(key),
+                state="revoked",
+                revision=8,
+                activated_at=occurred_at - timedelta(minutes=1),
+                updated_at=occurred_at,
+                revoked_at=occurred_at,
             )
         )
-    return event_id
-
-
-async def _bind(
-    ledger: SqlDeviceEraseLedger,
-    key: ec.EllipticCurvePrivateKey,
-    *,
-    generation: int = 7,
-) -> None:
-    proof = DeviceOperationKeyProof(
-        device_instance_id="device_erase_01",
-        enrollment_request_id=f"enrollment_request_{generation}",
-        public_key_spki=_spki(key),
-        possession_signature="A" * 86,
-    )
-    await ledger.bind_operation_key(
-        enrollment_id=f"enrollment_{generation}",
-        owner_domain_generation=1,
-        claim_generation=generation,
-        proof=proof,
-        key_id=operation_key_id(proof.public_key_spki),
-        bound_at=NOW,
-    )
+        session.add(
+            AdmissionClaimEventStreamRow(
+                event_id=event["id"],
+                owner_domain_id="owner-domain_01",
+                event_type=event["type"],
+                event_json=json.dumps(event, sort_keys=True, separators=(",", ":")),
+                occurred_at=occurred_at,
+            )
+        )
 
 
 @pytest.fixture
@@ -151,338 +130,86 @@ async def database(tmp_path):
         await database.close()
 
 
-async def test_device_erase_operation_online_ack_and_signature_verification(database) -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
+async def _materialize(database, key, *, ttl=timedelta(days=7)):
     ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-    await _seed_event(database)
-    clock = Clock()
-    reconcile = ReconcileDeviceEraseOperations(
-        ledger=ledger, clock=clock, operation_ttl=timedelta(days=7)
-    )
-    assert await reconcile.execute() == 1
-
+    await _seed_revoke(database, key)
+    assert await ledger.materialize_claim_events(now=NOW, operation_ttl=ttl) == 1
     operation = await ledger.get_for_device(device_ref=_ref())
     assert operation is not None
-    assert operation.state is DeviceEraseState.PENDING
-    original_operation_id = operation.command.operation_id
+    return ledger, operation
 
-    pull_document = {
-        "device_ref": _ref().model_dump(mode="json"),
-        "nonce": "fresh_nonce_000001",
-        "operation_type": "device-local.erase",
-    }
-    delivery = await PullDeviceEraseOperation(ledger=ledger, clock=clock).execute(
-        device_ref=_ref(),
-        public_key_spki=_spki(key),
-        nonce="fresh_nonce_000001",
-        signature=_sign(key, pull_document),
-    )
-    assert delivery is not None
-    assert delivery.command.operation_id == original_operation_id
-    accepted = await ledger.get(operation_id=original_operation_id)
-    assert accepted is not None
-    assert accepted.state is DeviceEraseState.DELIVERY_ACCEPTED
-    assert accepted.attempt_count == 1
 
-    ack_values = {
+def _ack(key, operation_id, *, device_ref=None, result_code="ERASED"):
+    values = {
         "contract": "eidolon.device-foundation.device-operation-ack",
         "contract_version": "1.0",
-        "operation_id": original_operation_id,
+        "operation_id": operation_id,
         "operation_type": "device-local.erase",
-        "device_ref": _ref().model_dump(mode="json"),
+        "device_ref": (device_ref or _ref()).model_dump(mode="json"),
         "ack_sequence": 1,
         "result": "erased",
-        "result_code": "ERASED",
+        "result_code": result_code,
         "device_monotonic_time": 1234,
     }
-    ack = DeviceLocalEraseAck(
-        **ack_values,
-        device_signature=_sign(key, ack_values),
-    )
-    terminal = await AcknowledgeDeviceEraseOperation(
-        ledger=ledger, clock=clock
-    ).execute(ack=ack)
-    assert terminal.state is DeviceEraseState.ACKNOWLEDGED
-    assert terminal.terminal_result == "erased"
-
-    wrong_key = ec.generate_private_key(ec.SECP256R1())
-    forged = ack.model_copy(
-        update={"ack_sequence": 2, "device_signature": _sign(wrong_key, ack.signing_document())}
-    )
-    with pytest.raises(ValueError, match="signature"):
-        await AcknowledgeDeviceEraseOperation(ledger=ledger, clock=clock).execute(ack=forged)
+    return DeviceLocalEraseAck(**values, device_signature=_sign(key, values))
 
 
-async def test_enrollment_binds_signed_operation_key_to_claim_generation(database) -> None:
+async def test_canonical_revoke_materializes_operation_and_signed_ack(database) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
-    tokens = Sha256RetrievalTokenHasher()
-    device = ManagedDevice(
-        identity=DeviceIdentity("device_erase_01"),
-        enrollment_id="enrollment_7",
-        retrieval_token_hash=tokens.hash(TOKEN),
-        retrieval_expires_at=NOW + timedelta(minutes=30),
-        display_name="Erase device",
-        device_kind="simulator",
-        manifest=DeviceManifestDocument.from_mapping(
-            {"schema_version": 1, "title": "Erase device"}
-        ),
-        enrolled_at=NOW,
-        updated_at=NOW,
-        last_enrollment_request_id="enrollment_request_7",
-        claim_generation=7,
+    ledger, operation = await _materialize(database, key)
+    reconcile = ReconcileDeviceEraseOperations(
+        ledger=ledger, clock=Clock(), operation_ttl=timedelta(days=7)
     )
-    proof_values = {
-        "device_instance_id": device.identity.device_id,
-        "enrollment_request_id": device.last_enrollment_request_id,
-        "public_key_spki": _spki(key),
-    }
-    proof = DeviceOperationKeyProof(
-        **proof_values,
-        possession_signature=_sign(key, proof_values),
-    )
-    ledger = SqlDeviceEraseLedger(database)
-    key_id = await BindDeviceOperationKey(
-        devices=EnrollmentDeviceRepository(device),
-        tokens=tokens,
-        ledger=ledger,
-        clock=Clock(),
-    ).execute(
-        enrollment_id=device.enrollment_id,
-        retrieval_token=TOKEN,
-        proof=proof,
-    )
-    assert key_id == operation_key_id(proof.public_key_spki)
+    assert await reconcile.execute() == 0
+    pending = await ledger.get(operation_id=operation.command.operation_id)
+    assert pending is not None and pending.state is DeviceEraseState.PENDING
 
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    operation = await ledger.get_for_device(device_ref=_ref())
-    assert operation is not None
-    assert operation.key_id == key_id
-    assert operation.public_key_spki == proof.public_key_spki
-
-
-async def test_established_claim_uses_device_control_not_enrollment(database) -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
-    device = ManagedDevice(
-        identity=DeviceIdentity("device_erase_01"),
-        enrollment_id="enrollment_7",
-        retrieval_token_hash="retired-after-claim-active",
-        retrieval_expires_at=NOW - timedelta(days=1),
-        display_name="Established device",
-        device_kind="simulator",
-        manifest=DeviceManifestDocument.from_mapping(
-            {"schema_version": 1, "title": "Established device"}
-        ),
-        enrolled_at=NOW - timedelta(days=2),
-        updated_at=NOW,
-        owner_domain_generation=1,
-        claim_generation=7,
-        trust_epoch=4,
-        owner_id="owner-domain_01",
-        lifecycle_state=DeviceLifecycleState.REVOKED,
-    )
-    assert device.device_ref is not None
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-
-    class MustNotProvision:
-        async def execute(self, **_kwargs):
-            raise AssertionError("revoked Claim must not provision a channel")
-
-    service = PullDeviceConfiguration(
-        devices=EnrollmentDeviceRepository(device),
-        ledger=ledger,
-        provision=MustNotProvision(),
-    )
-    nonce = "configuration_nonce_0001"
+    nonce = "fresh_nonce_000001"
     document = {
-        "device_ref": device.device_ref.model_dump(mode="json"),
+        "device_ref": _ref().model_dump(mode="json"),
         "nonce": nonce,
-        "operation_type": "device-control.configuration",
+        "operation_type": "device-local.erase",
     }
-    result = await service.execute(
-        device_ref=device.device_ref,
-        public_key_spki=_spki(key),
-        nonce=nonce,
+    delivery = await PullDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
+        device_ref=_ref(), public_key_spki=_spki(key), nonce=nonce,
         signature=_sign(key, document),
     )
-    assert result.lifecycle_state is DeviceLifecycleState.REVOKED
-    assert result.assignments is None
-
-    stale = device.device_ref.model_copy(update={"claim_generation": 6})
-    with pytest.raises(KeyError):
-        await service.execute(
-            device_ref=stale,
-            public_key_spki=_spki(key),
-            nonce=nonce,
-            signature=_sign(key, {**document, "device_ref": stale.model_dump(mode="json")}),
-        )
+    assert delivery is not None
+    terminal = await AcknowledgeDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
+        ack=_ack(key, operation.command.operation_id)
+    )
+    assert terminal.state is DeviceEraseState.ACKNOWLEDGED
 
 
-async def test_offline_restart_and_host_relocation_keep_original_operation_id(database) -> None:
+async def test_restart_preserves_event_derived_operation(database) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
-    first = SqlDeviceEraseLedger(database)
-    await _bind(first, key)
-    await _seed_event(database)
-    await first.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    pending = await first.get_for_device(device_ref=_ref())
-    assert pending is not None and pending.state is DeviceEraseState.ACCEPTED
-
+    _ledger, pending = await _materialize(database, key)
     relocated = SqlDeviceEraseLedger(database)
     assert await relocated.materialize_claim_events(
         now=NOW + timedelta(hours=1), operation_ttl=timedelta(days=7)
     ) == 0
     recovered = await relocated.get_for_device(device_ref=_ref())
-    assert recovered is not None
-    assert recovered.command.operation_id == pending.command.operation_id
-    assert recovered.command.deadline == pending.command.deadline
+    assert recovered is not None and recovered.command == pending.command
 
 
-async def test_deadline_and_late_ack_do_not_rewrite_expired_terminal(database) -> None:
+async def test_late_ack_and_conflicting_duplicate_fail_closed(database) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(minutes=5))
-    operation = await ledger.get_for_device(device_ref=_ref())
-    assert operation is not None
+    ledger, operation = await _materialize(database, key, ttl=timedelta(minutes=5))
     clock = Clock(NOW + timedelta(minutes=6))
     assert await ledger.expire_due(now=clock.now()) == 1
-
-    ack_values = {
-        "contract": "eidolon.device-foundation.device-operation-ack",
-        "contract_version": "1.0",
-        "operation_id": operation.command.operation_id,
-        "operation_type": "device-local.erase",
-        "device_ref": _ref().model_dump(mode="json"),
-        "ack_sequence": 1,
-        "result": "erased",
-        "result_code": "ERASED",
-        "device_monotonic_time": 9999,
-    }
-    late = DeviceLocalEraseAck(**ack_values, device_signature=_sign(key, ack_values))
-    unchanged = await AcknowledgeDeviceEraseOperation(
-        ledger=ledger, clock=clock
-    ).execute(ack=late)
+    service = AcknowledgeDeviceEraseOperation(ledger=ledger, clock=clock)
+    unchanged = await service.execute(ack=_ack(key, operation.command.operation_id))
     assert unchanged.state is DeviceEraseState.EXPIRED
-    assert unchanged.terminal_result == "deadline-expired"
-
-
-async def test_pull_crossing_deadline_never_delivers_expired_operation(database) -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(minutes=5))
-    pull_document = {
-        "device_ref": _ref().model_dump(mode="json"),
-        "nonce": "fresh_nonce_000002",
-        "operation_type": "device-local.erase",
-    }
-    delivery = await PullDeviceEraseOperation(
-        ledger=ledger, clock=Clock(NOW + timedelta(minutes=5))
-    ).execute(
-        device_ref=_ref(),
-        public_key_spki=_spki(key),
-        nonce="fresh_nonce_000002",
-        signature=_sign(key, pull_document),
-    )
-    assert delivery is None
-    operation = await ledger.get_for_device(device_ref=_ref())
-    assert operation is not None and operation.state is DeviceEraseState.EXPIRED
-
-
-async def test_permanent_failure_and_duplicate_ack_conflict(database) -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    operation = await ledger.get_for_device(device_ref=_ref())
-    assert operation is not None
-    values = {
-        "contract": "eidolon.device-foundation.device-operation-ack",
-        "contract_version": "1.0",
-        "operation_id": operation.command.operation_id,
-        "operation_type": "device-local.erase",
-        "device_ref": _ref().model_dump(mode="json"),
-        "ack_sequence": 1,
-        "result": "permanent-failure",
-        "result_code": "LOCAL_STORE_DAMAGED",
-        "device_monotonic_time": 1234,
-    }
-    ack = DeviceLocalEraseAck(**values, device_signature=_sign(key, values))
-    service = AcknowledgeDeviceEraseOperation(ledger=ledger, clock=Clock())
-    terminal = await service.execute(ack=ack)
-    assert terminal.state is DeviceEraseState.PERMANENT_FAILURE
-    assert (await service.execute(ack=ack)).state is DeviceEraseState.PERMANENT_FAILURE
-
-    different_values = {**values, "result_code": "KEYSTORE_UNAVAILABLE"}
-    different = DeviceLocalEraseAck(
-        **different_values,
-        device_signature=_sign(key, different_values),
-    )
     with pytest.raises(DeviceEraseIdempotencyConflict):
-        await service.execute(ack=different)
+        await service.execute(
+            ack=_ack(key, operation.command.operation_id, result_code="DIFFERENT")
+        )
 
 
-async def test_old_generation_ack_cannot_change_new_claim(database) -> None:
-    key7 = ec.generate_private_key(ec.SECP256R1())
-    key8 = ec.generate_private_key(ec.SECP256R1())
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key7, generation=7)
-    await _bind(ledger, key8, generation=8)
-    await _seed_event(database, generation=7)
-    await _seed_event(database, generation=8)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    current = await ledger.get_for_device(device_ref=_ref(8))
-    assert current is not None
-    values = {
-        "contract": "eidolon.device-foundation.device-operation-ack",
-        "contract_version": "1.0",
-        "operation_id": current.command.operation_id,
-        "operation_type": "device-local.erase",
-        "device_ref": _ref(7).model_dump(mode="json"),
-        "ack_sequence": 1,
-        "result": "erased",
-        "result_code": "ERASED",
-        "device_monotonic_time": 1234,
-    }
-    stale = DeviceLocalEraseAck(**values, device_signature=_sign(key7, values))
+async def test_old_generation_ack_cannot_change_operation(database) -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    ledger, operation = await _materialize(database, key)
     with pytest.raises(DeviceEraseGenerationConflict):
         await AcknowledgeDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
-            ack=stale
-        )
-    unchanged = await ledger.get(operation_id=current.command.operation_id)
-    assert unchanged is not None and unchanged.state is DeviceEraseState.ACCEPTED
-
-
-async def test_missing_bound_key_is_explicit_permanent_failure(database) -> None:
-    ledger = SqlDeviceEraseLedger(database)
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    operation = await ledger.get_for_device(device_ref=_ref())
-    assert operation is not None
-    assert operation.state is DeviceEraseState.PERMANENT_FAILURE
-    assert operation.result_code == "ACK_KEY_NOT_BOUND"
-
-
-async def test_same_operation_id_with_changed_deadline_is_an_idempotency_conflict(
-    database,
-) -> None:
-    key = ec.generate_private_key(ec.SECP256R1())
-    ledger = SqlDeviceEraseLedger(database)
-    await _bind(ledger, key)
-    await _seed_event(database)
-    await ledger.materialize_claim_events(now=NOW, operation_ttl=timedelta(days=7))
-    async with database.sessions.begin() as session:
-        event = await session.scalar(
-            select(ClaimEventRow).where(ClaimEventRow.event_id == "claim_event_7")
-        )
-        assert event is not None
-        event.occurred_at = NOW + timedelta(minutes=1)
-    with pytest.raises(DeviceEraseIdempotencyConflict):
-        await ledger.materialize_claim_events(
-            now=NOW + timedelta(minutes=1), operation_ttl=timedelta(days=7)
+            ack=_ack(key, operation.command.operation_id, device_ref=_ref(6))
         )

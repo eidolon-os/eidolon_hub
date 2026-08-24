@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, Integer, String, Text
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -24,20 +24,17 @@ class AuthorityStateRow(Base):
 
 
 class DeviceRow(Base):
-    __tablename__ = "hub_devices"
+    """Owner-facing directory projection; Admission remains authoritative."""
+
+    __tablename__ = "hub_device_directory_v1"
 
     device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    enrollment_id: Mapped[str] = mapped_column(String(255))
-    retrieval_token_hash: Mapped[str] = mapped_column(String(64))
-    retrieval_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     display_name: Mapped[str] = mapped_column(String(512))
     device_kind: Mapped[str] = mapped_column(String(255), index=True)
     manifest_json: Mapped[str] = mapped_column(Text)
     manifest_revision: Mapped[str] = mapped_column(String(80))
     enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    last_enrollment_request_id: Mapped[str] = mapped_column(String(255), default="")
-    last_enrollment_fingerprint: Mapped[str] = mapped_column(String(64), default="")
     owner_domain_generation: Mapped[int] = mapped_column(Integer, default=1)
     claim_generation: Mapped[int] = mapped_column(Integer, default=1)
     trust_epoch: Mapped[int] = mapped_column(Integer, default=1)
@@ -46,9 +43,6 @@ class DeviceRow(Base):
     lifecycle_state: Mapped[str] = mapped_column(String(32), index=True)
     last_management_request_id: Mapped[str] = mapped_column(String(255), default="")
     last_management_fingerprint: Mapped[str] = mapped_column(String(128), default="")
-
-    __table_args__ = (Index("ix_hub_devices_enrollment", "enrollment_id", unique=True),)
-
 
 class DeviceManagementEventRow(Base):
     __tablename__ = "hub_events"
@@ -62,81 +56,6 @@ class DeviceManagementEventRow(Base):
     owner_id: Mapped[str] = mapped_column(String(255), default="", index=True)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     data_json: Mapped[str] = mapped_column(Text)
-
-
-class ClaimCommandResultRow(Base):
-    __tablename__ = "hub_claim_command_results"
-
-    owner_domain_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    command_type: Mapped[str] = mapped_column(String(128), primary_key=True)
-    command_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    fingerprint: Mapped[str] = mapped_column(String(128))
-    outcome: Mapped[str] = mapped_column(String(32))
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    owner_domain_generation: Mapped[int] = mapped_column(Integer)
-    claim_generation: Mapped[int] = mapped_column(Integer)
-    trust_epoch: Mapped[int] = mapped_column(Integer)
-    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
-    aggregate_revision: Mapped[int] = mapped_column(Integer)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    event_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-
-
-class ClaimEventRow(Base):
-    __tablename__ = "hub_claim_events"
-
-    stream_position: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    event_id: Mapped[str] = mapped_column(String(255), unique=True, index=True)
-    event_type: Mapped[str] = mapped_column(String(255), index=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
-    owner_domain_generation: Mapped[int] = mapped_column(Integer)
-    claim_generation: Mapped[int] = mapped_column(Integer)
-    trust_epoch: Mapped[int] = mapped_column(Integer)
-    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
-    aggregate_revision: Mapped[int] = mapped_column(Integer)
-    correlation_id: Mapped[str] = mapped_column(String(255))
-    causation_id: Mapped[str] = mapped_column(String(255))
-    actor_principal_id: Mapped[str] = mapped_column(String(255))
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    reason: Mapped[str] = mapped_column(String(256))
-
-
-class DeviceControlOperationRow(Base):
-    """Durable projection of a Claim event into Channel control work."""
-
-    __tablename__ = "hub_device_control_operations"
-
-    event_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    operation_type: Mapped[str] = mapped_column(String(128), index=True)
-    operation_id: Mapped[str] = mapped_column(String(255), unique=True)
-    device_id: Mapped[str] = mapped_column(String(255), index=True)
-    owner_domain_id: Mapped[str] = mapped_column(String(255), index=True)
-    owner_domain_generation: Mapped[int] = mapped_column(Integer)
-    claim_generation: Mapped[int] = mapped_column(Integer)
-    trust_epoch: Mapped[int] = mapped_column(Integer)
-    accepted_manifest_digest: Mapped[str] = mapped_column(String(128))
-    reason: Mapped[str] = mapped_column(String(256))
-    state: Mapped[str] = mapped_column(String(32), index=True)
-    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
-    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    last_error: Mapped[str] = mapped_column(String(512), default="")
-
-
-class DeviceOperationKeyBindingRow(Base):
-    """Device Control's immutable ACK-key binding for one Claim generation."""
-
-    __tablename__ = "hub_device_operation_key_bindings"
-
-    device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
-    owner_domain_generation: Mapped[int] = mapped_column(Integer, primary_key=True)
-    claim_generation: Mapped[int] = mapped_column(Integer, primary_key=True)
-    enrollment_id: Mapped[str] = mapped_column(String(255), unique=True)
-    enrollment_request_id: Mapped[str] = mapped_column(String(255))
-    public_key_spki: Mapped[str] = mapped_column(String(256))
-    key_id: Mapped[str] = mapped_column(String(128))
-    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class DeviceEraseOperationRow(Base):
@@ -237,9 +156,6 @@ class AdmissionGrantRow(Base):
     handoff_key_id: Mapped[str] = mapped_column(String(71))
     operational_key_id: Mapped[str] = mapped_column(String(71))
     grant_json: Mapped[str] = mapped_column(Text)
-    # Physical bridge only: the pre-PH2-B0 column is retained until coordinated
-    # activation, but canonical Admission never reads or writes it.
-    legacy_sealed_grant: Mapped[str | None] = mapped_column("sealed_grant", Text, nullable=True)
     wire_envelope_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

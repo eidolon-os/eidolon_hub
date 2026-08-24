@@ -6,18 +6,16 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, Response, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from hub.adapters.security.enrollment_token import Sha256RetrievalTokenHasher
-from hub.application.device_control_delivery import (
-    DeliverDeviceControlOperations,
-    PeriodicDeviceControlDelivery,
-)
+from hub.admission.application import AdmissionAuthority
+from hub.admission.auth import JwtAdmissionActorProvider
+from hub.admission.http import create_admission_router
+from hub.admission.persistence import SqlAdmissionStore
 from hub.application.projections.device_directory import ProjectDeviceDirectory
-from hub.composition.channel_control import build_channel_provider
 from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
@@ -27,9 +25,7 @@ from hub.composition.resources import (
 from hub.config import HubConfig, load_hub_config
 from hub.device_control.application import (
     AcknowledgeDeviceEraseOperation,
-    BindDeviceOperationKey,
     PeriodicDeviceEraseReconcile,
-    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -52,6 +48,9 @@ class ComposedHttpRuntime:
     device_onboarding: DeviceOnboardingHttpServices
     management: DeviceManagementHttpServices
     device_erase: DeviceEraseHttpServices
+    admission: AdmissionAuthority
+    commissioning_ready: bool
+    admission_actor: JwtAdmissionActorProvider
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
@@ -76,18 +75,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 directory=resources.directory,
             )
             await projector.execute_all()
-            channel_provider = build_channel_provider(
-                config=app_config,
-                http_client=resources.http_client,
-                provider_token=secrets.provider_token,
-            )
             device_onboarding = build_device_onboarding(
                 config=app_config,
-                repositories=resources.repositories,
-                projector=projector,
-                provider=channel_provider,
                 clock=resources.clock,
-                ids=resources.ids,
             )
             management = build_device_management(
                 repositories=resources.repositories,
@@ -97,28 +87,15 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 device_registry_reader_token=secrets.device_registry_reader_token,
                 clock=resources.clock,
                 ids=resources.ids,
-                handoff_ttl=timedelta(
-                    seconds=app_config.onboarding.retrieval_window_seconds
-                ),
             )
-            device_control_delivery = PeriodicDeviceControlDelivery(
-                DeliverDeviceControlOperations(
-                    store=resources.repositories.device_control,
-                    provider=channel_provider,
-                    clock=resources.clock,
-                    retry_base_seconds=(
-                        app_config.channel_provider.revoke_retry_base_seconds
-                    ),
-                    retry_max_seconds=(
-                        app_config.channel_provider.revoke_retry_max_seconds
-                    ),
-                ),
-                interval_seconds=(
-                    app_config.channel_provider.revoke_delivery_poll_seconds
-                ),
+            admission = AdmissionAuthority(
+                store=SqlAdmissionStore(resources.database),
+                clock=resources.clock,
+                ids=resources.ids,
+                owner_domain_id=app_config.onboarding.owner_domain_id,
+                owner_domain_generation=app_config.onboarding.owner_domain_generation,
+                commissioning_proofs=resources.commissioning_proofs,
             )
-            await device_control_delivery.start()
-            stack.push_async_callback(device_control_delivery.stop)
 
             erase_reconcile = ReconcileDeviceEraseOperations(
                 ledger=resources.repositories.device_erase,
@@ -128,20 +105,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 ),
             )
             device_erase = DeviceEraseHttpServices(
-                bind_key=BindDeviceOperationKey(
-                    devices=resources.repositories.devices,
-                    tokens=Sha256RetrievalTokenHasher(),
-                    ledger=resources.repositories.device_erase,
-                    clock=resources.clock,
-                ),
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
                     clock=resources.clock,
-                ),
-                configuration=PullDeviceConfiguration(
-                    devices=resources.repositories.devices,
-                    ledger=resources.repositories.device_erase,
-                    provision=device_onboarding.provision,
                 ),
                 acknowledge=AcknowledgeDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
@@ -166,6 +132,11 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 device_onboarding=device_onboarding.http_services,
                 management=management,
                 device_erase=device_erase,
+                admission=admission,
+                commissioning_ready=resources.commissioning_ready,
+                admission_actor=JwtAdmissionActorProvider(
+                    secret=secrets.management_jwt
+                ),
             )
             yield
         finally:
@@ -183,9 +154,8 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         _request: Request,
         exc: RequestValidationError,
     ) -> JSONResponse:
-        # FastAPI's default 422 body includes the rejected raw input.  Device
-        # onboarding requests contain a retrieval secret, so no input value is
-        # safe to reflect or hand to an access-log collector.
+        # FastAPI's default 422 body includes rejected proof and key inputs, so
+        # no input value is safe to reflect or hand to an access-log collector.
         errors = [
             {key: value for key, value in error.items() if key not in {"input", "url"}}
             for error in exc.errors()
@@ -198,6 +168,16 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     app.include_router(
         create_device_onboarding_router(lambda: require_runtime().device_onboarding)
     )
+
+    async def admission_actor(request: Request):
+        return await require_runtime().admission_actor(request)
+
+    app.include_router(
+        create_admission_router(
+            authority=lambda: require_runtime().admission,
+            actor_provider=admission_actor,
+        )
+    )
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
     )
@@ -208,5 +188,15 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def ready(response: Response) -> dict[str, str]:
+        if not require_runtime().commissioning_ready:
+            response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+            return {
+                "status": "not-ready",
+                "reason": "commissioning-proof-verifier-unavailable",
+            }
+        return {"status": "ready"}
 
     return app

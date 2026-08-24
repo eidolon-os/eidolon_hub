@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sysconfig
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 import yaml
@@ -46,7 +46,6 @@ class OnboardingConfig(_StrictConfig):
     authority_signing_certificate_path: str = (
         "/etc/eidolon/owner-domain/authority_signing_certificate.pem"
     )
-    retrieval_window_seconds: int = Field(default=1800, ge=60, le=86_400)
 
     @model_validator(mode="after")
     def validate_onboarding_contract(self) -> OnboardingConfig:
@@ -74,31 +73,6 @@ class OnboardingConfig(_StrictConfig):
         return self
 
 
-class ChannelProviderConfig(_StrictConfig):
-    contract_url: str = "http://127.0.0.1:8767/v1"
-    revoke_delivery_poll_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
-    revoke_retry_base_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
-    revoke_retry_max_seconds: float = Field(default=60.0, ge=1.0, le=3600.0)
-
-    @model_validator(mode="after")
-    def validate_contract_url(self) -> ChannelProviderConfig:
-        parsed = urlparse(self.contract_url)
-        if (
-            parsed.scheme not in {"http", "https"}
-            or not parsed.netloc
-            or parsed.username is not None
-            or parsed.password is not None
-            or parsed.query
-            or parsed.fragment
-        ):
-            raise ValueError("channel_provider.contract_url must be a plain HTTP(S) base URL")
-        if parsed.scheme == "http" and parsed.hostname not in {"127.0.0.1", "::1", "localhost"}:
-            raise ValueError("remote Channel Provider must use HTTPS")
-        if self.revoke_retry_max_seconds < self.revoke_retry_base_seconds:
-            raise ValueError("revoke retry maximum must not be below the base delay")
-        return self
-
-
 class PersistenceConfig(_StrictConfig):
     path: str = Field(
         default_factory=lambda: str(
@@ -116,14 +90,37 @@ class DeviceControlConfig(_StrictConfig):
     erase_reconcile_poll_seconds: float = Field(default=1.0, ge=0.1, le=60.0)
 
 
+class CommissioningProofConfig(_StrictConfig):
+    """Deployment-selected verifier; development HMAC is never an implicit default."""
+
+    profile: Literal["manufacturer-p256", "development-hmac"] = "manufacturer-p256"
+    setup_secret_registry_path: str | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="after")
+    def validate_profile(self) -> CommissioningProofConfig:
+        if self.profile == "development-hmac" and self.setup_secret_registry_path is None:
+            raise ValueError(
+                "commissioning_proof.setup_secret_registry_path is required for development-hmac"
+            )
+        if self.setup_secret_registry_path is not None and not Path(
+            self.setup_secret_registry_path
+        ).is_absolute():
+            raise ValueError(
+                "commissioning_proof.setup_secret_registry_path must be absolute"
+            )
+        return self
+
+
 class HubConfig(_StrictConfig):
     """Local behavior and external contract addresses."""
 
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)
-    channel_provider: ChannelProviderConfig = Field(default_factory=ChannelProviderConfig)
     device_control: DeviceControlConfig = Field(default_factory=DeviceControlConfig)
+    commissioning_proof: CommissioningProofConfig = Field(
+        default_factory=CommissioningProofConfig
+    )
 
     @classmethod
     def load(cls) -> HubConfig:
