@@ -19,7 +19,7 @@ from hub.contracts.bindings.device import (
 from hub.ports.identity import Clock
 
 from .domain import DeviceEraseGenerationConflict, DeviceEraseOperation
-from .ports import DeviceEraseLedger
+from .ports import DeviceClaimProjection, DeviceClaimProjectionReader, DeviceEraseLedger
 
 _LOG = logging.getLogger(__name__)
 
@@ -28,6 +28,37 @@ _LOG = logging.getLogger(__name__)
 class DeviceEraseDelivery:
     delivery_attempt_id: str
     command: DeviceLocalEraseCommand
+
+
+class PullDeviceConfiguration:
+    """Return one exact Claim projection without provisioning a business Channel."""
+
+    def __init__(self, *, claims: DeviceClaimProjectionReader) -> None:
+        self._claims = claims
+
+    async def execute(
+        self,
+        *,
+        device_ref: DeviceRef,
+        public_key_spki: str,
+        nonce: str,
+        signature: str,
+    ) -> DeviceClaimProjection:
+        claim = await self._claims.get_exact(device_ref=device_ref)
+        if claim is None:
+            raise KeyError(device_ref.device_instance_id)
+        if claim.operational_public_key_spki != public_key_spki:
+            raise PermissionError("configuration key differs from the Claim")
+        verify_p256_signature(
+            public_key_spki=public_key_spki,
+            signing_document={
+                "device_ref": device_ref.model_dump(mode="json"),
+                "nonce": nonce,
+                "operation_type": "device-control.configuration",
+            },
+            signature=signature,
+        )
+        return claim
 
 
 class ReconcileDeviceEraseOperations:
@@ -44,9 +75,7 @@ class ReconcileDeviceEraseOperations:
 
     async def execute(self) -> int:
         now = self._clock.now()
-        created = await self._ledger.materialize_claim_events(
-            now=now, operation_ttl=self._ttl
-        )
+        created = await self._ledger.materialize_claim_events(now=now, operation_ttl=self._ttl)
         await self._ledger.mark_accepted_pending(now=now)
         await self._ledger.expire_due(now=now)
         return created
@@ -82,9 +111,10 @@ class PullDeviceEraseOperation:
         )
         if operation.state.value in {"acknowledged", "expired", "permanent-failure"}:
             return None
-        attempt_id = "erase_delivery_" + hashlib.sha256(
-            f"{operation.command.operation_id}\0{nonce}".encode()
-        ).hexdigest()[:40]
+        attempt_id = (
+            "erase_delivery_"
+            + hashlib.sha256(f"{operation.command.operation_id}\0{nonce}".encode()).hexdigest()[:40]
+        )
         accepted = await self._ledger.accept_delivery(
             operation_id=operation.command.operation_id,
             delivery_attempt_id=attempt_id,

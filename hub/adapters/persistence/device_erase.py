@@ -28,6 +28,7 @@ from hub.device_control.domain import (
     DeviceEraseOperation,
     DeviceEraseState,
 )
+from hub.device_control.ports import DeviceClaimProjection
 
 
 def _aware(value: datetime) -> datetime:
@@ -66,21 +67,15 @@ class SqlDeviceEraseLedger:
             attempt_count=row.attempt_count,
             delivery_attempt_id=row.delivery_attempt_id,
             delivery_accepted_at=(
-                None
-                if row.delivery_accepted_at is None
-                else _aware(row.delivery_accepted_at)
+                None if row.delivery_accepted_at is None else _aware(row.delivery_accepted_at)
             ),
-            acknowledged_at=(
-                None if row.acknowledged_at is None else _aware(row.acknowledged_at)
-            ),
+            acknowledged_at=(None if row.acknowledged_at is None else _aware(row.acknowledged_at)),
             terminal_result=row.terminal_result,
             result_code=row.result_code,
             last_error_code=row.last_error_code,
         )
 
-    async def materialize_claim_events(
-        self, *, now: datetime, operation_ttl: timedelta
-    ) -> int:
+    async def materialize_claim_events(self, *, now: datetime, operation_ttl: timedelta) -> int:
         del now  # event time, never reconciliation time, defines the deadline
         if operation_ttl <= timedelta(0):
             raise ValueError("device erase operation TTL must be positive")
@@ -89,10 +84,7 @@ class SqlDeviceEraseLedger:
                 rows = (
                     await session.scalars(
                         select(AdmissionClaimEventStreamRow)
-                        .where(
-                            AdmissionClaimEventStreamRow.event_type
-                            == self.REVOKE_EVENT_TYPE
-                        )
+                        .where(AdmissionClaimEventStreamRow.event_type == self.REVOKE_EVENT_TYPE)
                         .order_by(AdmissionClaimEventStreamRow.stream_position)
                     )
                 ).all()
@@ -126,13 +118,10 @@ class SqlDeviceEraseLedger:
                                 "Claim event was projected with different erase content"
                             )
                         continue
-                    claim = await session.get(
-                        AdmissionClaimRow, device_ref.device_instance_id
-                    )
+                    claim = await session.get(AdmissionClaimRow, device_ref.device_instance_id)
                     if claim is None or (
                         claim.owner_domain_id != str(device_ref.owner_domain_id)
-                        or claim.owner_domain_generation
-                        != device_ref.owner_domain_generation
+                        or claim.owner_domain_generation != device_ref.owner_domain_generation
                         or claim.claim_generation != device_ref.claim_generation
                         or claim.trust_epoch != device_ref.trust_epoch
                     ):
@@ -201,8 +190,7 @@ class SqlDeviceEraseLedger:
                 rows = (
                     await session.scalars(
                         select(DeviceEraseOperationRow).where(
-                            DeviceEraseOperationRow.state
-                            == DeviceEraseState.ACCEPTED.value,
+                            DeviceEraseOperationRow.state == DeviceEraseState.ACCEPTED.value,
                             DeviceEraseOperationRow.deadline > now,
                         )
                     )
@@ -214,6 +202,44 @@ class SqlDeviceEraseLedger:
     async def get(self, *, operation_id: str) -> DeviceEraseOperation | None:
         async with self._database.sessions() as session:
             row = await session.get(DeviceEraseOperationRow, operation_id)
+        return None if row is None else self._decode(row)
+
+    async def get_exact(self, *, device_ref: DeviceRef) -> DeviceClaimProjection | None:
+        async with self._database.sessions() as session:
+            row = await session.get(AdmissionClaimRow, device_ref.device_instance_id)
+        if row is None or (
+            row.owner_domain_id,
+            row.owner_domain_generation,
+            row.claim_generation,
+            row.trust_epoch,
+        ) != (
+            str(device_ref.owner_domain_id),
+            device_ref.owner_domain_generation,
+            device_ref.claim_generation,
+            device_ref.trust_epoch,
+        ):
+            return None
+        return DeviceClaimProjection(
+            device_ref=device_ref,
+            state=row.state,
+            operational_public_key_spki=row.operational_public_key_spki,
+        )
+
+    async def get_by_source_event(
+        self, *, source_claim_event_id: str, device_ref: DeviceRef
+    ) -> DeviceEraseOperation | None:
+        async with self._database.sessions() as session:
+            row = await session.scalar(
+                select(DeviceEraseOperationRow).where(
+                    DeviceEraseOperationRow.source_event_id == source_claim_event_id,
+                    DeviceEraseOperationRow.device_id == device_ref.device_instance_id,
+                    DeviceEraseOperationRow.owner_domain_id == str(device_ref.owner_domain_id),
+                    DeviceEraseOperationRow.owner_domain_generation
+                    == device_ref.owner_domain_generation,
+                    DeviceEraseOperationRow.claim_generation == device_ref.claim_generation,
+                    DeviceEraseOperationRow.trust_epoch == device_ref.trust_epoch,
+                )
+            )
         return None if row is None else self._decode(row)
 
     async def get_for_device(self, *, device_ref: DeviceRef) -> DeviceEraseOperation | None:

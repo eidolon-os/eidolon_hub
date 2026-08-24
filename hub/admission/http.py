@@ -303,16 +303,8 @@ def create_admission_router(
         command_id = payload.get("command_id")
         try:
             command_id = _command_id(payload)
-            _strict(payload, {"command_id", "correlation_id", "device_ref", "reason"})
-            command = RevokeClaim.model_validate(
-                {
-                    "operation": "device.claim-revocation",
-                    "command_id": command_id,
-                    "correlation_id": payload["correlation_id"],
-                    "device_ref": payload["device_ref"],
-                    "reason": payload["reason"],
-                }
-            )
+            _strict(payload, set(RevokeClaim.model_fields))
+            command = RevokeClaim.model_validate(payload)
             device_ref = command.device_ref
             if device_ref.device_instance_id != device_instance_id:
                 raise AdmissionProblem(

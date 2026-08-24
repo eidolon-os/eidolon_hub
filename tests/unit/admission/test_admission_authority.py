@@ -271,14 +271,14 @@ async def collect_and_ack(harness):
     collection_document = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "collection_challenge": created["collection_challenge"],
     }
     collected = await authority.collect_claim_grant(
         command_id="collect_01",
         correlation_id="intent_01",
         enrollment_id=created["enrollment_id"],
-        proposal_revision=2,
+        proposal_revision=1,
         collection_challenge=created["collection_challenge"],
         handoff_key_proof=sign(handoff, collection_document),
     )
@@ -328,7 +328,7 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
     proof_doc = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "collection_challenge": created["collection_challenge"],
     }
     collection_proof = sign(handoff, proof_doc)
@@ -336,7 +336,7 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
         command_id="collect_01",
         correlation_id="intent_01",
         enrollment_id=created["enrollment_id"],
-        proposal_revision=2,
+        proposal_revision=1,
         collection_challenge=created["collection_challenge"],
         handoff_key_proof=collection_proof,
     )
@@ -344,7 +344,7 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
         command_id="collect_02",
         correlation_id="intent_reply_lost",
         enrollment_id=created["enrollment_id"],
-        proposal_revision=2,
+        proposal_revision=1,
         collection_challenge=created["collection_challenge"],
         handoff_key_proof=collection_proof,
     )
@@ -403,7 +403,7 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
                 command_id="collect_after_claim_active",
                 correlation_id="intent_after_claim_active",
                 enrollment_id=created["enrollment_id"],
-                proposal_revision=2,
+                proposal_revision=1,
                 collection_challenge=created["collection_challenge"],
                 handoff_key_proof=collection_proof,
             )
@@ -450,7 +450,7 @@ async def test_same_command_different_payload_conflicts_and_invalid_proof_rolls_
             command_id="collect_01",
             correlation_id="intent_01",
             enrollment_id=created["enrollment_id"],
-            proposal_revision=2,
+            proposal_revision=1,
             collection_challenge=created["collection_challenge"],
             handoff_key_proof="invalid",
         )
@@ -484,7 +484,7 @@ async def test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted(harn
     proof_doc = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "collection_challenge": created["collection_challenge"],
     }
     async with database.sessions.begin() as session:
@@ -500,7 +500,7 @@ async def test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted(harn
             command_id="collect_pre_b0",
             correlation_id="intent_pre_b0",
             enrollment_id=created["enrollment_id"],
-            proposal_revision=2,
+            proposal_revision=1,
             collection_challenge=created["collection_challenge"],
             handoff_key_proof=sign(handoff, proof_doc),
         )
@@ -583,7 +583,7 @@ async def test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack(harness
     proof_doc = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "collection_challenge": created["collection_challenge"],
     }
     with pytest.raises(AdmissionProblem) as stale:
@@ -591,7 +591,7 @@ async def test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack(harness
             command_id="collect_after_revoke",
             correlation_id="intent_02",
             enrollment_id=created["enrollment_id"],
-            proposal_revision=2,
+            proposal_revision=1,
             collection_challenge=created["collection_challenge"],
             handoff_key_proof=sign(handoff, proof_doc),
         )
@@ -917,7 +917,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
     proof_doc = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "collection_challenge": created["collection_challenge"],
     }
     collection_proof = sign(handoff, proof_doc)
@@ -925,7 +925,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
         command_id="collect_wire_01",
         correlation_id="intent_01",
         enrollment_id=created["enrollment_id"],
-        proposal_revision=2,
+        proposal_revision=1,
         collection_challenge=created["collection_challenge"],
         handoff_key_proof=collection_proof,
     )
@@ -933,7 +933,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
         command_id="collect_wire_01",
         correlation_id="different_audit_metadata",
         enrollment_id=created["enrollment_id"],
-        proposal_revision=2,
+        proposal_revision=1,
         collection_challenge=created["collection_challenge"],
         handoff_key_proof=collection_proof,
     )
@@ -950,7 +950,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
         "contract": "eidolon.device-foundation.claim-grant-aad",
         "profile_id": "eidolon-trust-p256-hpke-v1",
         "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 2,
+        "proposal_revision": 1,
         "device_instance_id": "device_01",
         "hardware_evidence_digest": envelope["aad"]["hardware_evidence_digest"],
         "manifest_ref": created["reviewed_manifest_ref"],
@@ -1127,7 +1127,7 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
         collection_doc = {
             "contract": "eidolon.device-foundation.claim-grant-collection",
             "enrollment_id": created.enrollment_id,
-            "proposal_revision": 2,
+            "proposal_revision": 1,
             "collection_challenge": created.collection_challenge,
         }
         collect_response = await client.post(
@@ -1136,7 +1136,7 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
                 "command_id": "http_collect_01",
                 "correlation_id": "http_intent_01",
                 "enrollment_id": created.enrollment_id,
-                "proposal_revision": 2,
+                "proposal_revision": 1,
                 "collection_challenge": created.collection_challenge,
                 "handoff_key_proof": sign(handoff, collection_doc),
             },
@@ -1175,6 +1175,7 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
         revoke_response = await client.post(
             f"/api/admission/v1/claims/{active.device_ref.device_instance_id}:revoke",
             json={
+                "operation": "device.claim-revocation",
                 "command_id": "http_revoke_01",
                 "correlation_id": "http_remove_01",
                 "device_ref": active.device_ref.model_dump(mode="json"),

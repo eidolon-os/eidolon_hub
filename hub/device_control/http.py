@@ -21,6 +21,7 @@ from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 
 from .application import (
     AcknowledgeDeviceEraseOperation,
+    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -39,8 +40,21 @@ class PullEraseOperationRequest(_AdapterModel):
     device_signature: str = Field(min_length=86, max_length=86)
 
 
+class PullDeviceConfigurationRequest(PullEraseOperationRequest):
+    pass
+
+
+class DeviceConfigurationResult(_AdapterModel):
+    operation: str = "device-control.configuration"
+    nonce: str
+    device_ref: DeviceRef
+    lifecycle_state: str
+    channels: tuple[object, ...] = ()
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceEraseHttpServices:
+    configuration: PullDeviceConfiguration
     pull: PullDeviceEraseOperation
     acknowledge: AcknowledgeDeviceEraseOperation
     reconcile: ReconcileDeviceEraseOperations
@@ -55,6 +69,57 @@ def create_device_erase_router(
 
     def current() -> DeviceEraseHttpServices:
         return services() if callable(services) else services
+
+    async def authorize_exact_status(
+        *,
+        authorization: str,
+        device_ref: DeviceRef,
+    ) -> None:
+        principal = await current().authorizer.authorize(
+            credential=authorization,
+            permission=ManagementPermission.DEVICE_CONTROL_GET,
+            owner_scope=str(device_ref.owner_domain_id),
+            device_id=device_ref.device_instance_id,
+        )
+        expected = (
+            device_ref.owner_domain_generation,
+            device_ref.claim_generation,
+            device_ref.trust_epoch,
+        )
+        actual = (
+            principal.target_owner_domain_generation,
+            principal.target_claim_generation,
+            principal.target_trust_epoch,
+        )
+        if actual != expected:
+            raise PermissionError("management credential generation scope mismatch")
+
+    @router.post(
+        "/configuration:pull",
+        response_model=DeviceConfigurationResult,
+    )
+    async def pull_configuration(
+        payload: PullDeviceConfigurationRequest,
+    ) -> DeviceConfigurationResult:
+        try:
+            claim = await current().configuration.execute(
+                device_ref=payload.device_ref,
+                public_key_spki=payload.public_key_spki,
+                nonce=payload.nonce,
+                signature=payload.device_signature,
+            )
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="STALE_GENERATION") from exc
+        except (PermissionError, DeviceEraseContractError) as exc:
+            raise HTTPException(status_code=403, detail="device proof rejected") from exc
+        if claim.state not in {"active", "revoked"}:
+            raise HTTPException(status_code=409, detail="CLAIM_NOT_ACTIVE")
+        return DeviceConfigurationResult(
+            nonce=payload.nonce,
+            device_ref=claim.device_ref,
+            lifecycle_state="approved" if claim.state == "active" else "revoked",
+            channels=(),
+        )
 
     @router.post(
         "/erase-operations:pull",
@@ -107,20 +172,14 @@ def create_device_erase_router(
             raise HTTPException(status_code=422, detail="path and ACK operation_id differ")
         try:
             payload = DeviceLocalEraseAck.model_validate(evidence.payload)
-            if (
-                payload.operation_id != operation_id
-                or payload.device_ref != evidence.device_ref
-            ):
-                raise DeviceEraseGenerationConflict(
-                    "evidence and nested ACK DeviceRef differ"
-                )
+            if payload.operation_id != operation_id or payload.device_ref != evidence.device_ref:
+                raise DeviceEraseGenerationConflict("evidence and nested ACK DeviceRef differ")
             current_operation = await current().ledger.get(operation_id=operation_id)
             if current_operation is None:
                 raise KeyError(operation_id)
             if (
                 current_operation.command.device_ref != evidence.device_ref
-                or current_operation.delivery_attempt_id
-                != evidence.delivery_attempt_id
+                or current_operation.delivery_attempt_id != evidence.delivery_attempt_id
             ):
                 raise DeviceEraseGenerationConflict(
                     "evidence is not bound to the accepted Delivery attempt"
@@ -142,6 +201,47 @@ def create_device_erase_router(
         )
 
     @router.get(
+        "/owners/{owner_scope}/devices/{device_id}/erase-operations",
+        response_model=DeviceLocalEraseOperationStatus,
+    )
+    async def get_status_by_source_event(
+        owner_scope: str,
+        device_id: str,
+        source_claim_event_id: str,
+        owner_domain_generation: int,
+        claim_generation: int,
+        trust_epoch: int,
+        authorization: str = Header(alias="Authorization"),
+    ) -> DeviceLocalEraseOperationStatus:
+        runtime = current()
+        await runtime.reconcile.execute()
+        try:
+            device_ref = DeviceRef(
+                device_instance_id=device_id,
+                owner_domain_id=owner_scope,
+                owner_domain_generation=owner_domain_generation,
+                claim_generation=claim_generation,
+                trust_epoch=trust_epoch,
+            )
+            await authorize_exact_status(
+                authorization=authorization,
+                device_ref=device_ref,
+            )
+            operation = await runtime.ledger.get_by_source_event(
+                source_claim_event_id=source_claim_event_id,
+                device_ref=device_ref,
+            )
+            if operation is None:
+                raise KeyError(source_claim_event_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail="operation not found") from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="forbidden") from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid DeviceRef") from exc
+        return operation.status
+
+    @router.get(
         "/owners/{owner_scope}/devices/{device_id}/erase-operations/{operation_id}",
         response_model=DeviceLocalEraseOperationStatus,
     )
@@ -154,18 +254,16 @@ def create_device_erase_router(
         runtime = current()
         await runtime.reconcile.execute()
         try:
-            await runtime.authorizer.authorize(
-                credential=authorization,
-                permission=ManagementPermission.DEVICE_CONTROL_GET,
-                owner_scope=owner_scope,
-                device_id=device_id,
-            )
             operation = await runtime.ledger.get(operation_id=operation_id)
             if operation is None or (
                 str(operation.command.device_ref.owner_domain_id) != owner_scope
                 or operation.command.device_ref.device_instance_id != device_id
             ):
                 raise KeyError(operation_id)
+            await authorize_exact_status(
+                authorization=authorization,
+                device_ref=operation.command.device_ref,
+            )
         except KeyError as exc:
             raise HTTPException(status_code=404, detail="operation not found") from exc
         except PermissionError as exc:

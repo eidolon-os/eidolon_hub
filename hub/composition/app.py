@@ -26,6 +26,7 @@ from hub.config import HubConfig, load_hub_config
 from hub.device_control.application import (
     AcknowledgeDeviceEraseOperation,
     PeriodicDeviceEraseReconcile,
+    PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
@@ -105,6 +106,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 ),
             )
             device_erase = DeviceEraseHttpServices(
+                configuration=PullDeviceConfiguration(
+                    claims=resources.repositories.device_erase,
+                ),
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
                     clock=resources.clock,
@@ -134,9 +138,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 device_erase=device_erase,
                 admission=admission,
                 commissioning_ready=resources.commissioning_ready,
-                admission_actor=JwtAdmissionActorProvider(
-                    secret=secrets.management_jwt
-                ),
+                admission_actor=JwtAdmissionActorProvider(secret=secrets.management_jwt),
             )
             yield
         finally:
@@ -165,9 +167,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             content={"detail": jsonable_encoder(errors)},
         )
 
-    app.include_router(
-        create_device_onboarding_router(lambda: require_runtime().device_onboarding)
-    )
+    app.include_router(create_device_onboarding_router(lambda: require_runtime().device_onboarding))
 
     async def admission_actor(request: Request):
         return await require_runtime().admission_actor(request)
@@ -181,9 +181,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
     )
-    app.include_router(
-        create_device_erase_router(services=lambda: require_runtime().device_erase)
-    )
+    app.include_router(create_device_erase_router(services=lambda: require_runtime().device_erase))
 
     @app.get("/health")
     async def health() -> dict[str, str]:

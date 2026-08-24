@@ -599,7 +599,7 @@ class AdmissionAuthority:
                     "outcome": "committed",
                     "decision": decision.model_dump(mode="json"),
                     "grant_id": grant_id,
-                    "proposal_revision": proposal.revision,
+                    "proposal_revision": decision.expected_proposal_revision,
                     "occurred_at": now.isoformat().replace("+00:00", "Z"),
                 }
                 await self.store.save_result(
@@ -708,8 +708,9 @@ class AdmissionAuthority:
                         "pre-PH2-B0 opaque grant cannot be replayed as a canonical wire envelope",
                     )
                 was_delivered = grant is not None and grant.wire_envelope_json is not None
+                decision = await self.store.get_decision_for_enrollment(session, enrollment_id)
                 expected_collection_revision = (
-                    proposal.revision - 1 if was_delivered else proposal.revision
+                    decision.expected_proposal_revision if decision is not None else None
                 )
                 if expected_collection_revision != proposal_revision:
                     raise AdmissionProblem("REVISION_CONFLICT", "proposal revision is stale")
@@ -782,7 +783,7 @@ class AdmissionAuthority:
                     "wire_envelope": json.loads(grant.wire_envelope_json),
                     "expires_at": aware(grant.expires_at).isoformat().replace("+00:00", "Z"),
                     "approval_decision_id": grant.decision_id,
-                    "proposal_revision": proposal.revision,
+                    "proposal_revision": proposal_revision,
                     "occurred_at": aware(grant.delivered_at).isoformat().replace("+00:00", "Z"),
                 }
                 await self.store.save_result(
@@ -1217,10 +1218,10 @@ class AdmissionAuthority:
         )
 
     @staticmethod
-    def _proposal(row) -> EnrollmentProposal:
+    def _proposal(row, *, content_revision: int) -> EnrollmentProposal:
         return EnrollmentProposal(
             enrollment_id=row.enrollment_id,
-            proposal_revision=row.revision,
+            proposal_revision=content_revision,
             state=EnrollmentProposalState(row.state),
             device_instance_candidate_id=row.device_instance_id,
             requested_owner_domain_id=row.requested_owner_domain_id,
@@ -1284,7 +1285,12 @@ class AdmissionAuthority:
                 acknowledged_at=(aware(ack_row.acknowledged_at) if ack_row is not None else None),
             )
         return EnrollmentRecoveryProjection(
-            proposal=self._proposal(proposal),
+            proposal=self._proposal(
+                proposal,
+                content_revision=(
+                    decision_row.expected_proposal_revision if decision_row is not None else 1
+                ),
+            ),
             approval_decision=decision,
             grant_delivery=delivery,
             claim=self._claim(claim_row) if claim_row is not None else None,
