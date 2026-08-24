@@ -425,6 +425,14 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
                 .where(AdmissionOutboxRow.event_type == "live.eidolon.device.claim-activated.v1")
             )
             assert activated == 1
+            activated_event = await session.scalar(
+                select(AdmissionOutboxRow).where(
+                    AdmissionOutboxRow.event_type == "live.eidolon.device.claim-activated.v1"
+                )
+            )
+            assert json.loads(activated_event.event_json)["data"]["business_owner_id"] == (
+                "owner_01"
+            )
             delivered = await session.scalar(
                 select(func.count())
                 .select_from(AdmissionOutboxRow)

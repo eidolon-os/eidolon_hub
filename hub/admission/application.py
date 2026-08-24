@@ -1014,6 +1014,7 @@ class AdmissionAuthority:
                     occurred_at=now,
                     data={
                         "device_ref": device_ref.model_dump(mode="json"),
+                        "business_owner_id": decision.target_business_owner_id,
                         "manifest_ref": manifest_ref.model_dump(mode="json"),
                         "approval_decision_id": grant.decision_id,
                         "activated_at": now.isoformat().replace("+00:00", "Z"),
