@@ -101,6 +101,12 @@ class JwtOwnerManagementAuthorizer:
             ManagementPermission.DEVICE_CONTROL_GET: "device.claim.revoke",
             ManagementPermission.DEVICE_APPROVE: "device.claim.approve",
             ManagementPermission.DEVICE_REVOKE: "device.claim.revoke",
+            # Named because it exists: the canonical ActorRef scope for reading
+            # the Claim stream, which the router's own actor path already
+            # requires. Leaving it unmapped refused every JWT principal with a
+            # message that named no scope at all, so the two ways into this
+            # route disagreed about what authorizes it.
+            ManagementPermission.CLAIM_EVENTS: "device.claim.events.read",
         }.get(permission)
         if not is_admin and required_scope not in scopes:
             raise PermissionError(f"management credential lacks {required_scope} scope")

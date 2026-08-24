@@ -152,6 +152,38 @@ async def test_device_registry_reader_can_only_read_one_exact_device() -> None:
             )
 
 
+async def test_reading_the_claim_stream_names_the_scope_it_requires() -> None:
+    """Both ways into the Claim stream must agree on what authorizes it.
+
+    Kernel reads it as a workload with the exact reader token. A JWT principal
+    is the other way in, and the permission had no scope mapped, so every such
+    principal was refused with a message that named no scope — indistinguishable
+    from a misconfigured deployment.
+    """
+
+    authorizer = JwtOwnerManagementAuthorizer(
+        secret=SECRET,
+        devices=_Devices(),
+        device_registry_reader_token=REGISTRY_READER_TOKEN,
+    )
+
+    granted = await authorizer.authorize(
+        credential=_credential(scopes=["device.read", "device.claim.events.read"]),
+        permission=ManagementPermission.CLAIM_EVENTS,
+        owner_scope=None,
+        device_id=None,
+    )
+    assert granted.subject_id == "eidolon-agent/test"
+
+    with pytest.raises(PermissionError, match="device.claim.events.read"):
+        await authorizer.authorize(
+            credential=_credential(scopes=["device.read"]),
+            permission=ManagementPermission.CLAIM_EVENTS,
+            owner_scope=None,
+            device_id=None,
+        )
+
+
 async def test_invalid_signature_or_missing_role_is_rejected() -> None:
     authorizer = JwtOwnerManagementAuthorizer(
         secret=SECRET,

@@ -87,6 +87,49 @@ async def open_runtime_resources(
     )
 
 
+def read_development_commissioning_registry(
+    path: Path,
+) -> dict[str, DevelopmentCommissioningIdentity]:
+    """Parse one development commissioning registry, without any file policy.
+
+    Kept separate from the loader below because who may own the file is a
+    deployment fact and what the file means is a contract. A consumer that
+    cannot reproduce the deployment's ownership — an unprivileged process test,
+    say — needs its own policy, not its own parser: the fork is how the two
+    drift until the test passes against a format nothing else accepts.
+    """
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if document.get("profile") != "eidolon-development-hmac-commissioning-v1":
+        raise ValueError("development commissioning registry profile differs")
+    encoded = document["devices"]
+    if not isinstance(encoded, dict) or not encoded:
+        raise ValueError("development commissioning registry has no devices")
+    identities_by_lookup: dict[str, DevelopmentCommissioningIdentity] = {}
+    for raw_lookup_id, raw_entry in encoded.items():
+        lookup_id = str(raw_lookup_id)
+        if not isinstance(raw_entry, dict) or set(raw_entry) != {
+            "setup_secret",
+            "hardware_identity_ref",
+        }:
+            raise ValueError("development commissioning registry entry is invalid")
+        encoded_secret = str(raw_entry["setup_secret"])
+        hardware_identity_ref = str(raw_entry["hardware_identity_ref"])
+        secret = base64.urlsafe_b64decode(encoded_secret + "=" * (-len(encoded_secret) % 4))
+        if (
+            not lookup_id.strip()
+            or len(lookup_id) > 128
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", hardware_identity_ref)
+            or len(secret) < 16
+        ):
+            raise ValueError("development commissioning registry entry is invalid")
+        identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(
+            setup_secret=secret,
+            hardware_identity_ref=hardware_identity_ref,
+        )
+    return identities_by_lookup
+
+
 def load_commissioning_proof_verifier(
     config: HubConfig,
 ) -> tuple[CommissioningProofVerifier, bool]:
@@ -104,36 +147,7 @@ def load_commissioning_proof_verifier(
             "development commissioning registry must be root-owned and inaccessible to others"
         )
     try:
-        document = json.loads(path.read_text(encoding="utf-8"))
-        if document.get("profile") != "eidolon-development-hmac-commissioning-v1":
-            raise ValueError("development commissioning registry profile differs")
-        encoded = document["devices"]
-        if not isinstance(encoded, dict) or not encoded:
-            raise ValueError("development commissioning registry has no devices")
-        identities_by_lookup: dict[str, DevelopmentCommissioningIdentity] = {}
-        for raw_lookup_id, raw_entry in encoded.items():
-            lookup_id = str(raw_lookup_id)
-            if not isinstance(raw_entry, dict) or set(raw_entry) != {
-                "setup_secret",
-                "hardware_identity_ref",
-            }:
-                raise ValueError("development commissioning registry entry is invalid")
-            encoded_secret = str(raw_entry["setup_secret"])
-            hardware_identity_ref = str(raw_entry["hardware_identity_ref"])
-            secret = base64.urlsafe_b64decode(
-                encoded_secret + "=" * (-len(encoded_secret) % 4)
-            )
-            if (
-                not lookup_id.strip()
-                or len(lookup_id) > 128
-                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", hardware_identity_ref)
-                or len(secret) < 16
-            ):
-                raise ValueError("development commissioning registry entry is invalid")
-            identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(
-                setup_secret=secret,
-                hardware_identity_ref=hardware_identity_ref,
-            )
+        identities_by_lookup = read_development_commissioning_registry(path)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("development commissioning registry is invalid") from exc
     return (
