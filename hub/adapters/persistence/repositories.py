@@ -9,6 +9,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from hub.adapters.persistence.channel_reconciliation import SqlChannelRevocationStore
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.device_erase import SqlDeviceEraseLedger
 from hub.adapters.persistence.models import (
@@ -246,5 +247,6 @@ class SqlHubRepositories:
         mutation_lock = asyncio.Lock()
         self.devices = SqlDeviceRepository(database)
         self.device_mutations = SqlDeviceMutationUnitOfWork(database, lock=mutation_lock)
+        self.channel_revocations = SqlChannelRevocationStore(database)
         self.device_erase = SqlDeviceEraseLedger(database)
         self.management_events = SqlDeviceManagementEventLedger(database)

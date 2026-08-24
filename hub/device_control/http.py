@@ -8,6 +8,8 @@ from typing import Callable
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from hub.channel_reconciliation.application import ReconcileChannelBinding
+from hub.channel_reconciliation.domain import ChannelBinding
 from hub.contracts.bindings.device import (
     DeliverEnvelope,
     DeliveryAcceptance,
@@ -49,12 +51,13 @@ class DeviceConfigurationResult(_AdapterModel):
     nonce: str
     device_ref: DeviceRef
     lifecycle_state: str
-    channels: tuple[object, ...] = ()
+    channels: tuple[ChannelBinding, ...] = Field(default=(), max_length=1)
 
 
 @dataclass(frozen=True, slots=True)
 class DeviceEraseHttpServices:
     configuration: PullDeviceConfiguration
+    channel_binding: ReconcileChannelBinding
     pull: PullDeviceEraseOperation
     acknowledge: AcknowledgeDeviceEraseOperation
     reconcile: ReconcileDeviceEraseOperations
@@ -114,11 +117,16 @@ def create_device_erase_router(
             raise HTTPException(status_code=403, detail="device proof rejected") from exc
         if claim.state not in {"active", "revoked"}:
             raise HTTPException(status_code=409, detail="CLAIM_NOT_ACTIVE")
+        channels = (
+            await current().channel_binding.execute(device_ref=claim.device_ref)
+            if claim.state == "active"
+            else ()
+        )
         return DeviceConfigurationResult(
             nonce=payload.nonce,
             device_ref=claim.device_ref,
             lifecycle_state="approved" if claim.state == "active" else "revoked",
-            channels=(),
+            channels=channels,
         )
 
     @router.post(

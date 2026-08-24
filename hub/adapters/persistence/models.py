@@ -58,6 +58,27 @@ class DeviceManagementEventRow(Base):
     data_json: Mapped[str] = mapped_column(Text)
 
 
+class ChannelRevocationDeliveryRow(Base):
+    """Durable delivery state; Provider remains authoritative for Channel state."""
+
+    __tablename__ = "hub_channel_revocation_delivery_v1"
+
+    source_event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(128), unique=True)
+    device_id: Mapped[str] = mapped_column(String(128), index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    reason: Mapped[str] = mapped_column(String(256))
+    state: Mapped[str] = mapped_column(String(24), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    result_code: Mapped[str] = mapped_column(String(128), default="")
+    last_error: Mapped[str] = mapped_column(String(512), default="")
+
+
 class DeviceEraseOperationRow(Base):
     """Independent device-local.erase ledger; never stores Channel state."""
 

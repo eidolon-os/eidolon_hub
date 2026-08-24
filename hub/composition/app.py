@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
@@ -16,6 +17,12 @@ from hub.admission.auth import JwtAdmissionActorProvider
 from hub.admission.http import create_admission_router
 from hub.admission.persistence import SqlAdmissionStore
 from hub.application.projections.device_directory import ProjectDeviceDirectory
+from hub.channel_reconciliation.application import (
+    PeriodicChannelRevocationReconcile,
+    ReconcileChannelBinding,
+    ReconcileChannelRevocations,
+)
+from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
 from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
@@ -98,6 +105,23 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 commissioning_proofs=resources.commissioning_proofs,
                 claim_directory_projector=projector.execute,
             )
+            channel_provider = ChannelProviderHttpClient(
+                resources.http_client,
+                token=os.environ.get("EIDOLON_HUB_CHANNEL_PROVIDER_TOKEN", ""),
+                contract_url=os.environ.get(
+                    "EIDOLON_HUB_CHANNEL_PROVIDER_URL",
+                    "http://127.0.0.1:8767/v1",
+                ),
+            )
+            channel_revocations = PeriodicChannelRevocationReconcile(
+                ReconcileChannelRevocations(
+                    store=resources.repositories.channel_revocations,
+                    provider=channel_provider,
+                    clock=resources.clock,
+                )
+            )
+            await channel_revocations.start()
+            stack.push_async_callback(channel_revocations.stop)
 
             erase_reconcile = ReconcileDeviceEraseOperations(
                 ledger=resources.repositories.device_erase,
@@ -109,6 +133,11 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             device_erase = DeviceEraseHttpServices(
                 configuration=PullDeviceConfiguration(
                     claims=resources.repositories.device_erase,
+                ),
+                channel_binding=ReconcileChannelBinding(
+                    devices=resources.repositories.devices,
+                    provider=channel_provider,
+                    clock=resources.clock,
                 ),
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,

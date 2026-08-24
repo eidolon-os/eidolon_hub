@@ -54,9 +54,10 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
                 "admission_grant_acks_v1",
                 "admission_outbox_v1",
                 "admission_proposals_v1",
+                "hub_channel_revocation_delivery_v1",
                 "hub_device_erase_ack_evidence",
                 "hub_device_erase_operations",
-                    "hub_device_directory_v1",
+                "hub_device_directory_v1",
                 "hub_events",
                 "hub_authority_state",
             }

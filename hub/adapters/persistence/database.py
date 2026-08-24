@@ -178,7 +178,9 @@ class HubDatabase:
 
         missing_tables = expected_tables - actual_tables
         if missing_tables and all(
-            table_name.startswith("admission_") for table_name in missing_tables
+            table_name.startswith("admission_")
+            or table_name == "hub_channel_revocation_delivery_v1"
+            for table_name in missing_tables
         ):
             for table_name in sorted(missing_tables):
                 Base.metadata.tables[table_name].create(connection, checkfirst=True)

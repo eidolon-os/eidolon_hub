@@ -18,6 +18,7 @@ from eidolon_sdk.device_foundation.v1 import (
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from hub.channel_reconciliation.domain import ChannelBinding
 from hub.device_control.application import DeviceEraseDelivery, PullDeviceConfiguration
 from hub.device_control.domain import DeviceEraseOperation, DeviceEraseState
 from hub.device_control.http import DeviceEraseHttpServices, create_device_erase_router
@@ -57,6 +58,16 @@ class _Configuration:
         raise AssertionError("configuration was not requested")
 
 
+class _ChannelBinding:
+    def __init__(self, channels=()) -> None:
+        self.channels = channels
+        self.requested = []
+
+    async def execute(self, *, device_ref):
+        self.requested.append(device_ref)
+        return self.channels
+
+
 def _b64url(value: bytes) -> str:
     return base64.urlsafe_b64encode(value).rstrip(b"=").decode()
 
@@ -84,7 +95,7 @@ class _ClaimReader:
         return self.projection if device_ref == self.projection.device_ref else None
 
 
-def test_configuration_pull_is_exact_claim_projection_without_channel_provision() -> None:
+def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     public_key_spki = _spki(key)
     nonce = "fresh_nonce_000001"
@@ -93,6 +104,19 @@ def test_configuration_pull_is_exact_claim_projection_without_channel_provision(
         "nonce": nonce,
         "operation_type": "device-control.configuration",
     }
+    binding = _ChannelBinding(
+        (
+            ChannelBinding(
+                channel_id="channel_01",
+                purpose="device-session",
+                kinds=("audio",),
+                binding_format="application/vnd.eidolon.livekit-session+json;v=2",
+                issued_at_ms=1,
+                expires_at_ms=1_800_000_000_000,
+                opaque_binding="e30=",
+            ),
+        )
+    )
     app = FastAPI()
     app.include_router(
         create_device_erase_router(
@@ -106,6 +130,7 @@ def test_configuration_pull_is_exact_claim_projection_without_channel_provision(
                         )
                     )
                 ),
+                channel_binding=binding,
                 pull=_Pull(),
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
@@ -130,8 +155,19 @@ def test_configuration_pull_is_exact_claim_projection_without_channel_provision(
         "nonce": nonce,
         "device_ref": REF.model_dump(mode="json"),
         "lifecycle_state": "approved",
-        "channels": [],
+        "channels": [
+            {
+                "channel_id": "channel_01",
+                "purpose": "device-session",
+                "kinds": ["audio"],
+                "binding_format": "application/vnd.eidolon.livekit-session+json;v=2",
+                "issued_at_ms": 1,
+                "expires_at_ms": 1_800_000_000_000,
+                "opaque_binding": "e30=",
+            }
+        ],
     }
+    assert binding.requested == [REF]
 
 
 class _Ack:
@@ -204,6 +240,7 @@ def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
         create_device_erase_router(
             DeviceEraseHttpServices(
                 configuration=_Configuration(),
+                channel_binding=_ChannelBinding(),
                 pull=_Pull(),
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
@@ -236,6 +273,7 @@ def test_https_delivery_adapter_uses_only_canonical_envelopes() -> None:
         create_device_erase_router(
             DeviceEraseHttpServices(
                 configuration=_Configuration(),
+                channel_binding=_ChannelBinding(),
                 pull=_Pull(),
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
@@ -293,6 +331,7 @@ def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
         create_device_erase_router(
             DeviceEraseHttpServices(
                 configuration=_Configuration(),
+                channel_binding=_ChannelBinding(),
                 pull=_Pull(),
                 acknowledge=acknowledge,
                 reconcile=_Reconcile(),
