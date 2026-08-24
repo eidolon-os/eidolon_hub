@@ -7,6 +7,7 @@ import hashlib
 import hmac
 import json
 import secrets
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Callable, Protocol
 
@@ -48,10 +49,32 @@ from hub.contracts.bindings.admission import (
 from hub.ports.identity import Clock, IdGenerator
 
 
+@dataclass(frozen=True)
+class VerifiedHardwareIdentity:
+    """Stable hardware identity returned only by a verified adapter."""
+
+    hardware_identity_ref: str
+
+
+@dataclass(frozen=True)
+class DevelopmentCommissioningIdentity:
+    """Private development-registry material; never serialized or logged."""
+
+    setup_secret: bytes
+    hardware_identity_ref: str
+
+
 class CommissioningProofVerifier(Protocol):
     def verify(
-        self, *, device_instance_id: str, owner_domain_id: str, nonce: str, proof: str
-    ) -> bool: ...
+        self,
+        *,
+        device_instance_id: str,
+        owner_domain_id: str,
+        nonce: str,
+        proof: str,
+        hardware_identity_evidence: dict,
+        operational_public_key: str,
+    ) -> VerifiedHardwareIdentity | None: ...
 
 
 class ClaimDirectoryProjector(Protocol):
@@ -61,22 +84,67 @@ class ClaimDirectoryProjector(Protocol):
 class HmacCommissioningProofVerifier:
     """Real test/development profile verifier backed by per-device setup secrets."""
 
-    def __init__(self, secret_for_device: Callable[[str], bytes | None]) -> None:
-        self._secret_for_device = secret_for_device
+    def __init__(
+        self,
+        identity_for_lookup: Callable[[str], DevelopmentCommissioningIdentity | None],
+    ) -> None:
+        self._identity_for_lookup = identity_for_lookup
 
     def verify(
-        self, *, device_instance_id: str, owner_domain_id: str, nonce: str, proof: str
-    ) -> bool:
-        secret = self._secret_for_device(device_instance_id)
-        if secret is None:
-            return False
-        message = f"{device_instance_id}\0{owner_domain_id}\0{nonce}".encode()
+        self,
+        *,
+        device_instance_id: str,
+        owner_domain_id: str,
+        nonce: str,
+        proof: str,
+        hardware_identity_evidence: dict,
+        operational_public_key: str,
+    ) -> VerifiedHardwareIdentity | None:
+        if hardware_identity_evidence.get("scheme") != "dev-self-signed-p256":
+            return None
+        try:
+            evidence_document_raw, signature = str(
+                hardware_identity_evidence["evidence"]
+            ).rsplit(".", 1)
+            evidence_document = json.loads(evidence_document_raw)
+            if not isinstance(evidence_document, dict) or set(evidence_document) != {
+                "device_instance_id",
+                "hardware_lookup_id",
+                "operational_public_key",
+                "profile_id",
+            }:
+                return None
+            if evidence_document_raw != rfc8785.dumps(evidence_document).decode():
+                return None
+            hardware_lookup_id = str(evidence_document["hardware_lookup_id"])
+            if (
+                evidence_document["device_instance_id"] != device_instance_id
+                or evidence_document["operational_public_key"] != operational_public_key
+                or evidence_document["profile_id"] != "eidolon-trust-p256-hpke-v1"
+                or not verify_p256_proof(
+                    operational_public_key, evidence_document, signature
+                )
+            ):
+                return None
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        identity = self._identity_for_lookup(hardware_lookup_id)
+        if identity is None:
+            return None
+        message = (
+            f"{hardware_lookup_id}\0{device_instance_id}\0"
+            f"{owner_domain_id}\0{nonce}"
+        ).encode()
         expected = (
-            base64.urlsafe_b64encode(hmac.new(secret, message, hashlib.sha256).digest())
+            base64.urlsafe_b64encode(
+                hmac.new(identity.setup_secret, message, hashlib.sha256).digest()
+            )
             .rstrip(b"=")
             .decode()
         )
-        return hmac.compare_digest(expected, proof)
+        if not hmac.compare_digest(expected, proof):
+            return None
+        return VerifiedHardwareIdentity(identity.hardware_identity_ref)
 
 
 class RejectingCommissioningProofVerifier:
@@ -88,10 +156,24 @@ class RejectingCommissioningProofVerifier:
     """
 
     def verify(
-        self, *, device_instance_id: str, owner_domain_id: str, nonce: str, proof: str
-    ) -> bool:
-        del device_instance_id, owner_domain_id, nonce, proof
-        return False
+        self,
+        *,
+        device_instance_id: str,
+        owner_domain_id: str,
+        nonce: str,
+        proof: str,
+        hardware_identity_evidence: dict,
+        operational_public_key: str,
+    ) -> VerifiedHardwareIdentity | None:
+        del (
+            device_instance_id,
+            owner_domain_id,
+            nonce,
+            proof,
+            hardware_identity_evidence,
+            operational_public_key,
+        )
+        return None
 
 
 class AdmissionAuthority:
@@ -203,16 +285,6 @@ class AdmissionAuthority:
                 status=422,
                 category="invalid",
             )
-        proof = payload["commissioning_proof"]
-        if not self.commissioning_proofs.verify(
-            device_instance_id=payload["device_instance_candidate_id"],
-            owner_domain_id=str(requested),
-            nonce=proof["nonce"],
-            proof=proof["proof"],
-        ):
-            raise AdmissionProblem(
-                "UNAUTHENTICATED", "commissioning proof is invalid", status=401, category="auth"
-            )
         try:
             handoff_key_id = key_id(payload["handoff_key"]["public_key"])
             operational_key_id = key_id(payload["operational_key"]["public_key"])
@@ -220,6 +292,29 @@ class AdmissionAuthority:
             raise AdmissionProblem(
                 "INVALID_ARGUMENT", str(exc), status=422, category="invalid"
             ) from exc
+        expected_instance_id = "device-instance-" + operational_key_id.removeprefix(
+            "sha256:"
+        )
+        if payload["device_instance_candidate_id"] != expected_instance_id:
+            raise AdmissionProblem(
+                "INVALID_ARGUMENT",
+                "device instance candidate is not bound to the operational key",
+                status=422,
+                category="invalid",
+            )
+        proof = payload["commissioning_proof"]
+        verified_hardware = self.commissioning_proofs.verify(
+            device_instance_id=payload["device_instance_candidate_id"],
+            owner_domain_id=str(requested),
+            nonce=proof["nonce"],
+            proof=proof["proof"],
+            hardware_identity_evidence=hardware,
+            operational_public_key=payload["operational_key"]["public_key"],
+        )
+        if verified_hardware is None:
+            raise AdmissionProblem(
+                "UNAUTHENTICATED", "commissioning proof is invalid", status=401, category="auth"
+            )
         manifest = payload["manifest"]
         canonical_manifest = rfc8785.dumps(manifest["document"])
         actual_manifest_digest = "sha256:" + hashlib.sha256(canonical_manifest).hexdigest()
@@ -279,9 +374,7 @@ class AdmissionAuthority:
                     session,
                     enrollment_id=enrollment_id,
                     device_instance_id=payload["device_instance_candidate_id"],
-                    hardware_identity_ref=hardware.get(
-                        "hardware_identity_ref", hardware["evidence_digest"]
-                    ),
+                    hardware_identity_ref=verified_hardware.hardware_identity_ref,
                     requested_owner_domain_id=str(requested),
                     state="pending_review",
                     revision=1,

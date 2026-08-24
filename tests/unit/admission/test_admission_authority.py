@@ -53,7 +53,11 @@ from hub.adapters.persistence.models import (
 )
 from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.admission import crypto as admission_crypto
-from hub.admission.application import AdmissionAuthority, HmacCommissioningProofVerifier
+from hub.admission.application import (
+    AdmissionAuthority,
+    DevelopmentCommissioningIdentity,
+    HmacCommissioningProofVerifier,
+)
 from hub.admission.crypto import key_id
 from hub.admission.domain import ActorContext, AdmissionProblem
 from hub.admission.http import create_admission_router
@@ -84,6 +88,14 @@ def spki(key: ec.EllipticCurvePrivateKey) -> str:
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
     )
     return "p256-spki:" + base64.urlsafe_b64encode(der).rstrip(b"=").decode()
+
+
+def instance_id(key: ec.EllipticCurvePrivateKey) -> str:
+    return "device-instance-" + key_id(spki(key)).removeprefix("sha256:")
+
+
+HARDWARE_LOOKUP_ID = "box-3-test-fixture"
+HARDWARE_IDENTITY_REF = "hardware-box-3-test-fixture"
 
 
 def sign(key: ec.EllipticCurvePrivateKey, document: dict) -> str:
@@ -161,7 +173,12 @@ async def harness(tmp_path):
         owner_domain_id="owner-domain_01",
         owner_domain_generation=3,
         commissioning_proofs=HmacCommissioningProofVerifier(
-            lambda device_id: setup_secret if device_id == "device_01" else None
+            lambda lookup_id: DevelopmentCommissioningIdentity(
+                setup_secret=setup_secret,
+                hardware_identity_ref=HARDWARE_IDENTITY_REF,
+            )
+            if lookup_id == HARDWARE_LOOKUP_ID
+            else None
         ),
     )
     yield database, authority, clock, setup_secret
@@ -193,7 +210,17 @@ def actor(
 
 
 def create_payload(handoff_key, operational_key, setup_secret) -> dict:
-    evidence = "manufacturer-evidence-device-01"
+    candidate_id = instance_id(operational_key)
+    operational_public_key = spki(operational_key)
+    evidence_document = {
+        "device_instance_id": candidate_id,
+        "hardware_lookup_id": HARDWARE_LOOKUP_ID,
+        "operational_public_key": operational_public_key,
+        "profile_id": "eidolon-trust-p256-hpke-v1",
+    }
+    evidence = rfc8785.dumps(evidence_document).decode() + "." + sign(
+        operational_key, evidence_document
+    )
     manifest_document = {
         "schema_version": 1,
         "title": "Box-3",
@@ -203,7 +230,9 @@ def create_payload(handoff_key, operational_key, setup_secret) -> dict:
         "media": [],
     }
     nonce = "commissioning-nonce-01"
-    message = f"device_01\0owner-domain_01\0{nonce}".encode()
+    message = (
+        f"{HARDWARE_LOOKUP_ID}\0{candidate_id}\0owner-domain_01\0{nonce}"
+    ).encode()
     proof = (
         base64.urlsafe_b64encode(hmac.new(setup_secret, message, hashlib.sha256).digest())
         .rstrip(b"=")
@@ -211,10 +240,10 @@ def create_payload(handoff_key, operational_key, setup_secret) -> dict:
     )
     return {
         "profile_id": "eidolon-trust-p256-hpke-v1",
-        "device_instance_candidate_id": "device_01",
+        "device_instance_candidate_id": candidate_id,
         "requested_owner_domain_id": "owner-domain_01",
         "hardware_identity_evidence": {
-            "scheme": "manufacturer-p256",
+            "scheme": "dev-self-signed-p256",
             "evidence": evidence,
             "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
         },
@@ -235,7 +264,7 @@ def create_payload(handoff_key, operational_key, setup_secret) -> dict:
         },
         "operational_key": {
             "scheme": "ES256-P256",
-            "public_key": spki(operational_key),
+            "public_key": operational_public_key,
         },
     }
 
@@ -463,7 +492,9 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
     authority.claim_directory_projector = projector.execute
 
     created, _decision, collected, device_ref, ack_proof, active = await collect_and_ack(harness)
-    visible = await directory.get(owner_scope="owner_01", device_id="device_01")
+    visible = await directory.get(
+        owner_scope="owner_01", device_id=device_ref.device_instance_id
+    )
     assert visible is not None
     assert visible.device_ref == device_ref
 
@@ -478,7 +509,104 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
     )
     assert replay["outcome"] == "replayed"
     assert replay["occurred_at"] == active["occurred_at"]
-    assert await directory.get(owner_scope="owner_01", device_id="device_01") == visible
+    assert (
+        await directory.get(
+            owner_scope="owner_01", device_id=device_ref.device_instance_id
+        )
+        == visible
+    )
+
+
+async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_claim_is_fenced(
+    harness,
+):
+    database, authority, _clock, setup_secret = harness
+    first_created, _decision, first_collected, first_ref, first_ack_proof, _active = (
+        await collect_and_ack(harness)
+    )
+    await authority.revoke_claim(
+        command_id="revoke_first",
+        correlation_id="remove_first",
+        device_ref=first_ref,
+        reason="owner-removed",
+        context=actor(),
+    )
+
+    second_handoff = ec.derive_private_key(0x345678912, ec.SECP256R1())
+    second_operational = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    second_created = await authority.create_enrollment(
+        command_id="create_second",
+        correlation_id="rejoin_second",
+        payload=create_payload(second_handoff, second_operational, setup_secret),
+    )
+    await authority.decide_enrollment(
+        command_id="decide_second",
+        correlation_id="rejoin_second",
+        enrollment_id=second_created["enrollment_id"],
+        payload={
+            "expected_proposal_revision": 1,
+            "decision": "approve",
+            "target_owner_domain_id": "owner-domain_01",
+            "target_business_owner_id": "owner_01",
+            "target_space_id": None,
+            "reviewed_manifest_ref": second_created["reviewed_manifest_ref"],
+            "initial_assignment_intent": None,
+            "initial_capability_policy_refs": [],
+        },
+        context=actor(),
+    )
+    collection_document = {
+        "contract": "eidolon.device-foundation.claim-grant-collection",
+        "enrollment_id": second_created["enrollment_id"],
+        "proposal_revision": 1,
+        "collection_challenge": second_created["collection_challenge"],
+    }
+    second_collected = await authority.collect_claim_grant(
+        command_id="collect_second",
+        correlation_id="rejoin_second",
+        enrollment_id=second_created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=second_created["collection_challenge"],
+        handoff_key_proof=sign(second_handoff, collection_document),
+    )
+    async with database.sessions() as session:
+        second_grant = await session.get(AdmissionGrantRow, second_collected["grant_id"])
+        second_ref = DeviceRef.model_validate_json(second_grant.device_ref_json)
+    ack_document = {
+        "contract": "eidolon.device-foundation.claim-grant-ack",
+        "enrollment_id": second_created["enrollment_id"],
+        "grant_id": second_collected["grant_id"],
+        "device_ref": second_ref.model_dump(mode="json"),
+    }
+    await authority.ack_claim_grant(
+        command_id="ack_second",
+        correlation_id="rejoin_second",
+        enrollment_id=second_created["enrollment_id"],
+        grant_id=second_collected["grant_id"],
+        operational_key_proof=sign(second_operational, ack_document),
+        stored_claim_generation=second_ref.claim_generation,
+        stored_trust_epoch=second_ref.trust_epoch,
+    )
+
+    assert second_ref.device_instance_id != first_ref.device_instance_id
+    assert second_ref.claim_generation == first_ref.claim_generation + 1 == 2
+    old_ack_replay = await authority.ack_claim_grant(
+        command_id="ack_01",
+        correlation_id="delayed-old-ack",
+        enrollment_id=first_created["enrollment_id"],
+        grant_id=first_collected["grant_id"],
+        operational_key_proof=first_ack_proof,
+        stored_claim_generation=first_ref.claim_generation,
+        stored_trust_epoch=first_ref.trust_epoch,
+    )
+    assert old_ack_replay["device_ref"] == first_ref.model_dump(mode="json")
+    async with database.sessions() as session:
+        old_claim = await session.get(AdmissionClaimRow, first_ref.device_instance_id)
+        new_claim = await session.get(AdmissionClaimRow, second_ref.device_instance_id)
+        assert old_claim.state == "revoked"
+        assert new_claim.state == "active"
+        assert old_claim.hardware_identity_ref == new_claim.hardware_identity_ref
+        assert old_claim.hardware_identity_ref == HARDWARE_IDENTITY_REF
 
 
 async def test_projection_failure_replays_committed_claim_and_converges(harness):
@@ -535,7 +663,7 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
         )
     assert unavailable.value.code == "AUTHORITY_UNAVAILABLE"
     async with database.sessions() as session:
-        claim = await session.get(AdmissionClaimRow, "device_01")
+        claim = await session.get(AdmissionClaimRow, device_ref.device_instance_id)
         assert claim is not None and claim.state == "active"
 
     replay = await authority.ack_claim_grant(
@@ -549,7 +677,9 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
     )
     assert replay["outcome"] == "replayed"
     assert attempts == 2
-    visible = await directory.get(owner_scope="owner_01", device_id="device_01")
+    visible = await directory.get(
+        owner_scope="owner_01", device_id=device_ref.device_instance_id
+    )
     assert visible is not None and visible.device_ref == device_ref
 
 
@@ -1062,7 +1192,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
         "profile_id": "eidolon-trust-p256-hpke-v1",
         "enrollment_id": created["enrollment_id"],
         "proposal_revision": 1,
-        "device_instance_id": "device_01",
+        "device_instance_id": instance_id(_operational),
         "hardware_evidence_digest": envelope["aad"]["hardware_evidence_digest"],
         "manifest_ref": created["reviewed_manifest_ref"],
         "owner_domain_id": "owner-domain_01",

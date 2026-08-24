@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import re
 import stat
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.adapters.runtime import LocalProcessLock, SecureIdGenerator, SystemClock
 from hub.admission.application import (
     CommissioningProofVerifier,
+    DevelopmentCommissioningIdentity,
     HmacCommissioningProofVerifier,
     RejectingCommissioningProofVerifier,
 )
@@ -108,19 +110,34 @@ def load_commissioning_proof_verifier(
         encoded = document["devices"]
         if not isinstance(encoded, dict) or not encoded:
             raise ValueError("development commissioning registry has no devices")
-        secrets_by_device = {
-            str(device_id): base64.urlsafe_b64decode(str(value) + "=" * (-len(str(value)) % 4))
-            for device_id, value in encoded.items()
-        }
-        if any(
-            not device_id.strip() or len(secret) < 16
-            for device_id, secret in secrets_by_device.items()
-        ):
-            raise ValueError("development commissioning registry entry is invalid")
+        identities_by_lookup: dict[str, DevelopmentCommissioningIdentity] = {}
+        for raw_lookup_id, raw_entry in encoded.items():
+            lookup_id = str(raw_lookup_id)
+            if not isinstance(raw_entry, dict) or set(raw_entry) != {
+                "setup_secret",
+                "hardware_identity_ref",
+            }:
+                raise ValueError("development commissioning registry entry is invalid")
+            encoded_secret = str(raw_entry["setup_secret"])
+            hardware_identity_ref = str(raw_entry["hardware_identity_ref"])
+            secret = base64.urlsafe_b64decode(
+                encoded_secret + "=" * (-len(encoded_secret) % 4)
+            )
+            if (
+                not lookup_id.strip()
+                or len(lookup_id) > 128
+                or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", hardware_identity_ref)
+                or len(secret) < 16
+            ):
+                raise ValueError("development commissioning registry entry is invalid")
+            identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(
+                setup_secret=secret,
+                hardware_identity_ref=hardware_identity_ref,
+            )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise RuntimeError("development commissioning registry is invalid") from exc
     return (
-        HmacCommissioningProofVerifier(secrets_by_device.get),
+        HmacCommissioningProofVerifier(identities_by_lookup.get),
         True,
     )
 
