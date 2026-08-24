@@ -1452,3 +1452,55 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
         assert cancel_response.status_code == 200
         assert set(cancel_response.json()) == set(CancelEnrollmentResult.model_fields)
         CancelEnrollmentResult.model_validate(cancel_response.json())
+
+
+async def test_only_an_approver_can_see_what_is_waiting_to_be_approved(harness) -> None:
+    """The pending queue is the approver's view, and one rule says so.
+
+    A Proposal nobody has decided yet is not attributable to a business Owner,
+    so `get_enrollment_recovery` shows it only to a principal holding
+    `device.claim.approve`. The page has to agree: a Controller that could read
+    the queue but not the Enrollments in it would see a list it cannot open.
+    """
+
+    _database, authority, _clock, secret = harness
+    handoff_key = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational_key = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    created = await authority.create_enrollment(
+        command_id="create_scope_01",
+        correlation_id="intent_scope_01",
+        payload=create_payload(handoff_key, operational_key, secret),
+    )
+    reader = ActorContext(
+        actor=ControllerActorRef(
+            principal_id="controller_reader",
+            owner_domain_id=OwnerDomainId("owner-domain_01"),
+            granted_scopes=("device.read",),
+            authentication_strength="software",
+        ),
+        owner_domain_id=OwnerDomainId("owner-domain_01"),
+        business_owner_id=BusinessOwnerId("owner_01"),
+    )
+    query = EnrollmentProposalQuery(
+        owner_domain_id="owner-domain_01",
+        states=(EnrollmentProposalState.PENDING_REVIEW,),
+        cursor=None,
+        limit=50,
+    )
+
+    with pytest.raises(AdmissionProblem) as page_refusal:
+        await authority.list_enrollment_recovery(query=query, context=reader)
+    assert page_refusal.value.status == 403
+
+    with pytest.raises(AdmissionProblem) as read_refusal:
+        await authority.get_enrollment_recovery(
+            enrollment_id=created["enrollment_id"], context=reader
+        )
+    assert read_refusal.value.status == 404
+
+    page = await authority.list_enrollment_recovery(query=query, context=actor())
+    assert [item.proposal.enrollment_id for item in page.items] == [created["enrollment_id"]]
+    opened = await authority.get_enrollment_recovery(
+        enrollment_id=created["enrollment_id"], context=actor()
+    )
+    assert opened.proposal.enrollment_id == created["enrollment_id"]
