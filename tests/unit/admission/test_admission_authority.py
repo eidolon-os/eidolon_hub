@@ -39,6 +39,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from hub.adapters.persistence.database import HubDatabase
+from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
 from hub.adapters.persistence.models import (
     AdmissionClaimEventStreamRow,
     AdmissionClaimRow,
@@ -50,6 +51,7 @@ from hub.adapters.persistence.models import (
     AdmissionProposalRow,
     DeviceRow,
 )
+from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.admission import crypto as admission_crypto
 from hub.admission.application import AdmissionAuthority, HmacCommissioningProofVerifier
 from hub.admission.crypto import key_id
@@ -57,6 +59,7 @@ from hub.admission.domain import ActorContext, AdmissionProblem
 from hub.admission.http import create_admission_router
 from hub.admission.persistence import SqlAdmissionStore
 from hub.admission.target_app import create_admission_target_app
+from hub.application.projections.device_directory import ProjectDeviceDirectory
 
 
 class FixedClock:
@@ -440,6 +443,106 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
             ) < ordered_types.index("live.eidolon.device.claim-activated.v1")
     finally:
         await restarted_database.close()
+
+
+async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness):
+    database, authority, _clock, _secret = harness
+    directory = InMemoryDeviceDirectoryRepository()
+    projector = ProjectDeviceDirectory(
+        devices=SqlHubRepositories(database).devices,
+        directory=directory,
+    )
+    authority.claim_directory_projector = projector.execute
+
+    created, _decision, collected, device_ref, ack_proof, active = await collect_and_ack(harness)
+    visible = await directory.get(owner_scope="owner_01", device_id="device_01")
+    assert visible is not None
+    assert visible.device_ref == device_ref
+
+    replay = await authority.ack_claim_grant(
+        command_id="ack_01",
+        correlation_id="reply_lost",
+        enrollment_id=created["enrollment_id"],
+        grant_id=collected["grant_id"],
+        operational_key_proof=ack_proof,
+        stored_claim_generation=device_ref.claim_generation,
+        stored_trust_epoch=device_ref.trust_epoch,
+    )
+    assert replay["outcome"] == "replayed"
+    assert replay["occurred_at"] == active["occurred_at"]
+    assert await directory.get(owner_scope="owner_01", device_id="device_01") == visible
+
+
+async def test_projection_failure_replays_committed_claim_and_converges(harness):
+    database, authority, _clock, _secret = harness
+    directory = InMemoryDeviceDirectoryRepository()
+    projector = ProjectDeviceDirectory(
+        devices=SqlHubRepositories(database).devices,
+        directory=directory,
+    )
+    attempts = 0
+
+    async def flaky_project(device_id: str):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("projection unavailable")
+        return await projector.execute(device_id)
+
+    authority.claim_directory_projector = flaky_project
+    created, _decision, handoff, operational = await create_and_approve(harness)
+    collection_document = {
+        "contract": "eidolon.device-foundation.claim-grant-collection",
+        "enrollment_id": created["enrollment_id"],
+        "proposal_revision": 1,
+        "collection_challenge": created["collection_challenge"],
+    }
+    collected = await authority.collect_claim_grant(
+        command_id="collect_01",
+        correlation_id="intent_01",
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+        handoff_key_proof=sign(handoff, collection_document),
+    )
+    async with database.sessions() as session:
+        grant = await session.get(AdmissionGrantRow, collected["grant_id"])
+        device_ref = DeviceRef.model_validate_json(grant.device_ref_json)
+    ack_document = {
+        "contract": "eidolon.device-foundation.claim-grant-ack",
+        "enrollment_id": created["enrollment_id"],
+        "grant_id": collected["grant_id"],
+        "device_ref": device_ref.model_dump(mode="json"),
+    }
+    ack_proof = sign(operational, ack_document)
+    with pytest.raises(AdmissionProblem) as unavailable:
+        await authority.ack_claim_grant(
+            command_id="ack_01",
+            correlation_id="intent_01",
+            enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"],
+            operational_key_proof=ack_proof,
+            stored_claim_generation=device_ref.claim_generation,
+            stored_trust_epoch=device_ref.trust_epoch,
+        )
+    assert unavailable.value.code == "AUTHORITY_UNAVAILABLE"
+    async with database.sessions() as session:
+        claim = await session.get(AdmissionClaimRow, "device_01")
+        assert claim is not None and claim.state == "active"
+
+    replay = await authority.ack_claim_grant(
+        command_id="ack_01",
+        correlation_id="reply_lost",
+        enrollment_id=created["enrollment_id"],
+        grant_id=collected["grant_id"],
+        operational_key_proof=ack_proof,
+        stored_claim_generation=device_ref.claim_generation,
+        stored_trust_epoch=device_ref.trust_epoch,
+    )
+    assert replay["outcome"] == "replayed"
+    assert attempts == 2
+    visible = await directory.get(owner_scope="owner_01", device_id="device_01")
+    assert visible is not None and visible.device_ref == device_ref
 
 
 async def test_same_command_different_payload_conflicts_and_invalid_proof_rolls_back(harness):

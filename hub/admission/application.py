@@ -54,6 +54,10 @@ class CommissioningProofVerifier(Protocol):
     ) -> bool: ...
 
 
+class ClaimDirectoryProjector(Protocol):
+    async def __call__(self, device_instance_id: str) -> object: ...
+
+
 class HmacCommissioningProofVerifier:
     """Real test/development profile verifier backed by per-device setup secrets."""
 
@@ -102,6 +106,7 @@ class AdmissionAuthority:
         owner_domain_id: str,
         owner_domain_generation: int,
         commissioning_proofs: CommissioningProofVerifier,
+        claim_directory_projector: ClaimDirectoryProjector | None = None,
         proposal_ttl: timedelta = timedelta(minutes=15),
         grant_ttl: timedelta = timedelta(minutes=10),
     ) -> None:
@@ -111,8 +116,24 @@ class AdmissionAuthority:
         self.owner_domain_id = OwnerDomainId(owner_domain_id)
         self.owner_domain_generation = owner_domain_generation
         self.commissioning_proofs = commissioning_proofs
+        self.claim_directory_projector = claim_directory_projector
         self.proposal_ttl = proposal_ttl
         self.grant_ttl = grant_ttl
+
+    async def _project_committed_claim(self, result: dict) -> None:
+        if self.claim_directory_projector is None:
+            return
+        try:
+            device_ref = DeviceRef.model_validate(result["device_ref"])
+            await self.claim_directory_projector(device_ref.device_instance_id)
+        except Exception as exc:
+            raise AdmissionProblem(
+                "AUTHORITY_UNAVAILABLE",
+                "Claim committed but public directory projection is unavailable",
+                status=503,
+                category="unavailable",
+                retryable=True,
+            ) from exc
 
     @staticmethod
     def _event(
@@ -849,6 +870,7 @@ class AdmissionAuthority:
             fingerprint=fp,
         )
         if replay is not None:
+            await self._project_committed_claim(replay)
             return replay
         await self.expire_due()
         now = self.clock.now()
@@ -862,6 +884,7 @@ class AdmissionAuthority:
                     fingerprint=fp,
                 )
                 if locked_replay is not None:
+                    await self._project_committed_claim(locked_replay)
                     return locked_replay
                 proposal = await self.store.get_proposal(session, enrollment_id)
                 grant = await self.store.get_grant(session, grant_id)
@@ -1006,6 +1029,7 @@ class AdmissionAuthority:
                     event=event,
                     occurred_at=now,
                 )
+        await self._project_committed_claim(result)
         return result
 
     async def revoke_claim(

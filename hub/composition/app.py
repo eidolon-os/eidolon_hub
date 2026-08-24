@@ -96,6 +96,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 owner_domain_id=app_config.onboarding.owner_domain_id,
                 owner_domain_generation=app_config.onboarding.owner_domain_generation,
                 commissioning_proofs=resources.commissioning_proofs,
+                claim_directory_projector=projector.execute,
             )
 
             erase_reconcile = ReconcileDeviceEraseOperations(
