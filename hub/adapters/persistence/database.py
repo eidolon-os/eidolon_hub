@@ -164,9 +164,20 @@ class HubDatabase:
             )
             return True, marker, True
 
-        # PH2-A is an additive physical migration only. It creates the isolated
-        # Admission tables without changing a legacy route, DTO, or writer.
-        # Domain cutover remains a separate PH2-B action.
+        # Admission migrations are physical-only and forward-additive. The
+        # canonical target remains off default traffic until coordinated cutover.
+        # The old ciphertext column is deliberately not copied: its opaque blob
+        # does not contain the frozen pre-open AAD and is not a canonical wire
+        # envelope. It remains isolated for later physical removal.
+        grant_table = "admission_claim_grants_v1"
+        if grant_table in actual_tables:
+            grant_columns = {value["name"] for value in schema.get_columns(grant_table)}
+            if "sealed_grant" in grant_columns and "wire_envelope_json" not in grant_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE admission_claim_grants_v1 ADD COLUMN wire_envelope_json TEXT"
+                )
+                schema = inspect(connection)
+
         missing_tables = expected_tables - actual_tables
         if missing_tables and all(
             table_name.startswith("admission_") for table_name in missing_tables

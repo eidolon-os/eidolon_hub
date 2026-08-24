@@ -47,6 +47,7 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
 
             assert actual == {
                 "admission_claim_grants_v1",
+                "admission_claim_event_stream_v1",
                 "admission_claims_v1",
                 "admission_command_results_v1",
                 "admission_decisions_v1",
@@ -72,24 +73,54 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
 async def test_ph2_admission_physical_migration_is_additive_and_preserves_authority(
     tmp_path,
 ) -> None:
+    bootstrap_path = tmp_path / "authority-bootstrap.json"
+    bootstrap_path.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "operation": "owner-authority.bootstrap",
+                "owner_domain_id": "owner-domain_01",
+                "owner_domain_generation": 3,
+                "state_id": "authority-state_existing",
+            }
+        ),
+        encoding="utf-8",
+    )
     database = HubDatabase.sqlite(
         tmp_path / "hub.sqlite3",
         owner_domain_id="owner-domain_01",
         owner_domain_generation=3,
+        authority_bootstrap_path=bootstrap_path,
     )
     admission_tables = {name for name in Base.metadata.tables if name.startswith("admission_")}
+    current_grants = Base.metadata.tables["admission_claim_grants_v1"]
+    legacy_metadata = MetaData()
+    legacy_grants = Table(
+        current_grants.name,
+        legacy_metadata,
+        *(
+            column._copy()  # noqa: SLF001 - reproduce the frozen pre-B0 physical schema
+            for column in current_grants.columns
+            if column.name != "wire_envelope_json"
+        ),
+    )
     try:
-        await database.initialize_schema()
-        async with database.sessions() as session:
-            before = await session.get(AuthorityStateRow, 1)
-            before_marker = (
-                before.owner_domain_id,
-                before.owner_domain_generation,
-                before.state_id,
-            )
         async with database.engine.begin() as connection:
-            for table_name in sorted(admission_tables, reverse=True):
-                await connection.run_sync(Base.metadata.tables[table_name].drop)
+            for table in Base.metadata.sorted_tables:
+                if table.name not in {
+                    "admission_claim_grants_v1",
+                    "admission_claim_event_stream_v1",
+                }:
+                    await connection.run_sync(table.create)
+            await connection.run_sync(legacy_grants.create)
+            await connection.execute(
+                AuthorityStateRow.__table__.insert().values(
+                    singleton_id=1,
+                    owner_domain_id="owner-domain_01",
+                    owner_domain_generation=3,
+                    state_id="authority-state_existing",
+                )
+            )
 
         await database.initialize_schema()
 
@@ -105,7 +136,16 @@ async def test_ph2_admission_physical_migration_is_additive_and_preserves_author
                 after.state_id,
             )
         assert admission_tables <= actual
-        assert after_marker == before_marker
+        async with database.engine.connect() as connection:
+            grant_columns = await connection.run_sync(
+                lambda sync_connection: {
+                    column["name"]
+                    for column in inspect(sync_connection).get_columns("admission_claim_grants_v1")
+                }
+            )
+        assert {"sealed_grant", "wire_envelope_json"} <= grant_columns
+        assert after_marker == ("owner-domain_01", 3, "authority-state_existing")
+        assert not bootstrap_path.exists()
     finally:
         await database.close()
 

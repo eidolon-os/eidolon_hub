@@ -21,12 +21,27 @@ from hub.admission.domain import (
 )
 from hub.admission.persistence import SqlAdmissionStore, aware
 from hub.contracts.bindings.admission import (
+    AdmissionListCursor,
     ApprovalDecision,
     BusinessOwnerId,
+    ClaimActivatedEvent,
+    ClaimEventCursor,
+    ClaimEventPage,
+    ClaimEventStreamItem,
     ClaimGrant,
+    ClaimGrantAAD,
+    ClaimPage,
+    ClaimQuery,
     ClaimRecord,
+    ClaimRevokedEvent,
     ClaimState,
     DeviceRef,
+    EnrollmentProposal,
+    EnrollmentProposalPage,
+    EnrollmentProposalQuery,
+    EnrollmentProposalState,
+    EnrollmentRecoveryProjection,
+    GrantDeliveryRecord,
     ManifestRef,
     OwnerDomainId,
 )
@@ -97,6 +112,10 @@ class AdmissionAuthority:
         occurred_at,
         data: dict,
     ) -> dict:
+        dataschemas = {
+            "live.eidolon.device.claim-activated.v1": "https://contracts.eidolon.live/device-foundation/v1/events/claim-activated-data.schema.json",
+            "live.eidolon.device.claim-revoked.v1": "https://contracts.eidolon.live/device-foundation/v1/events/claim-revoked-data.schema.json",
+        }
         return {
             "specversion": "1.0",
             "id": event_id,
@@ -105,6 +124,13 @@ class AdmissionAuthority:
             "subject": subject,
             "time": occurred_at.isoformat().replace("+00:00", "Z"),
             "datacontenttype": "application/json",
+            "dataschema": dataschemas.get(
+                event_type,
+                "https://contracts.eidolon.live/device-foundation/v1/events/schemas.schema.json",
+            ),
+            "audience": "eidolon-claim-consumers"
+            if event_type in dataschemas
+            else "eidolon-admission-audit",
             "ownerdomainid": owner_domain_id,
             "aggregaterev": revision,
             "correlationid": correlation_id,
@@ -215,29 +241,29 @@ class AdmissionAuthority:
                     return locked_replay
                 self.store.add_proposal(
                     session,
-                        enrollment_id=enrollment_id,
-                        device_instance_id=payload["device_instance_candidate_id"],
-                        hardware_identity_ref=hardware.get(
-                            "hardware_identity_ref", hardware["evidence_digest"]
-                        ),
-                        requested_owner_domain_id=str(requested),
-                        state="pending_review",
-                        revision=1,
-                        hardware_evidence_digest=hardware["evidence_digest"],
-                        commissioning_proof_digest="sha256:"
-                        + hashlib.sha256(proof["proof"].encode()).hexdigest(),
-                        manifest_id=manifest_ref.manifest_id,
-                        manifest_revision=manifest_ref.revision,
-                        manifest_digest=manifest_ref.digest,
-                        manifest_json=canonical_manifest.decode("utf-8"),
-                        handoff_public_key_spki=payload["handoff_key"]["public_key"],
-                        handoff_key_id=handoff_key_id,
-                        operational_public_key_spki=payload["operational_key"]["public_key"],
-                        operational_key_id=operational_key_id,
-                        collection_challenge_hash=hashlib.sha256(challenge.encode()).hexdigest(),
-                        created_at=now,
-                        expires_at=now + self.proposal_ttl,
-                        updated_at=now,
+                    enrollment_id=enrollment_id,
+                    device_instance_id=payload["device_instance_candidate_id"],
+                    hardware_identity_ref=hardware.get(
+                        "hardware_identity_ref", hardware["evidence_digest"]
+                    ),
+                    requested_owner_domain_id=str(requested),
+                    state="pending_review",
+                    revision=1,
+                    hardware_evidence_digest=hardware["evidence_digest"],
+                    commissioning_proof_digest="sha256:"
+                    + hashlib.sha256(proof["proof"].encode()).hexdigest(),
+                    manifest_id=manifest_ref.manifest_id,
+                    manifest_revision=manifest_ref.revision,
+                    manifest_digest=manifest_ref.digest,
+                    manifest_json=canonical_manifest.decode("utf-8"),
+                    handoff_public_key_spki=payload["handoff_key"]["public_key"],
+                    handoff_key_id=handoff_key_id,
+                    operational_public_key_spki=payload["operational_key"]["public_key"],
+                    operational_key_id=operational_key_id,
+                    collection_challenge_hash=hashlib.sha256(challenge.encode()).hexdigest(),
+                    created_at=now,
+                    expires_at=now + self.proposal_ttl,
+                    updated_at=now,
                 )
                 await self.store.save_result(
                     session,
@@ -270,9 +296,7 @@ class AdmissionAuthority:
         )
         async with self.store.lock:
             async with self.store.transaction() as session:
-                proposals = await self.store.list_expirable(
-                    session, states=expirable, deadline=now
-                )
+                proposals = await self.store.list_expirable(session, states=expirable, deadline=now)
                 for proposal in proposals:
                     require_transition(proposal.state, "expired")
                     proposal.state = "expired"
@@ -489,19 +513,17 @@ class AdmissionAuthority:
                 )
                 self.store.add_decision(
                     session,
-                        decision_id=decision_id,
-                        enrollment_id=enrollment_id,
-                        decision=decision.decision,
-                        actor_json=json.dumps(
-                            decision.actor.model_dump(mode="json"), sort_keys=True
-                        ),
-                        target_owner_domain_id=str(target_domain),
-                        target_business_owner_id=str(target_owner),
-                        reviewed_manifest_json=json.dumps(
-                            reviewed.model_dump(mode="json"), sort_keys=True
-                        ),
-                        expected_proposal_revision=proposal.revision,
-                        decided_at=now,
+                    decision_id=decision_id,
+                    enrollment_id=enrollment_id,
+                    decision=decision.decision,
+                    actor_json=json.dumps(decision.actor.model_dump(mode="json"), sort_keys=True),
+                    target_owner_domain_id=str(target_domain),
+                    target_business_owner_id=str(target_owner),
+                    reviewed_manifest_json=json.dumps(
+                        reviewed.model_dump(mode="json"), sort_keys=True
+                    ),
+                    expected_proposal_revision=proposal.revision,
+                    decided_at=now,
                 )
                 proposal.state = (
                     "approved_awaiting_handoff" if decision.decision == "approve" else "rejected"
@@ -536,26 +558,26 @@ class AdmissionAuthority:
                     )
                     self.store.add_grant(
                         session,
-                            grant_id=grant_id,
-                            enrollment_id=enrollment_id,
-                            decision_id=decision_id,
-                            owner_domain_id=str(target_domain),
-                            hardware_identity_ref=proposal.hardware_identity_ref,
-                            claim_generation=device_ref.claim_generation,
-                            device_ref_json=json.dumps(
-                                device_ref.model_dump(mode="json"), sort_keys=True
-                            ),
-                            manifest_ref_json=json.dumps(
-                                reviewed.model_dump(mode="json"), sort_keys=True
-                            ),
-                            handoff_key_id=proposal.handoff_key_id,
-                            operational_key_id=proposal.operational_key_id,
-                            grant_json=json.dumps(grant.model_dump(mode="json"), sort_keys=True),
-                            sealed_grant=None,
-                            issued_at=now,
-                            expires_at=now + self.grant_ttl,
-                            delivered_at=None,
-                            revoked_at=None,
+                        grant_id=grant_id,
+                        enrollment_id=enrollment_id,
+                        decision_id=decision_id,
+                        owner_domain_id=str(target_domain),
+                        hardware_identity_ref=proposal.hardware_identity_ref,
+                        claim_generation=device_ref.claim_generation,
+                        device_ref_json=json.dumps(
+                            device_ref.model_dump(mode="json"), sort_keys=True
+                        ),
+                        manifest_ref_json=json.dumps(
+                            reviewed.model_dump(mode="json"), sort_keys=True
+                        ),
+                        handoff_key_id=proposal.handoff_key_id,
+                        operational_key_id=proposal.operational_key_id,
+                        grant_json=json.dumps(grant.model_dump(mode="json"), sort_keys=True),
+                        wire_envelope_json=None,
+                        issued_at=now,
+                        expires_at=now + self.grant_ttl,
+                        delivered_at=None,
+                        revoked_at=None,
                     )
                 result = {
                     "command_id": command_id,
@@ -649,6 +671,11 @@ class AdmissionAuthority:
                     )
                 if proposal.state == "claim_revoked":
                     raise AdmissionProblem("CLAIM_REVOKED", "Claim generation was revoked")
+                if proposal.state == "grant_acknowledged":
+                    raise AdmissionProblem(
+                        "PROPOSAL_TERMINAL",
+                        "Claim is active and the handoff capability is terminal",
+                    )
                 if proposal.state == "expired" or aware(proposal.expires_at) <= now:
                     raise AdmissionProblem(
                         "PROPOSAL_EXPIRED", "proposal expired", status=410, category="expired"
@@ -656,7 +683,16 @@ class AdmissionAuthority:
                 grant = await self.store.get_grant_for_enrollment(session, enrollment_id)
                 if grant is not None and grant.revoked_at is not None:
                     raise AdmissionProblem("CLAIM_REVOKED", "Claim generation was revoked")
-                was_delivered = grant is not None and grant.sealed_grant is not None
+                if (
+                    grant is not None
+                    and proposal.state == "grant_delivered"
+                    and grant.wire_envelope_json is None
+                ):
+                    raise AdmissionProblem(
+                        "CONTRACT_UNSUPPORTED",
+                        "pre-PH2-B0 opaque grant cannot be replayed as a canonical wire envelope",
+                    )
+                was_delivered = grant is not None and grant.wire_envelope_json is not None
                 expected_collection_revision = (
                     proposal.revision - 1 if was_delivered else proposal.revision
                 )
@@ -697,22 +733,29 @@ class AdmissionAuthority:
                     )
                 if not was_delivered:
                     grant_doc = json.loads(grant.grant_json)
-                    aad = {
-                        "contract": "eidolon.device-foundation.claim-grant-aad",
-                        "profile_id": "eidolon-trust-p256-hpke-v1",
-                        "enrollment_id": enrollment_id,
-                        "proposal_revision": proposal_revision,
-                        "hardware_evidence_digest": proposal.hardware_evidence_digest,
-                        "manifest_digest": proposal.manifest_digest,
-                        "owner_domain_id": proposal.requested_owner_domain_id,
-                        "owner_domain_generation": self.owner_domain_generation,
-                        "claim_generation": grant.claim_generation,
-                        "trust_epoch": 1,
-                        "grant_id": grant.grant_id,
-                    }
-                    grant.sealed_grant = seal_claim_grant(
-                        proposal.handoff_public_key_spki, grant_doc, aad
+                    aad = ClaimGrantAAD(
+                        enrollment_id=enrollment_id,
+                        proposal_revision=proposal_revision,
+                        device_instance_id=proposal.device_instance_id,
+                        hardware_evidence_digest=proposal.hardware_evidence_digest,
+                        manifest_ref=ManifestRef(
+                            manifest_id=proposal.manifest_id,
+                            revision=proposal.manifest_revision,
+                            digest=proposal.manifest_digest,
+                        ),
+                        owner_domain_id=proposal.requested_owner_domain_id,
+                        owner_domain_generation=self.owner_domain_generation,
+                        claim_generation=grant.claim_generation,
+                        trust_epoch=1,
+                        grant_id=grant.grant_id,
                     )
+                    envelope = seal_claim_grant(
+                        proposal.handoff_public_key_spki,
+                        grant_doc,
+                        aad,
+                        recipient_handoff_key_id=proposal.handoff_key_id,
+                    )
+                    grant.wire_envelope_json = envelope.model_dump_json()
                     grant.delivered_at = now
                     proposal.state = "grant_delivered"
                     proposal.revision += 1
@@ -721,7 +764,7 @@ class AdmissionAuthority:
                     "command_id": command_id,
                     "outcome": "committed",
                     "grant_id": grant.grant_id,
-                    "sealed_grant": grant.sealed_grant,
+                    "wire_envelope": json.loads(grant.wire_envelope_json),
                     "expires_at": aware(grant.expires_at).isoformat().replace("+00:00", "Z"),
                     "approval_decision_id": grant.decision_id,
                     "proposal_revision": proposal.revision,
@@ -843,31 +886,31 @@ class AdmissionAuthority:
                 proof_fp = "sha256:" + hashlib.sha256(operational_key_proof.encode()).hexdigest()
                 self.store.add_grant_ack(
                     session,
-                        grant_id=grant_id,
-                        enrollment_id=enrollment_id,
-                        proof_fingerprint=proof_fp,
-                        device_ref_json=grant.device_ref_json,
-                        acknowledged_at=now,
+                    grant_id=grant_id,
+                    enrollment_id=enrollment_id,
+                    proof_fingerprint=proof_fp,
+                    device_ref_json=grant.device_ref_json,
+                    acknowledged_at=now,
                 )
                 decision = await self.store.get_decision(session, grant.decision_id)
                 manifest_ref = ManifestRef.model_validate(json.loads(grant.manifest_ref_json))
                 self.store.add_claim(
                     session,
-                        device_instance_id=device_ref.device_instance_id,
-                        owner_domain_id=str(device_ref.owner_domain_id),
-                        business_owner_id=decision.target_business_owner_id,
-                        hardware_identity_ref=grant.hardware_identity_ref,
-                        owner_domain_generation=device_ref.owner_domain_generation,
-                        claim_generation=device_ref.claim_generation,
-                        trust_epoch=device_ref.trust_epoch,
-                        manifest_ref_json=grant.manifest_ref_json,
-                        approval_decision_id=grant.decision_id,
-                        operational_public_key_spki=proposal.operational_public_key_spki,
-                        state="active",
-                        revision=1,
-                        activated_at=now,
-                        updated_at=now,
-                        revoked_at=None,
+                    device_instance_id=device_ref.device_instance_id,
+                    owner_domain_id=str(device_ref.owner_domain_id),
+                    business_owner_id=decision.target_business_owner_id,
+                    hardware_identity_ref=grant.hardware_identity_ref,
+                    owner_domain_generation=device_ref.owner_domain_generation,
+                    claim_generation=device_ref.claim_generation,
+                    trust_epoch=device_ref.trust_epoch,
+                    manifest_ref_json=grant.manifest_ref_json,
+                    approval_decision_id=grant.decision_id,
+                    operational_public_key_spki=proposal.operational_public_key_spki,
+                    state="active",
+                    revision=1,
+                    activated_at=now,
+                    updated_at=now,
+                    revoked_at=None,
                 )
                 proposal.state = "grant_acknowledged"
                 proposal.revision += 1
@@ -928,6 +971,7 @@ class AdmissionAuthority:
                         "activated_at": now.isoformat().replace("+00:00", "Z"),
                     },
                 )
+                event = ClaimActivatedEvent.model_validate(event).model_dump(mode="json")
                 self.store.add_outbox(
                     session,
                     event_id=event_id,
@@ -1020,30 +1064,34 @@ class AdmissionAuthority:
                     decision = await self.store.get_decision(session, grant.decision_id)
                     self.store.add_claim(
                         session,
-                            device_instance_id=device_ref.device_instance_id,
-                            owner_domain_id=str(device_ref.owner_domain_id),
-                            business_owner_id=decision.target_business_owner_id,
-                            hardware_identity_ref=grant.hardware_identity_ref,
-                            owner_domain_generation=device_ref.owner_domain_generation,
-                            claim_generation=device_ref.claim_generation,
-                            trust_epoch=device_ref.trust_epoch,
-                            manifest_ref_json=grant.manifest_ref_json,
-                            approval_decision_id=grant.decision_id,
-                            operational_public_key_spki=proposal.operational_public_key_spki,
-                            state="revoked",
-                            revision=1,
-                            activated_at=None,
-                            updated_at=now,
-                            revoked_at=now,
+                        device_instance_id=device_ref.device_instance_id,
+                        owner_domain_id=str(device_ref.owner_domain_id),
+                        business_owner_id=decision.target_business_owner_id,
+                        hardware_identity_ref=grant.hardware_identity_ref,
+                        owner_domain_generation=device_ref.owner_domain_generation,
+                        claim_generation=device_ref.claim_generation,
+                        trust_epoch=device_ref.trust_epoch,
+                        manifest_ref_json=grant.manifest_ref_json,
+                        approval_decision_id=grant.decision_id,
+                        operational_public_key_spki=proposal.operational_public_key_spki,
+                        state="revoked",
+                        revision=1,
+                        activated_at=None,
+                        updated_at=now,
+                        revoked_at=now,
                     )
                     revision = 1
                 else:
                     if claim.state == "revoked":
                         occurred_at = aware(claim.revoked_at or claim.updated_at)
                         result = {
+                            "operation": "device.claim-revocation-result",
                             "command_id": command_id,
                             "outcome": "committed",
                             "device_ref": device_ref.model_dump(mode="json"),
+                            "aggregate_revision": claim.revision,
+                            "event_id": None,
+                            "lifecycle_state": "revoked",
                             "claim_state": "revoked",
                             "occurred_at": occurred_at.isoformat().replace("+00:00", "Z"),
                         }
@@ -1068,10 +1116,15 @@ class AdmissionAuthority:
                         if active_grant is not None:
                             active_grant.revoked_at = now
                         revision = claim.revision
+                event_id = self.ids.new("admission-event")
                 result = {
+                    "operation": "device.claim-revocation-result",
                     "command_id": command_id,
                     "outcome": "committed",
                     "device_ref": device_ref.model_dump(mode="json"),
+                    "aggregate_revision": revision,
+                    "event_id": event_id,
+                    "lifecycle_state": "revoked",
                     "claim_state": "revoked",
                     "occurred_at": now.isoformat().replace("+00:00", "Z"),
                 }
@@ -1084,7 +1137,6 @@ class AdmissionAuthority:
                     result=result,
                     occurred_at=now,
                 )
-                event_id = self.ids.new("admission-event")
                 event_type = "live.eidolon.device.claim-revoked.v1"
                 event = self._event(
                     event_id=event_id,
@@ -1101,6 +1153,7 @@ class AdmissionAuthority:
                         "revoked_at": now.isoformat().replace("+00:00", "Z"),
                     },
                 )
+                event = ClaimRevokedEvent.model_validate(event).model_dump(mode="json")
                 self.store.add_outbox(
                     session,
                     event_id=event_id,
@@ -1134,4 +1187,205 @@ class AdmissionAuthority:
             state=ClaimState(row.state),
             revision=row.revision,
             updated_at=aware(row.updated_at),
+        )
+
+    @staticmethod
+    def _proposal(row) -> EnrollmentProposal:
+        return EnrollmentProposal(
+            enrollment_id=row.enrollment_id,
+            proposal_revision=row.revision,
+            state=EnrollmentProposalState(row.state),
+            device_instance_candidate_id=row.device_instance_id,
+            requested_owner_domain_id=row.requested_owner_domain_id,
+            hardware_evidence_digest=row.hardware_evidence_digest,
+            manifest_ref=ManifestRef(
+                manifest_id=row.manifest_id,
+                revision=row.manifest_revision,
+                digest=row.manifest_digest,
+            ),
+            handoff_key_id=row.handoff_key_id,
+            created_at=aware(row.created_at),
+            expires_at=aware(row.expires_at),
+        )
+
+    @staticmethod
+    def _claim(row) -> ClaimRecord:
+        return ClaimRecord(
+            device_ref=DeviceRef(
+                device_instance_id=row.device_instance_id,
+                owner_domain_id=row.owner_domain_id,
+                owner_domain_generation=row.owner_domain_generation,
+                claim_generation=row.claim_generation,
+                trust_epoch=row.trust_epoch,
+            ),
+            business_owner_id=row.business_owner_id,
+            manifest_ref=ManifestRef.model_validate(json.loads(row.manifest_ref_json)),
+            state=ClaimState(row.state),
+            revision=row.revision,
+            updated_at=aware(row.updated_at),
+        )
+
+    async def _recovery_projection(self, session, proposal) -> EnrollmentRecoveryProjection:
+        decision_row = await self.store.get_decision_for_enrollment(session, proposal.enrollment_id)
+        grant_row = await self.store.get_grant_for_enrollment(session, proposal.enrollment_id)
+        ack_row = await self.store.get_ack_for_enrollment(session, proposal.enrollment_id)
+        claim_row = (
+            await self.store.get_claim(session, proposal.device_instance_id)
+            if grant_row is not None
+            else None
+        )
+        decision = None
+        if decision_row is not None:
+            decision = ApprovalDecision(
+                decision_id=decision_row.decision_id,
+                enrollment_id=decision_row.enrollment_id,
+                decision=decision_row.decision,
+                actor=json.loads(decision_row.actor_json),
+                target_owner_domain_id=decision_row.target_owner_domain_id,
+                target_business_owner_id=decision_row.target_business_owner_id,
+                reviewed_manifest_ref=json.loads(decision_row.reviewed_manifest_json),
+                expected_proposal_revision=decision_row.expected_proposal_revision,
+                decided_at=aware(decision_row.decided_at),
+            )
+        delivery = None
+        if grant_row is not None and grant_row.delivered_at is not None:
+            delivery = GrantDeliveryRecord(
+                grant_id=grant_row.grant_id,
+                approval_decision_id=grant_row.decision_id,
+                state="acknowledged" if ack_row is not None else "delivered",
+                delivered_at=aware(grant_row.delivered_at),
+                acknowledged_at=(aware(ack_row.acknowledged_at) if ack_row is not None else None),
+            )
+        return EnrollmentRecoveryProjection(
+            proposal=self._proposal(proposal),
+            approval_decision=decision,
+            grant_delivery=delivery,
+            claim=self._claim(claim_row) if claim_row is not None else None,
+            source_revision=proposal.revision,
+            observed_at=self.clock.now(),
+        )
+
+    async def get_enrollment_recovery(
+        self, *, enrollment_id: str, context: ActorContext
+    ) -> EnrollmentRecoveryProjection:
+        context.require_scope("device.read")
+        await self.expire_due()
+        async with self.store.database.sessions() as session:
+            proposal = await self.store.get_proposal(session, enrollment_id)
+            if proposal is None or proposal.requested_owner_domain_id != str(
+                context.owner_domain_id
+            ):
+                raise AdmissionProblem(
+                    "NOT_FOUND", "enrollment not found", status=404, category="missing"
+                )
+            decision = await self.store.get_decision_for_enrollment(session, enrollment_id)
+            is_domain_approver = "device.claim.approve" in context.actor.granted_scopes
+            if decision is None and not is_domain_approver:
+                raise AdmissionProblem(
+                    "NOT_FOUND", "enrollment not found", status=404, category="missing"
+                )
+            if (
+                decision is not None
+                and decision.target_business_owner_id != str(context.business_owner_id)
+                and not is_domain_approver
+            ):
+                raise AdmissionProblem(
+                    "NOT_FOUND", "enrollment not found", status=404, category="missing"
+                )
+            return await self._recovery_projection(session, proposal)
+
+    async def list_enrollment_recovery(
+        self, *, query: EnrollmentProposalQuery, context: ActorContext
+    ) -> EnrollmentProposalPage:
+        context.require_scope("device.claim.approve")
+        if query.owner_domain_id != context.owner_domain_id:
+            raise AdmissionProblem(
+                "NOT_FOUND", "enrollments not found", status=404, category="missing"
+            )
+        await self.expire_due()
+        cursor = (
+            (query.cursor.sort_key, query.cursor.resource_id) if query.cursor is not None else None
+        )
+        async with self.store.database.sessions() as session:
+            rows = await self.store.list_proposals(
+                session,
+                owner_domain_id=str(context.owner_domain_id),
+                states=tuple(state.value for state in query.states),
+                cursor=cursor,
+                limit=query.limit,
+            )
+            items = tuple([await self._recovery_projection(session, row) for row in rows])
+        next_cursor = None
+        if len(rows) == query.limit:
+            last = rows[-1]
+            next_cursor = AdmissionListCursor(
+                owner_domain_id=context.owner_domain_id,
+                sort_key=aware(last.created_at),
+                resource_id=last.enrollment_id,
+            )
+        return EnrollmentProposalPage(
+            owner_domain_id=context.owner_domain_id,
+            items=items,
+            next_cursor=next_cursor,
+            observed_at=self.clock.now(),
+        )
+
+    async def list_claims(self, *, query: ClaimQuery, context: ActorContext) -> ClaimPage:
+        context.require_scope("device.read")
+        if query.owner_domain_id != context.owner_domain_id:
+            return ClaimPage(
+                owner_domain_id=context.owner_domain_id,
+                items=(),
+                next_cursor=None,
+                observed_at=self.clock.now(),
+            )
+        cursor = (
+            (query.cursor.sort_key, query.cursor.resource_id) if query.cursor is not None else None
+        )
+        async with self.store.database.sessions() as session:
+            rows = await self.store.list_claims(
+                session,
+                owner_domain_id=str(context.owner_domain_id),
+                business_owner_id=str(context.business_owner_id),
+                states=tuple(state.value for state in query.states),
+                cursor=cursor,
+                limit=query.limit,
+            )
+        next_cursor = None
+        if len(rows) == query.limit:
+            last = rows[-1]
+            next_cursor = AdmissionListCursor(
+                owner_domain_id=context.owner_domain_id,
+                sort_key=aware(last.updated_at),
+                resource_id=last.device_instance_id,
+            )
+        return ClaimPage(
+            owner_domain_id=context.owner_domain_id,
+            items=tuple(self._claim(row) for row in rows),
+            next_cursor=next_cursor,
+            observed_at=self.clock.now(),
+        )
+
+    async def claim_event_page(
+        self, *, cursor: ClaimEventCursor, limit: int, context: ActorContext
+    ) -> ClaimEventPage:
+        context.require_scope("device.claim.events.read")
+        if context.owner_domain_id != self.owner_domain_id:
+            raise AdmissionProblem(
+                "NOT_FOUND", "Claim event stream not found", status=404, category="missing"
+            )
+        records, high_watermark = await self.store.claim_event_page(
+            after=cursor.stream_position, limit=limit
+        )
+        items = tuple(
+            ClaimEventStreamItem(stream_position=position, event=event)
+            for position, event in records
+        )
+        next_position = items[-1].stream_position if items else cursor.stream_position
+        return ClaimEventPage(
+            requested_after=cursor,
+            events=items,
+            next_cursor=ClaimEventCursor(stream_position=next_position),
+            high_watermark=high_watermark,
+            observed_at=self.clock.now(),
         )

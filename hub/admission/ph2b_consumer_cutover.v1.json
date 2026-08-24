@@ -1,6 +1,6 @@
 {
   "artifact": "eidolon-device-foundation-ph2b-consumer-cutover",
-  "contract_sdk_commit": "88a74ca33051a578d28fc1f6dc8627eb92dd071a",
+  "contract_sdk_commit": "d88196757e8c054befd2c17f7cb9c7a9eb6f5253",
   "default_writer_switch_authorized": false,
   "required_completion_gate": "coordinated producer/consumer cutover plus Mobile-to-Hub-to-device E2E",
   "migration": {
@@ -15,7 +15,14 @@
       "admission_grant_acks_v1",
       "admission_claims_v1",
       "admission_command_results_v1",
-      "admission_outbox_v1"
+      "admission_outbox_v1",
+      "admission_claim_event_stream_v1"
+    ],
+    "forward_additive_columns": [
+      "admission_claim_grants_v1.wire_envelope_json"
+    ],
+    "isolated_physical_legacy": [
+      "admission_claim_grants_v1.sealed_grant is never read or written by the canonical target and is removed only after coordinated consumer activation"
     ]
   },
   "consumers": [
@@ -70,6 +77,28 @@
       ]
     },
     {
+      "owner": "eidolon_kernel",
+      "callsites": [
+        "eidolon_kernel/adapters/device_registry/hub_http.py",
+        "tests/process_support.py"
+      ],
+      "replace": [
+        "LegacyClaimEventPage and flat ClaimEventRecord polling with generated ClaimEventPage and ClaimEventCursor",
+        "event-id-only recovery with durable admission-claims-v1 stream_position checkpoints",
+        "revoked-only decoding with canonical ClaimActivated and ClaimRevoked CloudEvent bindings"
+      ],
+      "delete": [
+        "locally declared LegacyClaimEventRecord and LegacyClaimEventPage",
+        "cursor advancement that discards transport sequence",
+        "event acceptance without fixed source, subject, dataschema, audience and Owner Domain checks"
+      ],
+      "target_tests": [
+        "duplicate stream item is idempotent while a durable sequence gap fails closed",
+        "restart resumes after the committed stream position without missing ClaimActivated",
+        "dataschema, source, audience, Owner Domain and generation mismatches are rejected"
+      ]
+    },
+    {
       "owner": "eidolon-client-esp32",
       "callsites": [
         "main/eidolon/hub_onboarding_client.cc",
@@ -79,7 +108,8 @@
       ],
       "replace": [
         "legacy device.handoff with proof-bound ClaimGrant collection and operational-key GrantAck",
-        "handwritten six-field DeviceRef with generated five-field C++ binding plus ManifestRef"
+        "handwritten six-field DeviceRef with generated five-field C++ binding plus ManifestRef",
+        "opaque sealed_grant parsing with generated ClaimGrantWireEnvelope and pre-open canonical ClaimGrantAAD verification"
       ],
       "delete": [
         "accepted_manifest_digest inside DeviceRef",
@@ -88,6 +118,7 @@
       ],
       "target_tests": [
         "Grant decrypts only under the Proposal handoff key and frozen AAD",
+        "AAD, recipient handoff key id, profile and HPKE suite are validated before open",
         "Ack is signed by the committed operational key",
         "reboot and reply loss reuse command ids without a second event or time"
       ]

@@ -6,7 +6,6 @@ from datetime import datetime
 from typing import Literal
 
 from eidolon_sdk.device_foundation.v1 import (
-    ClaimEventPage,
     DeviceEraseContractError,
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
@@ -23,9 +22,6 @@ from eidolon_sdk.device_foundation.v1 import (
     verify_p256_signature,
 )
 from eidolon_sdk.device_foundation.v1 import (
-    ClaimEventRecord as ClaimEvent,
-)
-from eidolon_sdk.device_foundation.v1 import (
     RevokeClaim as DeviceRevocationRequest,
 )
 from eidolon_sdk.device_foundation.v1 import (
@@ -38,8 +34,6 @@ from hub.contracts.bindings.common import ContractModel, JsonObject
 DeviceLifecycleState = Literal["pending-approval", "approved", "revoked"]
 
 __all__ = [
-    "ClaimEvent",
-    "ClaimEventPage",
     "ClaimRevocationResult",
     "DeviceControlOperationStatus",
     "DeviceEraseContractError",

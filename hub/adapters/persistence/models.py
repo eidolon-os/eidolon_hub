@@ -120,9 +120,7 @@ class DeviceControlOperationRow(Base):
     state: Mapped[str] = mapped_column(String(32), index=True)
     attempt_count: Mapped[int] = mapped_column(Integer, default=0)
     next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
-    delivered_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_error: Mapped[str] = mapped_column(String(512), default="")
 
 
@@ -166,9 +164,7 @@ class DeviceEraseOperationRow(Base):
     delivery_accepted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
-    acknowledged_at: Mapped[datetime | None] = mapped_column(
-        DateTime(timezone=True), nullable=True
-    )
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     terminal_result: Mapped[str | None] = mapped_column(String(64), nullable=True)
     result_code: Mapped[str] = mapped_column(String(128), default="")
     last_error_code: Mapped[str] = mapped_column(String(128), default="")
@@ -241,7 +237,10 @@ class AdmissionGrantRow(Base):
     handoff_key_id: Mapped[str] = mapped_column(String(71))
     operational_key_id: Mapped[str] = mapped_column(String(71))
     grant_json: Mapped[str] = mapped_column(Text)
-    sealed_grant: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Physical bridge only: the pre-PH2-B0 column is retained until coordinated
+    # activation, but canonical Admission never reads or writes it.
+    legacy_sealed_grant: Mapped[str | None] = mapped_column("sealed_grant", Text, nullable=True)
+    wire_envelope_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -302,3 +301,17 @@ class AdmissionOutboxRow(Base):
     published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     publish_attempts: Mapped[int] = mapped_column(Integer, default=0)
     last_error: Mapped[str] = mapped_column(String(512), default="")
+
+
+class AdmissionClaimEventStreamRow(Base):
+    """Dedicated contiguous recovery stream; transport position is not event data."""
+
+    __tablename__ = "admission_claim_event_stream_v1"
+    __table_args__ = {"sqlite_autoincrement": True}
+
+    stream_position: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    event_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    event_json: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

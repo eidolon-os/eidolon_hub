@@ -38,6 +38,24 @@ def test_canonical_admission_router_is_not_wired_to_default_pi5_traffic() -> Non
     assert "create_admission_router" not in composition
 
 
+def test_canonical_admission_target_exports_only_sdk_owned_models() -> None:
+    root = Path(__file__).resolve().parents[2]
+    bindings = root / "hub" / "contracts" / "bindings" / "admission.py"
+    tree = ast.parse(bindings.read_text(encoding="utf-8"))
+    assert not any(isinstance(node, ast.ClassDef) for node in ast.walk(tree))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    }
+    assert imports == {"eidolon_sdk.device_foundation.v1"}
+
+    target = (root / "hub" / "admission" / "target_app.py").read_text(encoding="utf-8")
+    assert "create_admission_router" in target
+    assert "device_onboarding" not in target
+    assert "device_management" not in target
+
+
 def test_canonical_admission_uses_only_frozen_source_and_event_catalog() -> None:
     workspace = Path(__file__).resolve().parents[3]
     source = (workspace / "eidolon_hub" / "hub" / "admission" / "application.py").read_text(
@@ -113,7 +131,7 @@ def test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed() ->
             workspace / "eidolon_hub" / "hub" / "admission" / "ph2b_consumer_cutover.v1.json"
         ).read_text(encoding="utf-8")
     )
-    assert manifest["contract_sdk_commit"] == ("88a74ca33051a578d28fc1f6dc8627eb92dd071a")
+    assert manifest["contract_sdk_commit"] == ("d88196757e8c054befd2c17f7cb9c7a9eb6f5253")
     assert manifest["default_writer_switch_authorized"] is False
     assert manifest["migration"] == {
         "mode": "additive_physical_bridge",
@@ -128,11 +146,19 @@ def test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed() ->
             "admission_claims_v1",
             "admission_command_results_v1",
             "admission_outbox_v1",
+            "admission_claim_event_stream_v1",
+        ],
+        "forward_additive_columns": [
+            "admission_claim_grants_v1.wire_envelope_json",
+        ],
+        "isolated_physical_legacy": [
+            "admission_claim_grants_v1.sealed_grant is never read or written by the canonical target and is removed only after coordinated consumer activation",
         ],
     }
     expected_owners = {
         "eidolon_admin",
         "eidolon_client_mobile",
+        "eidolon_kernel",
         "eidolon-client-esp32",
         "eidolon_channel",
         "eidolon_hub_legacy_and_projections",
@@ -157,11 +183,7 @@ def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requireme
     workspace = Path(__file__).resolve().parents[3]
     mapping = json.loads(
         (
-            workspace
-            / "eidolon_hub"
-            / "hub"
-            / "admission"
-            / "requirement_test_mapping.v1.json"
+            workspace / "eidolon_hub" / "hub" / "admission" / "requirement_test_mapping.v1.json"
         ).read_text(encoding="utf-8")
     )
     sdk_requirements = json.loads(
@@ -185,11 +207,15 @@ def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requireme
             if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
             and node.name.startswith("test_")
         )
-    assert mapping["contract_sdk_commit"] == (
-        "88a74ca33051a578d28fc1f6dc8627eb92dd071a"
-    )
+    assert mapping["contract_sdk_commit"] == ("d88196757e8c054befd2c17f7cb9c7a9eb6f5253")
     assert mapping["requirements"]
     for requirement in mapping["requirements"]:
         assert requirement["requirement_id"] in frozen_ids
         assert requirement["tests"]
         assert set(requirement["tests"]) <= test_names
+
+
+def test_canonical_target_never_reads_or_writes_legacy_opaque_grant() -> None:
+    root = Path(__file__).resolve().parents[2] / "hub" / "admission"
+    canonical = "\n".join(path.read_text(encoding="utf-8") for path in sorted(root.glob("*.py")))
+    assert "sealed_grant" not in canonical

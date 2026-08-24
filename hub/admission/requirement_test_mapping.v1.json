@@ -1,6 +1,6 @@
 {
-  "artifact": "eidolon-hub-ph2a-requirement-test-evidence",
-  "contract_sdk_commit": "88a74ca33051a578d28fc1f6dc8627eb92dd071a",
+  "artifact": "eidolon-hub-ph2b0-requirement-test-evidence",
+  "contract_sdk_commit": "d88196757e8c054befd2c17f7cb9c7a9eb6f5253",
   "requirements": [
     {
       "requirement_id": "DF-PH2-IDENTITY-001",
@@ -26,7 +26,8 @@
         "test_reply_loss_and_concurrent_same_command_replay_one_durable_result",
         "test_transaction_rolls_back_proposal_result_and_outbox_on_event_conflict",
         "test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers",
-        "test_ph2_admission_physical_migration_is_additive_and_preserves_authority"
+        "test_ph2_admission_physical_migration_is_additive_and_preserves_authority",
+        "test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted"
       ]
     },
     {
@@ -50,6 +51,34 @@
       "tests": [
         "test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers",
         "test_http_problem_mapping_preserves_owner_mismatch_and_actor_is_not_body_supplied"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2B0-BINDING-001",
+      "tests": [
+        "test_canonical_admission_target_exports_only_sdk_owned_models",
+        "test_owner_scoped_proposal_claim_recovery_and_target_composition",
+        "test_canonical_http_mutations_return_generated_closed_results"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2B0-GRANT-WIRE-001",
+      "tests": [
+        "test_claim_wire_envelope_is_preopen_complete_and_replay_stable"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2B0-CLAIM-STREAM-001",
+      "tests": [
+        "test_claim_stream_dataschema_cursor_replay_publish_failure_and_restart",
+        "test_canonical_admission_uses_only_frozen_source_and_event_catalog"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2B0-RECOVERY-QUERY-001",
+      "tests": [
+        "test_owner_scoped_proposal_claim_recovery_and_target_composition",
+        "test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers"
       ]
     }
   ]

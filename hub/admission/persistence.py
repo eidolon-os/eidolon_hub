@@ -7,10 +7,11 @@ import json
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import (
+    AdmissionClaimEventStreamRow,
     AdmissionClaimRow,
     AdmissionCommandResultRow,
     AdmissionDecisionRow,
@@ -66,6 +67,82 @@ class SqlAdmissionStore:
         return await session.scalar(
             select(AdmissionGrantRow).where(AdmissionGrantRow.decision_id == decision_id)
         )
+
+    async def get_decision_for_enrollment(self, session, enrollment_id: str):
+        return await session.scalar(
+            select(AdmissionDecisionRow).where(AdmissionDecisionRow.enrollment_id == enrollment_id)
+        )
+
+    async def get_ack_for_enrollment(self, session, enrollment_id: str):
+        return await session.scalar(
+            select(AdmissionGrantAckRow).where(AdmissionGrantAckRow.enrollment_id == enrollment_id)
+        )
+
+    async def list_proposals(
+        self,
+        session,
+        *,
+        owner_domain_id: str,
+        states: tuple[str, ...],
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ):
+        statement = select(AdmissionProposalRow).where(
+            AdmissionProposalRow.requested_owner_domain_id == owner_domain_id,
+            AdmissionProposalRow.state.in_(states),
+        )
+        if cursor is not None:
+            sort_key, resource_id = cursor
+            statement = statement.where(
+                or_(
+                    AdmissionProposalRow.created_at > sort_key,
+                    and_(
+                        AdmissionProposalRow.created_at == sort_key,
+                        AdmissionProposalRow.enrollment_id > resource_id,
+                    ),
+                )
+            )
+        return (
+            await session.scalars(
+                statement.order_by(
+                    AdmissionProposalRow.created_at, AdmissionProposalRow.enrollment_id
+                ).limit(limit)
+            )
+        ).all()
+
+    async def list_claims(
+        self,
+        session,
+        *,
+        owner_domain_id: str,
+        business_owner_id: str,
+        states: tuple[str, ...],
+        cursor: tuple[datetime, str] | None,
+        limit: int,
+    ):
+        statement = select(AdmissionClaimRow).where(
+            AdmissionClaimRow.owner_domain_id == owner_domain_id,
+            AdmissionClaimRow.business_owner_id == business_owner_id,
+            AdmissionClaimRow.state.in_(states),
+        )
+        if cursor is not None:
+            sort_key, resource_id = cursor
+            statement = statement.where(
+                or_(
+                    AdmissionClaimRow.updated_at > sort_key,
+                    and_(
+                        AdmissionClaimRow.updated_at == sort_key,
+                        AdmissionClaimRow.device_instance_id > resource_id,
+                    ),
+                )
+            )
+        return (
+            await session.scalars(
+                statement.order_by(
+                    AdmissionClaimRow.updated_at, AdmissionClaimRow.device_instance_id
+                ).limit(limit)
+            )
+        ).all()
 
     async def list_expirable(self, session, *, states: tuple[str, ...], deadline: datetime):
         return (
@@ -183,6 +260,7 @@ class SqlAdmissionStore:
         event: dict,
         occurred_at: datetime,
     ) -> None:
+        encoded = json.dumps(event, sort_keys=True, separators=(",", ":"))
         session.add(
             AdmissionOutboxRow(
                 event_id=event_id,
@@ -190,13 +268,53 @@ class SqlAdmissionStore:
                 source="urn:eidolon:authority:admission",
                 aggregate_id=aggregate_id,
                 aggregate_revision=aggregate_revision,
-                event_json=json.dumps(event, sort_keys=True, separators=(",", ":")),
+                event_json=encoded,
                 occurred_at=occurred_at,
                 published_at=None,
                 publish_attempts=0,
                 last_error="",
             )
         )
+        if event_type in {
+            "live.eidolon.device.claim-activated.v1",
+            "live.eidolon.device.claim-revoked.v1",
+        }:
+            session.add(
+                AdmissionClaimEventStreamRow(
+                    event_id=event_id,
+                    owner_domain_id=event["ownerdomainid"],
+                    event_type=event_type,
+                    event_json=encoded,
+                    occurred_at=occurred_at,
+                )
+            )
+
+    async def claim_event_page(
+        self, *, after: int, limit: int
+    ) -> tuple[tuple[tuple[int, dict], ...], int]:
+        async with self.database.sessions() as session:
+            high_watermark = (
+                await session.scalar(select(func.max(AdmissionClaimEventStreamRow.stream_position)))
+                or 0
+            )
+            if after > high_watermark:
+                raise AdmissionProblem("CURSOR_GAP", "Claim event cursor is ahead of the stream")
+            if after and await session.get(AdmissionClaimEventStreamRow, after) is None:
+                raise AdmissionProblem("CURSOR_GAP", "Claim event cursor is no longer retained")
+            rows = (
+                await session.scalars(
+                    select(AdmissionClaimEventStreamRow)
+                    .where(AdmissionClaimEventStreamRow.stream_position > after)
+                    .order_by(AdmissionClaimEventStreamRow.stream_position)
+                    .limit(limit)
+                )
+            ).all()
+        positions = [row.stream_position for row in rows]
+        if positions and positions != list(range(after + 1, after + 1 + len(positions))):
+            raise AdmissionProblem("CURSOR_GAP", "Claim event stream contains a durable gap")
+        return tuple(
+            (row.stream_position, json.loads(row.event_json)) for row in rows
+        ), high_watermark
 
     async def pending_outbox(self, *, limit: int = 100) -> tuple[dict, ...]:
         async with self.database.sessions() as session:

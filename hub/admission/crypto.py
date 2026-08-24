@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
 import math
 from typing import Any
 
@@ -15,6 +14,8 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+from hub.contracts.bindings.admission import ClaimGrantAAD, ClaimGrantWireEnvelope
 
 
 def _b64(value: bytes) -> str:
@@ -70,7 +71,13 @@ def _labeled_expand(suite: bytes, prk: bytes, label: bytes, info: bytes, length:
     return _expand(prk, length.to_bytes(2, "big") + b"HPKE-v1" + suite + label + info, length)
 
 
-def seal_claim_grant(public_spki: str, grant: dict[str, Any], aad: dict[str, Any]) -> str:
+def seal_claim_grant(
+    public_spki: str,
+    grant: dict[str, Any],
+    aad: ClaimGrantAAD,
+    *,
+    recipient_handoff_key_id: str,
+) -> ClaimGrantWireEnvelope:
     recipient = load_p256_spki(public_spki)
     ephemeral = ec.generate_private_key(ec.SECP256R1())
     enc = ephemeral.public_key().public_bytes(
@@ -97,7 +104,12 @@ def seal_claim_grant(public_spki: str, grant: dict[str, Any], aad: dict[str, Any
     secret = _labeled_extract(suite, shared, b"secret", b"")
     key = _labeled_expand(suite, secret, b"key", context, 16)
     nonce = _labeled_expand(suite, secret, b"base_nonce", context, 12)
-    ciphertext = AESGCM(key).encrypt(nonce, rfc8785.dumps(grant), rfc8785.dumps(aad))
-    return _b64(
-        json.dumps({"enc": _b64(enc), "ciphertext": _b64(ciphertext)}, sort_keys=True).encode()
+    ciphertext = AESGCM(key).encrypt(
+        nonce, rfc8785.dumps(grant), rfc8785.dumps(aad.model_dump(mode="json"))
+    )
+    return ClaimGrantWireEnvelope(
+        recipient_handoff_key_id=recipient_handoff_key_id,
+        encapsulated_key=_b64(enc),
+        ciphertext=_b64(ciphertext),
+        aad=aad,
     )
