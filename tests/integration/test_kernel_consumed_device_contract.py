@@ -149,9 +149,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                     owner_domain_generation=admission.device_ref.owner_domain_generation,
                     claim_generation=admission.device_ref.claim_generation,
                     trust_epoch=admission.device_ref.trust_epoch,
-                    accepted_manifest_digest=(
-                        admission.device_ref.accepted_manifest_digest
-                    ),
+                    accepted_manifest_digest=admission.manifest_revision,
                 ),
                 at=datetime.now(UTC),
                 request_id="joint-mount-1",
@@ -190,7 +188,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                 "target_claim_generation": admission.device_ref.claim_generation,
                 "target_trust_epoch": admission.device_ref.trust_epoch,
                 "target_manifest_digest": (
-                    admission.device_ref.accepted_manifest_digest
+                    admission.manifest_revision
                 ),
             }
             removal_token = _token(
@@ -222,9 +220,7 @@ async def test_kernel_consumes_approval_and_reconciles_real_hub_revocation(
                     ),
                     "claim_generation": admission.device_ref.claim_generation,
                     "trust_epoch": admission.device_ref.trust_epoch,
-                    "accepted_manifest_digest": (
-                        admission.device_ref.accepted_manifest_digest
-                    ),
+                    "accepted_manifest_digest": admission.manifest_revision,
                 },
                 "reason": "joint-contract-test",
             }

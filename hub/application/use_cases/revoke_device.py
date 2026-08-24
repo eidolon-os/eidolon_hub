@@ -56,7 +56,7 @@ class RevokeDevice:
             )
         )
         replay = await self._claims.get_command(
-            owner_domain_id=device_ref.owner_domain_id,
+            owner_domain_id=str(device_ref.owner_domain_id),
             command_type="device.claim.revoke",
             command_id=command_id,
         )
@@ -68,7 +68,7 @@ class RevokeDevice:
         current = await self._devices.get(device_ref.device_instance_id)
         if current is None:
             raise KeyError(device_ref.device_instance_id)
-        if current.owner_id != device_ref.owner_domain_id:
+        if current.owner_domain_id != str(device_ref.owner_domain_id):
             raise PermissionError("device does not belong to that Owner Domain")
         if current.device_ref != device_ref:
             raise LookupError("Claim generation or trust epoch is stale")
@@ -92,6 +92,8 @@ class RevokeDevice:
             event_id=self._ids.new("claim-event"),
             event_type="live.eidolon.device.claim-revoked.v1",
             device_ref=device_ref,
+            manifest_digest=current.manifest_revision,
+            business_owner_id=current.owner_id,
             aggregate_revision=revoked.aggregate_revision,
             correlation_id=correlation_id,
             causation_id=command_id,

@@ -31,6 +31,7 @@ class ProjectDeviceDirectory:
             updated_at=device.updated_at,
             retrieval_expires_at=device.retrieval_expires_at,
             owner_domain_generation=device.owner_domain_generation,
+            owner_domain_id=device.owner_domain_id,
             claim_generation=device.claim_generation,
             trust_epoch=device.trust_epoch,
         )

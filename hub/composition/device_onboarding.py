@@ -66,6 +66,7 @@ def build_device_onboarding(
                 tokens=tokens,
                 enrollment_ttl=retrieval_window,
                 owner_domain_generation=owner_directory.descriptor.owner_domain_generation,
+                owner_domain_id=owner_directory.owner_domain_id,
                 directory_projector=projector,
             ),
             handoff=HandoffDevice(

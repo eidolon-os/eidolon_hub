@@ -39,6 +39,8 @@ class ClaimEventRecord:
     event_id: str
     event_type: str
     device_ref: DeviceRef
+    manifest_digest: str
+    business_owner_id: str
     aggregate_revision: int
     correlation_id: str
     causation_id: str
@@ -49,12 +51,15 @@ class ClaimEventRecord:
     def __post_init__(self) -> None:
         if self.event_type != "live.eidolon.device.claim-revoked.v1":
             raise ValueError("unsupported Claim event type")
+        if not self.manifest_digest.startswith("sha256:"):
+            raise ValueError("Claim event requires an accepted Manifest digest")
         if self.aggregate_revision < 1:
             raise ValueError("Claim event aggregate revision must be positive")
         if any(
             not value.strip()
             for value in (
                 self.event_id,
+                self.business_owner_id,
                 self.correlation_id,
                 self.causation_id,
                 self.actor_principal_id,

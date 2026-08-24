@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from eidolon_sdk.device_foundation.v1 import OwnerDomainId
 
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.application.use_cases.approve_device import ApproveDevice
@@ -81,13 +82,13 @@ class _Claims:
             occurred_at=event.occurred_at,
             event_id=event.event_id,
         )
-        self.commands[(event.device_ref.owner_domain_id, "device.claim.revoke", command_id)] = value
+        self.commands[
+            (str(event.device_ref.owner_domain_id), "device.claim.revoke", command_id)
+        ] = value
         self.events.append(event)
         return value
 
-    async def commit_terminal_result(
-        self, *, device, command_id, fingerprint, occurred_at
-    ):
+    async def commit_terminal_result(self, *, device, command_id, fingerprint, occurred_at):
         value = ClaimCommandResult(
             command_id=command_id,
             fingerprint=fingerprint,
@@ -97,7 +98,9 @@ class _Claims:
             occurred_at=occurred_at,
             event_id=None,
         )
-        self.commands[(device.owner_id, "device.claim.revoke", command_id)] = value
+        self.commands[
+            (str(device.device_ref.owner_domain_id), "device.claim.revoke", command_id)
+        ] = value
         return value
 
 
@@ -231,7 +234,7 @@ async def test_revoking_names_an_owner_and_the_hub_holds_it_to_that() -> None:
     with pytest.raises(PermissionError):
         await revoke.execute(
             device_ref=devices.device.device_ref.model_copy(
-                update={"owner_domain_id": "owner-somebody-else"}
+                update={"owner_domain_id": OwnerDomainId("owner-somebody-else")}
             ),
             reason="test",
             command_id="revoke-1",

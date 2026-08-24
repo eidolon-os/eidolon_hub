@@ -13,6 +13,7 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceLocalEraseOperationStatus,
     DeviceOperationKeyProof,
     DeviceRef,
+    OwnerDomainId,
     canonical_bytes,
     operation_fingerprint,
     operation_key_id,
@@ -47,6 +48,7 @@ __all__ = [
     "DeviceLocalEraseOperationStatus",
     "DeviceOperationKeyProof",
     "DeviceRef",
+    "OwnerDomainId",
     "DeviceRevocationRequest",
     "canonical_bytes",
     "operation_fingerprint",
@@ -56,6 +58,64 @@ __all__ = [
     "verify_operation_key_proof",
     "verify_p256_signature",
 ]
+
+
+class LegacyDeviceRef(ContractModel):
+    """Existing PH1 wire shape kept only on routes awaiting PH2-B cutover."""
+
+    device_instance_id: str = Field(min_length=1, max_length=128)
+    owner_domain_id: str = Field(min_length=1, max_length=128)
+    owner_domain_generation: int = Field(ge=1)
+    claim_generation: int = Field(ge=1)
+    trust_epoch: int = Field(ge=1)
+    accepted_manifest_digest: str = Field(min_length=1, max_length=128)
+
+
+class LegacyDeviceRevocationRequest(ContractModel):
+    """Existing management route input; removed by the PH2-B cutover."""
+
+    operation: Literal["device.claim-revocation"] = "device.claim-revocation"
+    command_id: str = Field(min_length=3, max_length=128)
+    correlation_id: str = Field(min_length=3, max_length=128)
+    device_ref: LegacyDeviceRef
+    reason: str = Field(min_length=1, max_length=256)
+
+
+class LegacyClaimRevocationResult(ContractModel):
+    operation: Literal["device.claim-revocation-result"] = (
+        "device.claim-revocation-result"
+    )
+    command_id: str = Field(min_length=1, max_length=128)
+    outcome: Literal["committed", "replayed"]
+    device_ref: LegacyDeviceRef
+    aggregate_revision: int = Field(ge=1)
+    occurred_at: datetime
+    event_id: str | None = Field(default=None, min_length=1, max_length=128)
+    lifecycle_state: Literal["revoked"] = "revoked"
+
+
+class LegacyClaimEvent(ContractModel):
+    operation: Literal["device.claim-event"] = "device.claim-event"
+    stream_position: int = Field(ge=1)
+    event_id: str = Field(min_length=1, max_length=128)
+    event_type: Literal["live.eidolon.device.claim-revoked.v1"]
+    device_ref: LegacyDeviceRef
+    aggregate_revision: int = Field(ge=1)
+    correlation_id: str = Field(min_length=1, max_length=128)
+    causation_id: str = Field(min_length=1, max_length=128)
+    occurred_at: datetime
+    reason: str = Field(min_length=1, max_length=256)
+
+
+class LegacyClaimEventPage(ContractModel):
+    operation: Literal["device.claim-event-page"] = "device.claim-event-page"
+    next_stream_position: int = Field(ge=0)
+    events: tuple[LegacyClaimEvent, ...] = Field(default=(), max_length=500)
+
+    @field_validator("events", mode="before")
+    @classmethod
+    def _event_arrays(cls, value):
+        return tuple(value) if isinstance(value, list) else value
 
 
 class PropertyAffordance(ContractModel):
@@ -159,7 +219,7 @@ class DeviceDirectoryEntry(ContractModel):
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
     updated_at: datetime
-    device_ref: DeviceRef | None = None
+    device_ref: LegacyDeviceRef | None = None
 
 
 class DeviceDirectoryPage(ContractModel):

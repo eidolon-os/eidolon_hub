@@ -89,13 +89,13 @@ class _Claims:
             occurred_at=event.occurred_at,
             event_id=event.event_id,
         )
-        self.commands[(event.device_ref.owner_domain_id, "device.claim.revoke", command_id)] = result
+        self.commands[
+            (str(event.device_ref.owner_domain_id), "device.claim.revoke", command_id)
+        ] = result
         self.events.append(event)
         return result
 
-    async def commit_terminal_result(
-        self, *, device, command_id, fingerprint, occurred_at
-    ):
+    async def commit_terminal_result(self, *, device, command_id, fingerprint, occurred_at):
         result = ClaimCommandResult(
             command_id=command_id,
             fingerprint=fingerprint,
@@ -105,7 +105,9 @@ class _Claims:
             occurred_at=occurred_at,
             event_id=None,
         )
-        self.commands[(device.owner_id, "device.claim.revoke", command_id)] = result
+        self.commands[
+            (str(device.device_ref.owner_domain_id), "device.claim.revoke", command_id)
+        ] = result
         return result
 
 
@@ -321,9 +323,7 @@ async def test_revocation_refuses_a_stale_claim_generation() -> None:
         ids=_Ids(),
         directory_projector=_Recorder(),
     )
-    stale_ref = devices.device.device_ref.model_copy(
-        update={"claim_generation": 1}
-    )
+    stale_ref = devices.device.device_ref.model_copy(update={"claim_generation": 1})
     with pytest.raises(LookupError, match="stale"):
         await use_case.execute(
             device_ref=stale_ref,

@@ -186,3 +186,119 @@ class DeviceEraseAckEvidenceRow(Base):
     applied: Mapped[int] = mapped_column(Integer)
     result: Mapped[str] = mapped_column(String(64))
     result_code: Mapped[str] = mapped_column(String(128))
+
+
+class AdmissionProposalRow(Base):
+    __tablename__ = "admission_proposals_v1"
+
+    enrollment_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    device_instance_id: Mapped[str] = mapped_column(String(128), index=True)
+    hardware_identity_ref: Mapped[str] = mapped_column(String(128), index=True)
+    requested_owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    state: Mapped[str] = mapped_column(String(48), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    hardware_evidence_digest: Mapped[str] = mapped_column(String(71))
+    commissioning_proof_digest: Mapped[str] = mapped_column(String(71))
+    manifest_id: Mapped[str] = mapped_column(String(128))
+    manifest_revision: Mapped[int] = mapped_column(Integer)
+    manifest_digest: Mapped[str] = mapped_column(String(71))
+    manifest_json: Mapped[str] = mapped_column(Text)
+    handoff_public_key_spki: Mapped[str] = mapped_column(Text)
+    handoff_key_id: Mapped[str] = mapped_column(String(71))
+    operational_public_key_spki: Mapped[str] = mapped_column(Text)
+    operational_key_id: Mapped[str] = mapped_column(String(71))
+    collection_challenge_hash: Mapped[str] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmissionDecisionRow(Base):
+    __tablename__ = "admission_decisions_v1"
+
+    decision_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    enrollment_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    decision: Mapped[str] = mapped_column(String(16))
+    actor_json: Mapped[str] = mapped_column(Text)
+    target_owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    target_business_owner_id: Mapped[str] = mapped_column(String(128), index=True)
+    reviewed_manifest_json: Mapped[str] = mapped_column(Text)
+    expected_proposal_revision: Mapped[int] = mapped_column(Integer)
+    decided_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmissionGrantRow(Base):
+    __tablename__ = "admission_claim_grants_v1"
+
+    grant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    enrollment_id: Mapped[str] = mapped_column(String(128), unique=True, index=True)
+    decision_id: Mapped[str] = mapped_column(String(128), unique=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    hardware_identity_ref: Mapped[str] = mapped_column(String(128), index=True)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    device_ref_json: Mapped[str] = mapped_column(Text)
+    manifest_ref_json: Mapped[str] = mapped_column(Text)
+    handoff_key_id: Mapped[str] = mapped_column(String(71))
+    operational_key_id: Mapped[str] = mapped_column(String(71))
+    grant_json: Mapped[str] = mapped_column(Text)
+    sealed_grant: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AdmissionGrantAckRow(Base):
+    __tablename__ = "admission_grant_acks_v1"
+
+    grant_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    enrollment_id: Mapped[str] = mapped_column(String(128), unique=True)
+    proof_fingerprint: Mapped[str] = mapped_column(String(71))
+    device_ref_json: Mapped[str] = mapped_column(Text)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmissionClaimRow(Base):
+    __tablename__ = "admission_claims_v1"
+
+    device_instance_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    business_owner_id: Mapped[str] = mapped_column(String(128), index=True)
+    hardware_identity_ref: Mapped[str] = mapped_column(String(128), index=True)
+    owner_domain_generation: Mapped[int] = mapped_column(Integer)
+    claim_generation: Mapped[int] = mapped_column(Integer)
+    trust_epoch: Mapped[int] = mapped_column(Integer)
+    manifest_ref_json: Mapped[str] = mapped_column(Text)
+    approval_decision_id: Mapped[str] = mapped_column(String(128))
+    operational_public_key_spki: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(24), index=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    activated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class AdmissionCommandResultRow(Base):
+    __tablename__ = "admission_command_results_v1"
+
+    owner_domain_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    command_type: Mapped[str] = mapped_column(String(96), primary_key=True)
+    command_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(71))
+    result_json: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmissionOutboxRow(Base):
+    __tablename__ = "admission_outbox_v1"
+
+    event_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    event_type: Mapped[str] = mapped_column(String(128), index=True)
+    source: Mapped[str] = mapped_column(String(128))
+    aggregate_id: Mapped[str] = mapped_column(String(128), index=True)
+    aggregate_revision: Mapped[int] = mapped_column(Integer)
+    event_json: Mapped[str] = mapped_column(Text)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    publish_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str] = mapped_column(String(512), default="")

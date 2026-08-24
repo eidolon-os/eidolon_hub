@@ -1,0 +1,56 @@
+{
+  "artifact": "eidolon-hub-ph2a-requirement-test-evidence",
+  "contract_sdk_commit": "88a74ca33051a578d28fc1f6dc8627eb92dd071a",
+  "requirements": [
+    {
+      "requirement_id": "DF-PH2-IDENTITY-001",
+      "tests": [
+        "test_http_problem_mapping_preserves_owner_mismatch_and_actor_is_not_body_supplied",
+        "test_manifest_precondition_and_controller_scope_fail_closed"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2-ADMISSION-001",
+      "tests": [
+        "test_characterization_network_or_provider_success_cannot_imply_decision_or_claim",
+        "test_decision_collection_ack_activate_once_and_restart_replays_first_result",
+        "test_manifest_precondition_and_controller_scope_fail_closed",
+        "test_reject_cancel_and_deadline_expiry_are_distinct_terminal_facts",
+        "test_concurrent_controllers_commit_one_immutable_decision"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2-IDEM-001",
+      "tests": [
+        "test_same_command_different_payload_conflicts_and_invalid_proof_rolls_back",
+        "test_reply_loss_and_concurrent_same_command_replay_one_durable_result",
+        "test_transaction_rolls_back_proposal_result_and_outbox_on_event_conflict",
+        "test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers",
+        "test_ph2_admission_physical_migration_is_additive_and_preserves_authority"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2-REVOKE-001",
+      "tests": [
+        "test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack",
+        "test_active_revoke_fences_old_grant_ack_and_stale_generation"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2-BOUNDARY-001",
+      "tests": [
+        "test_canonical_admission_has_no_channel_kernel_companion_or_delivery_dependency",
+        "test_canonical_admission_router_is_not_wired_to_default_pi5_traffic",
+        "test_canonical_admission_contains_no_legacy_synchronous_callsite",
+        "test_ph2b_cutover_manifest_names_real_callsites_and_keeps_switch_closed"
+      ]
+    },
+    {
+      "requirement_id": "DF-PH2-OWNER-SCOPE-001",
+      "tests": [
+        "test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers",
+        "test_http_problem_mapping_preserves_owner_mismatch_and_actor_is_not_body_supplied"
+      ]
+    }
+  ]
+}

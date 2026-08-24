@@ -8,12 +8,13 @@ import json
 
 from hub.contracts.bindings.channel import ChannelAssignment
 from hub.contracts.bindings.device import (
-    ClaimEvent,
-    ClaimRevocationResult,
     DeviceControlOperationStatus,
     DeviceLifecycleStatus,
     DeviceManagementEvent,
     DeviceManifest,
+    LegacyClaimEvent,
+    LegacyClaimRevocationResult,
+    LegacyDeviceRef,
 )
 from hub.contracts.bindings.device import (
     DeviceDirectoryEntry as DeviceDirectoryEntryWire,
@@ -89,8 +90,17 @@ def handoff_outcome_to_wire(
         manifest_revision=device.manifest_revision,
         lifecycle_state=device.lifecycle_state.value,
         device_ref=(
-            device.device_ref
-            if device.lifecycle_state.value != "pending-approval"
+            LegacyDeviceRef(
+                device_instance_id=device.device_ref.device_instance_id,
+                # PH2-B removes this legacy projection, whose field name
+                # historically carried the business Owner id.
+                owner_domain_id=device.owner_id,
+                owner_domain_generation=device.device_ref.owner_domain_generation,
+                claim_generation=device.device_ref.claim_generation,
+                trust_epoch=device.device_ref.trust_epoch,
+                accepted_manifest_digest=device.manifest_revision,
+            )
+            if device.lifecycle_state.value != "pending-approval" and device.device_ref is not None
             else None
         ),
         channels=tuple(
@@ -128,38 +138,54 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         enrolled_at=entry.enrolled_at,
         updated_at=entry.updated_at,
         device_ref=(
-            {
-                "device_instance_id": entry.device_ref.device_instance_id,
-                "owner_domain_id": entry.device_ref.owner_domain_id,
-                "owner_domain_generation": entry.device_ref.owner_domain_generation,
-                "claim_generation": entry.device_ref.claim_generation,
-                "trust_epoch": entry.device_ref.trust_epoch,
-                "accepted_manifest_digest": entry.device_ref.accepted_manifest_digest,
-            }
+            LegacyDeviceRef(
+                device_instance_id=entry.device_ref.device_instance_id,
+                owner_domain_id=entry.owner_scope,
+                owner_domain_generation=entry.device_ref.owner_domain_generation,
+                claim_generation=entry.device_ref.claim_generation,
+                trust_epoch=entry.device_ref.trust_epoch,
+                accepted_manifest_digest=entry.manifest_revision,
+            )
             if entry.lifecycle_state.value != "pending-approval"
             else None
         ),
     )
 
 
-def claim_result_to_wire(result: ClaimCommandResult) -> ClaimRevocationResult:
-    return ClaimRevocationResult(
+def claim_result_to_wire(
+    result: ClaimCommandResult, *, business_owner_id: str, manifest_digest: str
+) -> LegacyClaimRevocationResult:
+    return LegacyClaimRevocationResult(
         command_id=result.command_id,
         outcome=result.outcome,
-        device_ref=result.device_ref,
+        device_ref=LegacyDeviceRef(
+            device_instance_id=result.device_ref.device_instance_id,
+            owner_domain_id=business_owner_id,
+            owner_domain_generation=result.device_ref.owner_domain_generation,
+            claim_generation=result.device_ref.claim_generation,
+            trust_epoch=result.device_ref.trust_epoch,
+            accepted_manifest_digest=manifest_digest,
+        ),
         aggregate_revision=result.aggregate_revision,
         occurred_at=result.occurred_at,
         event_id=result.event_id,
     )
 
 
-def stored_claim_event_to_wire(stored: StoredClaimEvent) -> ClaimEvent:
+def stored_claim_event_to_wire(stored: StoredClaimEvent) -> LegacyClaimEvent:
     event = stored.event
-    return ClaimEvent(
+    return LegacyClaimEvent(
         stream_position=stored.stream_position,
         event_id=event.event_id,
         event_type=event.event_type,
-        device_ref=event.device_ref,
+        device_ref=LegacyDeviceRef(
+            device_instance_id=event.device_ref.device_instance_id,
+            owner_domain_id=event.business_owner_id,
+            owner_domain_generation=event.device_ref.owner_domain_generation,
+            claim_generation=event.device_ref.claim_generation,
+            trust_epoch=event.device_ref.trust_epoch,
+            accepted_manifest_digest=event.manifest_digest,
+        ),
         aggregate_revision=event.aggregate_revision,
         correlation_id=event.correlation_id,
         causation_id=event.causation_id,

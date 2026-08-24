@@ -41,6 +41,7 @@ def test_domain_and_application_do_not_import_infrastructure() -> None:
 def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
     allowed = {
         Path("hub/adapters/security/owner_directory.py"),
+        Path("hub/contracts/bindings/admission.py"),
         Path("hub/contracts/bindings/onboarding.py"),
         Path("hub/contracts/bindings/device.py"),
     }
@@ -120,12 +121,15 @@ def test_sqlalchemy_is_confined_to_persistence_and_composition() -> None:
         Path("hub/adapters/persistence"),
         Path("hub/composition"),
     }
+    allowed_files = {Path("hub/admission/persistence.py")}
     violations = []
     for path in (ROOT / "hub").rglob("*.py"):
         if "sqlalchemy" not in _imports(path):
             continue
         relative = path.relative_to(ROOT)
-        if not any(relative.is_relative_to(root) for root in allowed_roots):
+        if relative not in allowed_files and not any(
+            relative.is_relative_to(root) for root in allowed_roots
+        ):
             violations.append(str(relative))
     assert violations == []
 

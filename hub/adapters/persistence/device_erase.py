@@ -142,7 +142,6 @@ class SqlDeviceEraseLedger:
                             owner_domain_generation=event.owner_domain_generation,
                             claim_generation=event.claim_generation,
                             trust_epoch=event.trust_epoch,
-                            accepted_manifest_digest=event.accepted_manifest_digest,
                         ),
                         deadline=deadline,
                     )
@@ -257,13 +256,11 @@ class SqlDeviceEraseLedger:
             row = await session.scalar(
                 select(DeviceEraseOperationRow).where(
                     DeviceEraseOperationRow.device_id == device_ref.device_instance_id,
-                    DeviceEraseOperationRow.owner_domain_id == device_ref.owner_domain_id,
+                    DeviceEraseOperationRow.owner_domain_id == str(device_ref.owner_domain_id),
                     DeviceEraseOperationRow.owner_domain_generation
                     == device_ref.owner_domain_generation,
                     DeviceEraseOperationRow.claim_generation == device_ref.claim_generation,
                     DeviceEraseOperationRow.trust_epoch == device_ref.trust_epoch,
-                    DeviceEraseOperationRow.accepted_manifest_digest
-                    == device_ref.accepted_manifest_digest,
                 )
             )
         return None if row is None else self._decode(row)

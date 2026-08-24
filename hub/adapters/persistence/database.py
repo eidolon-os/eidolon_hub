@@ -139,10 +139,7 @@ class HubDatabase:
             }
             if (
                 bootstrap is None
-                or any(
-                    bootstrap.get(key) != value
-                    for key, value in expected_bootstrap.items()
-                )
+                or any(bootstrap.get(key) != value for key, value in expected_bootstrap.items())
                 or not isinstance(bootstrap.get("state_id"), str)
                 or not bootstrap["state_id"].startswith("authority-state_")
             ):
@@ -166,6 +163,18 @@ class HubDatabase:
                 )
             )
             return True, marker, True
+
+        # PH2-A is an additive physical migration only. It creates the isolated
+        # Admission tables without changing a legacy route, DTO, or writer.
+        # Domain cutover remains a separate PH2-B action.
+        missing_tables = expected_tables - actual_tables
+        if missing_tables and all(
+            table_name.startswith("admission_") for table_name in missing_tables
+        ):
+            for table_name in sorted(missing_tables):
+                Base.metadata.tables[table_name].create(connection, checkfirst=True)
+            schema = inspect(connection)
+            actual_tables = set(schema.get_table_names())
 
         problems: list[str] = []
         if actual_tables != expected_tables:
@@ -229,11 +238,13 @@ class HubDatabase:
                 + "; ".join(problems)
             )
 
-        row = connection.execute(
-            AuthorityStateRow.__table__.select().where(
-                AuthorityStateRow.singleton_id == 1
+        row = (
+            connection.execute(
+                AuthorityStateRow.__table__.select().where(AuthorityStateRow.singleton_id == 1)
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise RuntimeError(
                 "AuthorityRecoveryRequired: Hub database Authority marker is missing"
@@ -279,9 +290,7 @@ class HubDatabase:
                 "AuthorityRecoveryRequired: Authority lineage anchor is invalid"
             ) from exc
         if not isinstance(value, dict):
-            raise RuntimeError(
-                "AuthorityRecoveryRequired: Authority lineage anchor is invalid"
-            )
+            raise RuntimeError("AuthorityRecoveryRequired: Authority lineage anchor is invalid")
         return value
 
     def _read_bootstrap(self) -> dict[str, object] | None:

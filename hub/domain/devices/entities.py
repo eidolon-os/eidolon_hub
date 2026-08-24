@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 
-from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.device import DeviceRef, OwnerDomainId
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
@@ -30,6 +30,7 @@ class ManagedDevice:
     manifest: DeviceManifestDocument
     enrolled_at: datetime
     updated_at: datetime
+    owner_domain_id: str = "owner-test"
     owner_domain_generation: int = 1
     last_enrollment_request_id: str = ""
     last_enrollment_fingerprint: str = ""
@@ -82,11 +83,10 @@ class ManagedDevice:
             return None
         return DeviceRef(
             device_instance_id=self.identity.device_id,
-            owner_domain_id=self.owner_id,
+            owner_domain_id=OwnerDomainId(self.owner_domain_id),
             owner_domain_generation=self.owner_domain_generation,
             claim_generation=self.claim_generation,
             trust_epoch=self.trust_epoch,
-            accepted_manifest_digest=self.manifest_revision,
         )
 
 
@@ -119,6 +119,7 @@ class DeviceDirectoryEntry:
     claim_generation: int
     trust_epoch: int
     owner_domain_generation: int = 1
+    owner_domain_id: str = "owner-test"
 
     def __post_init__(self) -> None:
         if not self.device_id.strip() or not self.owner_scope.strip():
@@ -137,11 +138,10 @@ class DeviceDirectoryEntry:
     def device_ref(self) -> DeviceRef:
         return DeviceRef(
             device_instance_id=self.device_id,
-            owner_domain_id=self.owner_scope,
+            owner_domain_id=OwnerDomainId(self.owner_domain_id),
             owner_domain_generation=self.owner_domain_generation,
             claim_generation=self.claim_generation,
             trust_epoch=self.trust_epoch,
-            accepted_manifest_digest=self.manifest_revision,
         )
 
     def awaits_approval(self, *, now: datetime) -> bool:

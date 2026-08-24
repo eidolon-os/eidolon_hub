@@ -18,6 +18,7 @@ from sqlalchemy import (
 )
 
 from hub.adapters.persistence.database import HubDatabase
+from hub.adapters.persistence.models import AuthorityStateRow, Base
 from hub.composition.resources import create_database, resolve_database_path
 from hub.config import HubConfig, PersistenceConfig
 
@@ -45,6 +46,13 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
             actual = await connection.run_sync(table_names)
 
             assert actual == {
+                "admission_claim_grants_v1",
+                "admission_claims_v1",
+                "admission_command_results_v1",
+                "admission_decisions_v1",
+                "admission_grant_acks_v1",
+                "admission_outbox_v1",
+                "admission_proposals_v1",
                 "hub_claim_command_results",
                 "hub_claim_events",
                 "hub_device_control_operations",
@@ -57,6 +65,47 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
             }
         assert "hub_channel_assignments" not in actual
         assert "alembic_version" not in actual
+    finally:
+        await database.close()
+
+
+async def test_ph2_admission_physical_migration_is_additive_and_preserves_authority(
+    tmp_path,
+) -> None:
+    database = HubDatabase.sqlite(
+        tmp_path / "hub.sqlite3",
+        owner_domain_id="owner-domain_01",
+        owner_domain_generation=3,
+    )
+    admission_tables = {name for name in Base.metadata.tables if name.startswith("admission_")}
+    try:
+        await database.initialize_schema()
+        async with database.sessions() as session:
+            before = await session.get(AuthorityStateRow, 1)
+            before_marker = (
+                before.owner_domain_id,
+                before.owner_domain_generation,
+                before.state_id,
+            )
+        async with database.engine.begin() as connection:
+            for table_name in sorted(admission_tables, reverse=True):
+                await connection.run_sync(Base.metadata.tables[table_name].drop)
+
+        await database.initialize_schema()
+
+        async with database.engine.connect() as connection:
+            actual = await connection.run_sync(
+                lambda sync_connection: set(inspect(sync_connection).get_table_names())
+            )
+        async with database.sessions() as session:
+            after = await session.get(AuthorityStateRow, 1)
+            after_marker = (
+                after.owner_domain_id,
+                after.owner_domain_generation,
+                after.state_id,
+            )
+        assert admission_tables <= actual
+        assert after_marker == before_marker
     finally:
         await database.close()
 
@@ -156,9 +205,7 @@ async def test_pre_claim_database_requires_explicit_restore_or_reset(tmp_path) -
 
         async with database.engine.connect() as connection:
             row = (
-                await connection.execute(
-                    text("SELECT device_id, owner_id FROM hub_devices")
-                )
+                await connection.execute(text("SELECT device_id, owner_id FROM hub_devices"))
             ).one()
         assert row == ("device-1", "owner-1")
     finally:

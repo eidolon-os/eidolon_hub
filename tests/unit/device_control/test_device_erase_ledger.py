@@ -82,11 +82,10 @@ def _sign(key: ec.EllipticCurvePrivateKey, document: dict[str, object]) -> str:
 def _ref(generation: int = 7) -> DeviceRef:
     return DeviceRef(
         device_instance_id="device_erase_01",
-        owner_domain_id="owner_01",
+        owner_domain_id="owner-domain_01",
         owner_domain_generation=1,
         claim_generation=generation,
         trust_epoch=4,
-        accepted_manifest_digest=MANIFEST,
     )
 
 
@@ -104,7 +103,7 @@ async def _seed_event(
                 event_id=event_id,
                 event_type="live.eidolon.device.claim-revoked.v1",
                 device_id="device_erase_01",
-                owner_domain_id="owner_01",
+                owner_domain_id="owner-domain_01",
                 owner_domain_generation=1,
                 claim_generation=generation,
                 trust_epoch=4,
@@ -280,7 +279,7 @@ async def test_established_claim_uses_device_control_not_enrollment(database) ->
         owner_domain_generation=1,
         claim_generation=7,
         trust_epoch=4,
-        owner_id="owner_01",
+        owner_id="owner-domain_01",
         lifecycle_state=DeviceLifecycleState.REVOKED,
     )
     assert device.device_ref is not None

@@ -223,7 +223,7 @@ def create_device_erase_router(
             )
             operation = await runtime.ledger.get(operation_id=operation_id)
             if operation is None or (
-                operation.command.device_ref.owner_domain_id != owner_scope
+                str(operation.command.device_ref.owner_domain_id) != owner_scope
                 or operation.command.device_ref.device_instance_id != device_id
             ):
                 raise KeyError(operation_id)

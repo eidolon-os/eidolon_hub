@@ -41,7 +41,7 @@ class DeliverDeviceControlOperations:
                 await self._provider.revoke_channels(
                     ProviderChannelRevocation(
                         operation_id=operation.operation_id,
-                        owner_domain_id=operation.device_ref.owner_domain_id,
+                        owner_domain_id=str(operation.device_ref.owner_domain_id),
                         device_id=operation.device_ref.device_instance_id,
                         reason=operation.reason,
                     )

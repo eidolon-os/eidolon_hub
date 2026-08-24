@@ -13,8 +13,6 @@ from hub.application.use_cases.approve_device import ApproveDevice
 from hub.application.use_cases.rename_device import RenameDevice
 from hub.application.use_cases.revoke_device import RevokeDevice
 from hub.contracts.bindings.device import (
-    ClaimEventPage,
-    ClaimRevocationResult,
     DeviceApprovalRequest,
     DeviceControlOperationStatus,
     DeviceDirectoryEntry,
@@ -22,7 +20,9 @@ from hub.contracts.bindings.device import (
     DeviceLifecycleStatus,
     DeviceManagementEventPage,
     DeviceRenameRequest,
-    DeviceRevocationRequest,
+    LegacyClaimEventPage,
+    LegacyClaimRevocationResult,
+    LegacyDeviceRevocationRequest,
 )
 from hub.contracts.mappers import (
     claim_result_to_wire,
@@ -32,7 +32,7 @@ from hub.contracts.mappers import (
     stored_claim_event_to_wire,
     stored_event_to_wire,
 )
-from hub.domain.devices.entities import DeviceLifecycleState, DeviceRef
+from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.claim_lifecycle import ClaimLifecycleStore
 from hub.ports.device_control import DeviceControlStore
 from hub.ports.identity import ManagementAuthorizer, ManagementPermission
@@ -155,12 +155,12 @@ def create_device_management_router(
             events=tuple(stored_event_to_wire(item) for item in stored),
         )
 
-    @router.get("/claim-events", response_model=ClaimEventPage)
+    @router.get("/claim-events", response_model=LegacyClaimEventPage)
     async def list_claim_events(
         after_stream_position: int = 0,
         limit: int = 100,
         authorization: str = Header(alias="Authorization"),
-    ) -> ClaimEventPage:
+    ) -> LegacyClaimEventPage:
         runtime = current()
         try:
             await runtime.authorizer.authorize(
@@ -177,10 +177,8 @@ def create_device_management_router(
             raise HTTPException(status_code=403, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return ClaimEventPage(
-            next_stream_position=(
-                stored[-1].stream_position if stored else after_stream_position
-            ),
+        return LegacyClaimEventPage(
+            next_stream_position=(stored[-1].stream_position if stored else after_stream_position),
             events=tuple(stored_claim_event_to_wire(item) for item in stored),
         )
 
@@ -206,7 +204,7 @@ def create_device_management_router(
             if operation is None:
                 raise KeyError(event_id)
             if (
-                operation.device_ref.owner_domain_id != owner_scope
+                str(operation.device_ref.owner_domain_id) != owner_scope
                 or operation.device_ref.device_instance_id != device_id
             ):
                 raise KeyError(event_id)
@@ -214,11 +212,9 @@ def create_device_management_router(
                 principal.intent_id is None
                 or principal.target_owner_domain_generation
                 != operation.device_ref.owner_domain_generation
-                or principal.target_claim_generation
-                != operation.device_ref.claim_generation
+                or principal.target_claim_generation != operation.device_ref.claim_generation
                 or principal.target_trust_epoch != operation.device_ref.trust_epoch
-                or principal.target_manifest_digest
-                != operation.device_ref.accepted_manifest_digest
+                or principal.target_manifest_digest != operation.manifest_digest
             ):
                 raise PermissionError(
                     "management credential is not bound to this Device Control operation"
@@ -292,10 +288,10 @@ def create_device_management_router(
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return lifecycle_status_to_wire(device)
 
-    @router.post("/devices/{device_id}/revocation", response_model=ClaimRevocationResult)
+    @router.post("/devices/{device_id}/revocation", response_model=LegacyClaimRevocationResult)
     async def revoke_registered_device(
         device_id: str,
-        payload: DeviceRevocationRequest,
+        payload: LegacyDeviceRevocationRequest,
         authorization: str = Header(alias="Authorization"),
     ):
         runtime = current()
@@ -303,7 +299,7 @@ def create_device_management_router(
             principal = await runtime.authorizer.authorize(
                 credential=authorization,
                 permission=ManagementPermission.DEVICE_REVOKE,
-                owner_scope=payload.device_ref.owner_domain_id,
+                owner_scope=str(payload.device_ref.owner_domain_id),
                 device_id=device_id,
             )
             if payload.device_ref.device_instance_id != device_id:
@@ -314,17 +310,20 @@ def create_device_management_router(
                     or principal.target_device_id != device_id
                     or principal.target_owner_domain_generation
                     != payload.device_ref.owner_domain_generation
-                    or principal.target_claim_generation
-                    != payload.device_ref.claim_generation
+                    or principal.target_claim_generation != payload.device_ref.claim_generation
                     or principal.target_trust_epoch != payload.device_ref.trust_epoch
-                    or principal.target_manifest_digest
-                    != payload.device_ref.accepted_manifest_digest
                 ):
                     raise PermissionError(
                         "management credential is not bound to this RemovalIntent"
                     )
+            entry = await runtime.get_device.execute(
+                owner_scope=payload.device_ref.owner_domain_id,
+                device_id=device_id,
+            )
+            if entry.manifest_revision != payload.device_ref.accepted_manifest_digest:
+                raise PermissionError("management credential targets a different Manifest")
             result = await runtime.revoke_device.execute(
-                device_ref=DeviceRef(**payload.device_ref.model_dump()),
+                device_ref=entry.device_ref,
                 reason=payload.reason,
                 command_id=payload.command_id,
                 correlation_id=payload.correlation_id,
@@ -338,6 +337,10 @@ def create_device_management_router(
             raise HTTPException(status_code=409, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
-        return claim_result_to_wire(result)
+        return claim_result_to_wire(
+            result,
+            business_owner_id=entry.owner_scope,
+            manifest_digest=entry.manifest_revision,
+        )
 
     return router

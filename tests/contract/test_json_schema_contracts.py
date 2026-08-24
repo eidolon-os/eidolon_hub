@@ -84,11 +84,11 @@ def test_runtime_bindings_conform_to_generated_shapes() -> None:
         device_ref={
             "device_instance_id": "device-1",
             "owner_domain_id": "owner-1",
-            "owner_domain_generation": 1,
-            "claim_generation": 1,
-            "trust_epoch": 1,
-            "accepted_manifest_digest": "sha256:" + "a" * 64,
-        },
+                "owner_domain_generation": 1,
+                "claim_generation": 1,
+                "trust_epoch": 1,
+                "accepted_manifest_digest": "sha256:" + "a" * 64,
+            },
         channels=(
             ChannelAssignment(
                 channel_id="channel-1",

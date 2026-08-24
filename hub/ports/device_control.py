@@ -15,6 +15,7 @@ class DeviceControlOperation:
     operation_type: str
     operation_id: str
     device_ref: DeviceRef
+    manifest_digest: str
     reason: str
     state: str
     attempt_count: int

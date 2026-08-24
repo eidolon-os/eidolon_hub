@@ -1,0 +1,141 @@
+{
+  "artifact": "eidolon-device-foundation-ph2b-consumer-cutover",
+  "contract_sdk_commit": "88a74ca33051a578d28fc1f6dc8627eb92dd071a",
+  "default_writer_switch_authorized": false,
+  "required_completion_gate": "coordinated producer/consumer cutover plus Mobile-to-Hub-to-device E2E",
+  "migration": {
+    "mode": "additive_physical_bridge",
+    "domain_compatibility": "none",
+    "legacy_table_backfill": false,
+    "default_writer_activated": false,
+    "tables": [
+      "admission_proposals_v1",
+      "admission_decisions_v1",
+      "admission_claim_grants_v1",
+      "admission_grant_acks_v1",
+      "admission_claims_v1",
+      "admission_command_results_v1",
+      "admission_outbox_v1"
+    ]
+  },
+  "consumers": [
+    {
+      "owner": "eidolon_admin",
+      "callsites": [
+        "server/eidolon_admin_server/app/control_plane/clients.py",
+        "server/eidolon_admin_server/app/control_plane/contracts.py",
+        "server/eidolon_admin_server/app/control_plane/service.py",
+        "server/eidolon_admin_server/local_api/device_admissions.py"
+      ],
+      "replace": [
+        "pending-approval directory inference with EnrollmentProposal pending_review query",
+        "device.approval with explicit ApprovalDecision including authenticated Controller ActorRef",
+        "business owner_id carried as owner_domain_id with nominal OwnerDomainId and BusinessOwnerId fields",
+        "hub_approved completion with ApprovedAwaitingHandoff, GrantDelivered and ClaimActive projections"
+      ],
+      "delete": [
+        "inline approval success inferred from an empty pending list",
+        "accepted_manifest_digest inside DeviceRef",
+        "automatic Kernel mount or Companion assignment in the approval transaction"
+      ],
+      "target_tests": [
+        "pending query hides expired and cross-Owner proposals",
+        "Decision actor comes from authenticated context and cannot be body-supplied",
+        "projection distinguishes ApprovedAwaitingHandoff, GrantDelivered and ClaimActive",
+        "approval commit succeeds while Channel delivery is unavailable"
+      ]
+    },
+    {
+      "owner": "eidolon_client_mobile",
+      "callsites": [
+        "lib/src/features/conversation/hub_onboarding_client.dart",
+        "lib/src/features/conversation/hub_onboarding_models.dart",
+        "lib/src/features/device_setup/device_setup_coordinator.dart",
+        "lib/src/features/device_setup/platform_device_provisioning.dart"
+      ],
+      "replace": [
+        "inline device.approval with explicit Decision command and Controller context",
+        "approved handoff polling with ClaimGrant collection and GrantAck completion",
+        "handwritten six-field DeviceRef with generated five-field Dart binding plus ManifestRef"
+      ],
+      "delete": [
+        "pending-list-empty treated as enrollment completion",
+        "accepted_manifest_digest inside DeviceRef",
+        "404 or 409 handoff special cases used as lifecycle state"
+      ],
+      "target_tests": [
+        "OwnerDomainId differs from BusinessOwnerId in positive and negative flows",
+        "reply loss replays the first Decision, Grant and Ack result",
+        "revoked Grant and stale generation can never restore ClaimActive"
+      ]
+    },
+    {
+      "owner": "eidolon-client-esp32",
+      "callsites": [
+        "main/eidolon/hub_onboarding_client.cc",
+        "main/eidolon/hub_onboarding_protocol.cc",
+        "main/eidolon/device_provisioning_protocol.cc",
+        "main/eidolon/device_foundation_v1_generated.h"
+      ],
+      "replace": [
+        "legacy device.handoff with proof-bound ClaimGrant collection and operational-key GrantAck",
+        "handwritten six-field DeviceRef with generated five-field C++ binding plus ManifestRef"
+      ],
+      "delete": [
+        "accepted_manifest_digest inside DeviceRef",
+        "ClaimActive inferred from successful Wi-Fi or legacy handoff transport",
+        "Channel Provider response as an admission prerequisite"
+      ],
+      "target_tests": [
+        "Grant decrypts only under the Proposal handoff key and frozen AAD",
+        "Ack is signed by the committed operational key",
+        "reboot and reply loss reuse command ids without a second event or time"
+      ]
+    },
+    {
+      "owner": "eidolon_channel",
+      "callsites": [
+        "eidolon/channel_provider/http.py",
+        "eidolon/channel_provider/service.py",
+        "eidolon/channel_provider/store.py"
+      ],
+      "replace": [
+        "synchronous admission provisioning with an independent ClaimActivated event consumer"
+      ],
+      "delete": [
+        "provider 409 propagated into ClaimGrant or ClaimActive",
+        "assumption that Channel row creation is part of Admission commit"
+      ],
+      "target_tests": [
+        "duplicate ClaimActivated delivery converges idempotently",
+        "provider 409 is local projection evidence and never changes Claim state",
+        "outbox retry and process restart resume from the durable event cursor"
+      ]
+    },
+    {
+      "owner": "eidolon_hub_legacy_and_projections",
+      "callsites": [
+        "hub/composition/device_onboarding.py",
+        "hub/application/use_cases/provision_device_channels.py",
+        "hub/interfaces/http/routers/device_management.py",
+        "hub/contracts/bindings/device.py",
+        "hub/contracts/bindings/onboarding.py",
+        "hub/contracts/mappers.py"
+      ],
+      "replace": [
+        "default onboarding and approval routes with the committed canonical Admission router",
+        "legacy directory lifecycle with event-driven Proposal and Claim projections"
+      ],
+      "delete": [
+        "LegacyDeviceRef, LegacyDeviceRevocationRequest, LegacyClaimEvent and LegacyClaimRevocationResult",
+        "approved handoff synchronous ProvisionDeviceChannels call",
+        "legacy onboarding and device-management schemas that duplicate canonical SDK contracts"
+      ],
+      "target_tests": [
+        "default route uses canonical Admission only after every consumer is upgraded",
+        "Claim commit imports or calls no Channel, Delivery, Kernel or Companion component",
+        "projection restart reconstructs honest Proposal, Decision, Grant, Ack and Claim state"
+      ]
+    }
+  ]
+}

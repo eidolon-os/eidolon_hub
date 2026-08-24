@@ -45,19 +45,29 @@ class SqlDeviceRepository:
     async def get(self, device_id: str) -> ManagedDevice | None:
         async with self._database.sessions() as session:
             row = await session.get(DeviceRow, device_id)
-            return None if row is None else self._decode(row)
+            return (
+                None
+                if row is None
+                else self._decode(row, owner_domain_id=self._database.owner_domain_id)
+            )
 
     async def get_by_enrollment_id(self, enrollment_id: str) -> ManagedDevice | None:
         async with self._database.sessions() as session:
             row = await session.scalar(
                 select(DeviceRow).where(DeviceRow.enrollment_id == enrollment_id)
             )
-            return None if row is None else self._decode(row)
+            return (
+                None
+                if row is None
+                else self._decode(row, owner_domain_id=self._database.owner_domain_id)
+            )
 
     async def list_all(self) -> tuple[ManagedDevice, ...]:
         async with self._database.sessions() as session:
             rows = (await session.scalars(select(DeviceRow).order_by(DeviceRow.device_id))).all()
-            return tuple(self._decode(row) for row in rows)
+            return tuple(
+                self._decode(row, owner_domain_id=self._database.owner_domain_id) for row in rows
+            )
 
     @staticmethod
     def _values(device: ManagedDevice) -> dict[str, object]:
@@ -95,7 +105,7 @@ class SqlDeviceRepository:
             setattr(row, name, value)
 
     @staticmethod
-    def _decode(row: DeviceRow) -> ManagedDevice:
+    def _decode(row: DeviceRow, *, owner_domain_id: str = "owner-test") -> ManagedDevice:
         return ManagedDevice(
             identity=DeviceIdentity(row.device_id),
             enrollment_id=row.enrollment_id,
@@ -112,6 +122,7 @@ class SqlDeviceRepository:
             last_enrollment_request_id=row.last_enrollment_request_id,
             last_enrollment_fingerprint=row.last_enrollment_fingerprint,
             owner_domain_generation=row.owner_domain_generation,
+            owner_domain_id=owner_domain_id,
             claim_generation=row.claim_generation,
             trust_epoch=row.trust_epoch,
             aggregate_revision=row.aggregate_revision,
@@ -237,7 +248,13 @@ class SqlDeviceMutationUnitOfWork:
         async with self._lock:
             async with self._database.sessions.begin() as session:
                 row = await session.get(DeviceRow, device.identity.device_id)
-                actual = None if row is None else SqlDeviceRepository._decode(row)
+                actual = (
+                    None
+                    if row is None
+                    else SqlDeviceRepository._decode(
+                        row, owner_domain_id=self._database.owner_domain_id
+                    )
+                )
                 if actual != expected:
                     raise ConcurrentDeviceMutationError(
                         "device changed concurrently; reload and retry"
@@ -262,7 +279,9 @@ class SqlClaimLifecycleStore:
         self._lock = lock or asyncio.Lock()
 
     @staticmethod
-    def _decode_command(row: ClaimCommandResultRow, *, replayed: bool = False) -> ClaimCommandResult:
+    def _decode_command(
+        row: ClaimCommandResultRow, *, replayed: bool = False
+    ) -> ClaimCommandResult:
         return ClaimCommandResult(
             command_id=row.command_id,
             fingerprint=row.fingerprint,
@@ -273,7 +292,6 @@ class SqlClaimLifecycleStore:
                 owner_domain_generation=row.owner_domain_generation,
                 claim_generation=row.claim_generation,
                 trust_epoch=row.trust_epoch,
-                accepted_manifest_digest=row.accepted_manifest_digest,
             ),
             aggregate_revision=row.aggregate_revision,
             occurred_at=_aware(row.occurred_at),
@@ -305,7 +323,7 @@ class SqlClaimLifecycleStore:
         async with self._lock:
             async with self._database.sessions.begin() as session:
                 command_key = (
-                    device_ref.owner_domain_id,
+                    str(device_ref.owner_domain_id),
                     self.COMMAND_TYPE,
                     command_id,
                 )
@@ -315,7 +333,13 @@ class SqlClaimLifecycleStore:
                         raise ValueError("command_id was reused with different content")
                     return self._decode_command(existing, replayed=True)
                 row = await session.get(DeviceRow, device_ref.device_instance_id)
-                actual = None if row is None else SqlDeviceRepository._decode(row)
+                actual = (
+                    None
+                    if row is None
+                    else SqlDeviceRepository._decode(
+                        row, owner_domain_id=self._database.owner_domain_id
+                    )
+                )
                 if actual != expected:
                     raise ConcurrentDeviceMutationError(
                         "device changed concurrently; reload and retry"
@@ -340,18 +364,18 @@ class SqlClaimLifecycleStore:
                 await SqlDeviceManagementEventLedger._append(
                     session,
                     event=management_event,
-                    owner_id=device_ref.owner_domain_id,
+                    owner_id=str(device_ref.owner_domain_id),
                 )
                 session.add(
                     ClaimEventRow(
                         event_id=event.event_id,
                         event_type=event.event_type,
                         device_id=device_ref.device_instance_id,
-                        owner_domain_id=device_ref.owner_domain_id,
+                        owner_domain_id=str(device_ref.owner_domain_id),
                         owner_domain_generation=device_ref.owner_domain_generation,
                         claim_generation=device_ref.claim_generation,
                         trust_epoch=device_ref.trust_epoch,
-                        accepted_manifest_digest=device_ref.accepted_manifest_digest,
+                        accepted_manifest_digest=revoked.manifest_revision,
                         aggregate_revision=event.aggregate_revision,
                         correlation_id=event.correlation_id,
                         causation_id=event.causation_id,
@@ -361,7 +385,7 @@ class SqlClaimLifecycleStore:
                     )
                 )
                 result_row = ClaimCommandResultRow(
-                    owner_domain_id=device_ref.owner_domain_id,
+                    owner_domain_id=str(device_ref.owner_domain_id),
                     command_type=self.COMMAND_TYPE,
                     command_id=command_id,
                     fingerprint=fingerprint,
@@ -370,7 +394,7 @@ class SqlClaimLifecycleStore:
                     owner_domain_generation=device_ref.owner_domain_generation,
                     claim_generation=device_ref.claim_generation,
                     trust_epoch=device_ref.trust_epoch,
-                    accepted_manifest_digest=device_ref.accepted_manifest_digest,
+                    accepted_manifest_digest=revoked.manifest_revision,
                     aggregate_revision=event.aggregate_revision,
                     occurred_at=event.occurred_at,
                     event_id=event.event_id,
@@ -391,14 +415,14 @@ class SqlClaimLifecycleStore:
             raise ValueError("terminal Claim result requires an Owner-scoped device")
         async with self._lock:
             async with self._database.sessions.begin() as session:
-                key = (device_ref.owner_domain_id, self.COMMAND_TYPE, command_id)
+                key = (str(device_ref.owner_domain_id), self.COMMAND_TYPE, command_id)
                 existing = await session.get(ClaimCommandResultRow, key)
                 if existing is not None:
                     if existing.fingerprint != fingerprint:
                         raise ValueError("command_id was reused with different content")
                     return self._decode_command(existing, replayed=True)
                 row = ClaimCommandResultRow(
-                    owner_domain_id=device_ref.owner_domain_id,
+                    owner_domain_id=str(device_ref.owner_domain_id),
                     command_type=self.COMMAND_TYPE,
                     command_id=command_id,
                     fingerprint=fingerprint,
@@ -407,7 +431,7 @@ class SqlClaimLifecycleStore:
                     owner_domain_generation=device_ref.owner_domain_generation,
                     claim_generation=device_ref.claim_generation,
                     trust_epoch=device_ref.trust_epoch,
-                    accepted_manifest_digest=device_ref.accepted_manifest_digest,
+                    accepted_manifest_digest=device.manifest_revision,
                     aggregate_revision=device.aggregate_revision,
                     occurred_at=occurred_at,
                     event_id=None,
@@ -429,6 +453,13 @@ class SqlClaimLifecycleStore:
                     .limit(limit)
                 )
             ).all()
+        business_owners: dict[str, str] = {}
+        async with self._database.sessions() as session:
+            for row in rows:
+                device = await session.get(DeviceRow, row.device_id)
+                if device is None or device.owner_id is None:
+                    raise RuntimeError("Claim event has no persisted business Owner")
+                business_owners[row.event_id] = device.owner_id
         return tuple(
             StoredClaimEvent(
                 stream_position=row.stream_position,
@@ -441,8 +472,9 @@ class SqlClaimLifecycleStore:
                         owner_domain_generation=row.owner_domain_generation,
                         claim_generation=row.claim_generation,
                         trust_epoch=row.trust_epoch,
-                        accepted_manifest_digest=row.accepted_manifest_digest,
                     ),
+                    manifest_digest=row.accepted_manifest_digest,
+                    business_owner_id=business_owners[row.event_id],
                     aggregate_revision=row.aggregate_revision,
                     correlation_id=row.correlation_id,
                     causation_id=row.causation_id,
@@ -482,8 +514,8 @@ class SqlDeviceControlStore:
                 owner_domain_generation=row.owner_domain_generation,
                 claim_generation=row.claim_generation,
                 trust_epoch=row.trust_epoch,
-                accepted_manifest_digest=row.accepted_manifest_digest,
             ),
+            manifest_digest=row.accepted_manifest_digest,
             reason=row.reason,
             state=row.state,
             attempt_count=row.attempt_count,
@@ -528,9 +560,7 @@ class SqlDeviceControlStore:
                     created += 1
                 return created
 
-    async def list_due(
-        self, *, now: datetime, limit: int
-    ) -> tuple[DeviceControlOperation, ...]:
+    async def list_due(self, *, now: datetime, limit: int) -> tuple[DeviceControlOperation, ...]:
         if not 1 <= limit <= 100:
             raise ValueError("Device Control batch limit must be between 1 and 100")
         async with self._database.sessions() as session:
@@ -547,16 +577,12 @@ class SqlDeviceControlStore:
             ).all()
         return tuple(self._decode(row) for row in rows)
 
-    async def get_by_event_id(
-        self, *, event_id: str
-    ) -> DeviceControlOperation | None:
+    async def get_by_event_id(self, *, event_id: str) -> DeviceControlOperation | None:
         async with self._database.sessions() as session:
             row = await session.get(DeviceControlOperationRow, event_id)
         return None if row is None else self._decode(row)
 
-    async def mark_delivered(
-        self, *, event_id: str, delivered_at: datetime
-    ) -> None:
+    async def mark_delivered(self, *, event_id: str, delivered_at: datetime) -> None:
         async with self._lock:
             async with self._database.sessions.begin() as session:
                 row = await session.get(DeviceControlOperationRow, event_id)
