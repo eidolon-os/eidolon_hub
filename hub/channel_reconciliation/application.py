@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 from datetime import timedelta
 
-from hub.contracts.bindings.device import DeviceManifest, DeviceRef
+from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.identity import Clock
 
@@ -49,7 +50,23 @@ class ReconcileChannelBinding:
             or device.owner_id is None
         ):
             return ()
-        manifest = DeviceManifest.model_validate_json(device.manifest_json)
+        # Forwarded verbatim, as the Provider's own contract says it is: the
+        # accepted Manifest is the device's document, and this Authority does
+        # not speak its vocabulary. Parsing it into Hub's own affordance model
+        # meant a device whose Manifest was simply shaped differently — a real
+        # BOX-3 sends `{"endpoints": []}` — made this raise, above the guard
+        # that exists to answer "binding pending", so the configuration pull
+        # answered 500 to a device that was correctly claimed.
+        try:
+            manifest = json.loads(device.manifest_json)
+        except json.JSONDecodeError:
+            manifest = None
+        if not isinstance(manifest, dict):
+            _LOG.warning(
+                "Channel binding pending: accepted Manifest is not an object device=%s",
+                device_ref.device_instance_id,
+            )
+            return ()
         provision_id = _operation_id(
             "channel-provision",
             device_ref.model_dump_json(),

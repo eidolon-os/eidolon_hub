@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from typing import Literal
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from hub.contracts.bindings.device import DeviceManifest, DeviceRef
+from hub.contracts.bindings.device import DeviceRef
 
 from .domain import ChannelBinding, ChannelProviderError, ChannelProviderUnavailable
 
@@ -67,7 +68,7 @@ class ChannelProviderHttpClient:
         owner_id: str,
         display_name: str,
         device_kind: str,
-        manifest: DeviceManifest,
+        manifest: Mapping[str, object],
         manifest_revision: str,
     ) -> tuple[ChannelBinding, ...]:
         payload = {
@@ -78,7 +79,7 @@ class ChannelProviderHttpClient:
                 "owner_id": owner_id,
                 "display_name": display_name,
                 "device_kind": device_kind,
-                "manifest": manifest.model_dump(mode="json", by_alias=True),
+                "manifest": dict(manifest),
                 "manifest_revision": manifest_revision,
             },
         }

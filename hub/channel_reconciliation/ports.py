@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
-from hub.contracts.bindings.device import DeviceManifest, DeviceRef
+from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.entities import ManagedDevice
 
 from .domain import ChannelBinding, ChannelRevocationDelivery
@@ -20,7 +21,7 @@ class ChannelBindingProvider(Protocol):
         owner_id: str,
         display_name: str,
         device_kind: str,
-        manifest: DeviceManifest,
+        manifest: Mapping[str, object],
         manifest_revision: str,
     ) -> tuple[ChannelBinding, ...]: ...
 
@@ -32,7 +33,7 @@ class ChannelBindingProvider(Protocol):
         owner_id: str,
         display_name: str,
         device_kind: str,
-        manifest: DeviceManifest,
+        manifest: Mapping[str, object],
         manifest_revision: str,
     ) -> tuple[ChannelBinding, ...]: ...
 

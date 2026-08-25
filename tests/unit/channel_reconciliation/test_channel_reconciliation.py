@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import httpx
@@ -23,7 +24,7 @@ from hub.channel_reconciliation.domain import (
     ChannelProviderUnavailable,
 )
 from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
-from hub.contracts.bindings.device import DeviceManifest, DeviceRef
+from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
@@ -63,6 +64,12 @@ def _manifest() -> DeviceManifestDocument:
             ],
         }
     )
+
+
+def _canonical_device_manifest() -> DeviceManifestDocument:
+    """What a real board sends: its own vocabulary, not this Authority's."""
+
+    return DeviceManifestDocument.from_mapping({"endpoints": []})
 
 
 def _device() -> ManagedDevice:
@@ -200,7 +207,8 @@ async def test_http_adapter_preserves_provider_problem_and_exact_generation() ->
             owner_id="owner_01",
             display_name=device.display_name,
             device_kind=device.device_kind,
-            manifest=DeviceManifest.model_validate_json(device.manifest_json),
+            # Verbatim, as the Provider's contract says the Hub forwards it.
+            manifest=json.loads(device.manifest_json),
             manifest_revision=device.manifest_revision,
         )
         with pytest.raises(ChannelProviderError) as caught:
@@ -305,3 +313,46 @@ async def test_stale_revoke_is_terminal_fenced_and_never_touches_new_generation(
     assert (row.state, row.result_code) == ("fenced", "STALE_GENERATION")
     assert await reconcile.execute() == 0
     await database.close()
+
+
+async def test_a_manifest_in_the_device_s_own_vocabulary_still_binds() -> None:
+    """The Provider is handed the accepted Manifest verbatim, whatever shape it is.
+
+    Parsing it into this Authority's affordance model meant a device whose
+    Manifest simply looked different — a real BOX-3 sends `{"endpoints": []}` —
+    raised above the guard that answers "binding pending", so the configuration
+    pull answered 500 to a correctly claimed device on every boot.
+    """
+
+    forwarded: list[object] = []
+
+    class _Provider:
+        async def provision(self, *, manifest, **_values):
+            forwarded.append(manifest)
+            return (
+                ChannelBinding(
+                    channel_id="channel_01",
+                    purpose="device-session",
+                    kinds=("audio",),
+                    binding_format="application/vnd.eidolon.livekit-session+json;v=2",
+                    issued_at_ms=1,
+                    expires_at_ms=1_800_000_000_000,
+                    opaque_binding="e30=",
+                ),
+            )
+
+        async def refresh(self, **_values):
+            raise AssertionError("a live binding was not refreshed")
+
+    class _Devices:
+        async def get(self, _device_id):
+            return replace(_device(), manifest=_canonical_device_manifest())
+
+    channels = await ReconcileChannelBinding(
+        devices=_Devices(),
+        provider=_Provider(),
+        clock=Clock(),
+    ).execute(device_ref=REF)
+
+    assert [binding.channel_id for binding in channels] == ["channel_01"]
+    assert forwarded == [{"endpoints": []}]
