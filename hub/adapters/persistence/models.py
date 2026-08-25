@@ -32,7 +32,11 @@ class DeviceRow(Base):
     display_name: Mapped[str] = mapped_column(String(512))
     device_kind: Mapped[str] = mapped_column(String(255), index=True)
     manifest_json: Mapped[str] = mapped_column(Text)
+    # The content digest, which identifies which document this is. Named for
+    # the wire field the Channel Provider keys its binding cache on.
     manifest_revision: Mapped[str] = mapped_column(String(80))
+    # The device's own count of how many times its capabilities have changed.
+    manifest_declared_revision: Mapped[int] = mapped_column(Integer, default=1)
     enrolled_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     owner_domain_generation: Mapped[int] = mapped_column(Integer, default=1)

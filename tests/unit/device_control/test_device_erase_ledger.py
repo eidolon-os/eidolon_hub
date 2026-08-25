@@ -171,7 +171,9 @@ async def test_canonical_revoke_materializes_operation_and_signed_ack(database) 
         "operation_type": "device-local.erase",
     }
     delivery = await PullDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
-        device_ref=_ref(), public_key_spki=_spki(key), nonce=nonce,
+        device_ref=_ref(),
+        public_key_spki=_spki(key),
+        nonce=nonce,
         signature=_sign(key, document),
     )
     assert delivery is not None
@@ -185,9 +187,12 @@ async def test_restart_preserves_event_derived_operation(database) -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     _ledger, pending = await _materialize(database, key)
     relocated = SqlDeviceEraseLedger(database)
-    assert await relocated.materialize_claim_events(
-        now=NOW + timedelta(hours=1), operation_ttl=timedelta(days=7)
-    ) == 0
+    assert (
+        await relocated.materialize_claim_events(
+            now=NOW + timedelta(hours=1), operation_ttl=timedelta(days=7)
+        )
+        == 0
+    )
     recovered = await relocated.get_for_device(device_ref=_ref())
     assert recovered is not None and recovered.command == pending.command
 

@@ -31,9 +31,9 @@ def _device(*, display_name: str = "Device") -> ManagedDevice:
         identity=DeviceIdentity("device-1"),
         display_name=display_name,
         device_kind="generic",
-        manifest=DeviceManifestDocument.from_mapping(
+        manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": display_name}
-        ),
+        , declared_revision=1),
         enrolled_at=NOW,
         updated_at=NOW,
         owner_id="owner-1",

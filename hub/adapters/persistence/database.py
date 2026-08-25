@@ -176,6 +176,19 @@ class HubDatabase:
                 )
                 schema = inspect(connection)
 
+        # A device's Manifest revision is additive to the directory projection.
+        # Existing rows carry the revision their Claim recorded, which is 1: it
+        # is the only account of themselves those devices have ever given.
+        directory_table = "hub_device_directory_v1"
+        if directory_table in actual_tables:
+            directory_columns = {value["name"] for value in schema.get_columns(directory_table)}
+            if "manifest_declared_revision" not in directory_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE hub_device_directory_v1 "
+                    "ADD COLUMN manifest_declared_revision INTEGER NOT NULL DEFAULT 1"
+                )
+                schema = inspect(connection)
+
         missing_tables = expected_tables - actual_tables
         if missing_tables and all(
             table_name.startswith("admission_")

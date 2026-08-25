@@ -32,6 +32,7 @@ from hub.composition.resources import (
 )
 from hub.config import HubConfig, load_hub_config
 from hub.device_control.application import (
+    AcceptDeviceManifest,
     AcknowledgeDeviceEraseOperation,
     PeriodicDeviceEraseReconcile,
     PullDeviceConfiguration,
@@ -135,6 +136,13 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             device_erase = DeviceEraseHttpServices(
                 configuration=PullDeviceConfiguration(
                     claims=resources.repositories.device_erase,
+                ),
+                manifest=AcceptDeviceManifest(
+                    claims=resources.repositories.device_erase,
+                    devices=resources.repositories.devices,
+                    mutations=resources.repositories.device_mutations,
+                    ids=resources.ids,
+                    clock=resources.clock,
                 ),
                 channel_binding=ReconcileChannelBinding(
                     devices=resources.repositories.devices,

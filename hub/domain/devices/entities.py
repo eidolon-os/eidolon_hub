@@ -66,8 +66,12 @@ class ManagedDevice:
         return self.manifest.canonical_json
 
     @property
-    def manifest_revision(self) -> str:
-        return self.manifest.revision
+    def manifest_digest(self) -> str:
+        return self.manifest.digest
+
+    @property
+    def manifest_declared_revision(self) -> int:
+        return self.manifest.declared_revision
 
     @property
     def device_ref(self) -> DeviceRef | None:
@@ -118,5 +122,5 @@ class DeviceDirectoryEntry:
         )
 
     @property
-    def manifest_revision(self) -> str:
-        return self.manifest.revision
+    def manifest_digest(self) -> str:
+        return self.manifest.digest

@@ -29,6 +29,15 @@ class DeviceEraseGenerationConflict(ValueError):
     pass
 
 
+class ManifestRevisionConflict(ValueError):
+    """An assertion disagrees with the account of itself a device already gave.
+
+    Either it is older than what the Authority accepted, or it reuses a revision
+    for different content. Both mean the device and the Authority disagree about
+    the device's own history, which no later assertion can repair silently.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class DeviceEraseOperation:
     source_event_id: str

@@ -32,7 +32,7 @@ def _device():
         identity=DeviceIdentity("device-1"),
         display_name="Device",
         device_kind="generic",
-        manifest=DeviceManifestDocument.from_mapping({"schema_version": 1}),
+        manifest=DeviceManifestDocument.from_declaration(document={"schema_version": 1}, declared_revision=1),
         enrolled_at=NOW,
         updated_at=NOW,
         owner_id="owner-1",

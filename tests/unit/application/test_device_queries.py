@@ -27,7 +27,7 @@ def _entry(
         owner_scope="owner-1",
         display_name=f"Display {device_id}",
         device_kind="display",
-        manifest=DeviceManifestDocument.from_mapping(
+        manifest=DeviceManifestDocument.from_declaration(document=
             {
                 "schema_version": 1,
                 "title": "Display",
@@ -40,7 +40,7 @@ def _entry(
                     }
                 ],
             }
-        ),
+        , declared_revision=1),
         lifecycle_state=lifecycle_state,
         claim_generation=1,
         trust_epoch=1,

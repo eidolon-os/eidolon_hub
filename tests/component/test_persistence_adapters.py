@@ -30,9 +30,9 @@ def _device(device_id="device-1"):
         identity=DeviceIdentity(device_id),
         display_name="Generic Sensor",
         device_kind="environment-sensor",
-        manifest=DeviceManifestDocument.from_mapping(
+        manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": "Generic Sensor"}
-        ),
+        , declared_revision=1),
         enrolled_at=NOW,
         updated_at=NOW,
         owner_id="owner-1",
@@ -47,7 +47,7 @@ def _enrollment_event(device, event_id):
         principal_id=f"untrusted-device:{device.identity.device_id}",
         subject=device.identity.device_id,
         occurred_at=device.updated_at,
-        data={"manifest_revision": device.manifest_revision},
+        data={"manifest_revision": device.manifest_digest},
     )
 
 

@@ -48,7 +48,7 @@ class Clock:
 
 
 def _manifest() -> DeviceManifestDocument:
-    return DeviceManifestDocument.from_mapping(
+    return DeviceManifestDocument.from_declaration(document=
         {
             "schema_version": 1,
             "title": "BOX-3",
@@ -63,13 +63,13 @@ def _manifest() -> DeviceManifestDocument:
                 }
             ],
         }
-    )
+    , declared_revision=1)
 
 
 def _canonical_device_manifest() -> DeviceManifestDocument:
     """What a real board sends: its own vocabulary, not this Authority's."""
 
-    return DeviceManifestDocument.from_mapping({"endpoints": []})
+    return DeviceManifestDocument.from_declaration(document={"endpoints": []}, declared_revision=1)
 
 
 def _device() -> ManagedDevice:
@@ -190,7 +190,7 @@ async def test_http_adapter_preserves_provider_problem_and_exact_generation() ->
                 "operation": "channel.provisioned-device",
                 "operation_id": document["operation_id"],
                 "device_ref": REF.model_dump(mode="json"),
-                "manifest_revision": _manifest().revision,
+                "manifest_revision": _manifest().digest,
                 "channels": [
                     item.model_dump(mode="json")
                     for item in _channel(int((NOW + timedelta(minutes=30)).timestamp() * 1000))
@@ -209,7 +209,7 @@ async def test_http_adapter_preserves_provider_problem_and_exact_generation() ->
             device_kind=device.device_kind,
             # Verbatim, as the Provider's contract says the Hub forwards it.
             manifest=json.loads(device.manifest_json),
-            manifest_revision=device.manifest_revision,
+            manifest_revision=device.manifest_digest,
         )
         with pytest.raises(ChannelProviderError) as caught:
             await provider.revoke(

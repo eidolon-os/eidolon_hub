@@ -6,6 +6,7 @@ from datetime import datetime
 from typing import Literal
 
 from eidolon_sdk.device_foundation.v1 import (
+    AssertDeviceManifest,
     DeliverEnvelope,
     DeliveryAcceptance,
     DeviceEraseContractError,
@@ -13,6 +14,7 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
     DeviceLocalEraseOperationStatus,
+    DeviceManifestAcceptance,
     DeviceOperationKeyProof,
     DeviceRef,
     OwnerDomainId,
@@ -37,7 +39,9 @@ from hub.contracts.bindings.common import ContractModel, JsonObject
 DeviceLifecycleState = Literal["approved", "revoked"]
 
 __all__ = [
+    "AssertDeviceManifest",
     "ClaimRevocationResult",
+    "DeviceManifestAcceptance",
     "DeviceEraseContractError",
     "DeviceLocalEraseAck",
     "DeviceLocalEraseCommand",

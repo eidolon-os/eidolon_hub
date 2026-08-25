@@ -5,20 +5,30 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 
 from hub.contracts.bindings.device import (
+    AssertDeviceManifest,
     DeviceLocalEraseAck,
     DeviceLocalEraseCommand,
+    DeviceManifestAcceptance,
     DeviceRef,
     canonical_bytes,
     verify_device_erase_ack,
     verify_p256_signature,
 )
-from hub.ports.identity import Clock
+from hub.domain.devices.entities import ManagedDevice
+from hub.domain.devices.manifest import DeviceManifestDocument
+from hub.ports.identity import Clock, IdGenerator
+from hub.ports.management_events import DeviceManagementEventRecord
+from hub.ports.repositories import DeviceMutationUnitOfWork, DeviceRepository
 
-from .domain import DeviceEraseGenerationConflict, DeviceEraseOperation
+from .domain import (
+    DeviceEraseGenerationConflict,
+    DeviceEraseOperation,
+    ManifestRevisionConflict,
+)
 from .ports import DeviceClaimProjection, DeviceClaimProjectionReader, DeviceEraseLedger
 
 _LOG = logging.getLogger(__name__)
@@ -78,6 +88,112 @@ class PullDeviceConfiguration:
             signature=signature,
         )
         return claim
+
+
+class AcceptDeviceManifest:
+    """Record what a claimed device now says it can do.
+
+    The Owner approved an identity. This is that identity's own account of its
+    capabilities, which changes whenever its firmware does, and which no other
+    party is in a position to know. Admission is untouched: nothing here can
+    alter who the device is, which generation it belongs to, or whether its
+    Claim stands.
+    """
+
+    MANIFEST_ACCEPTED = "live.eidolon.device.manifest-accepted.v1"
+
+    def __init__(
+        self,
+        *,
+        claims: DeviceClaimProjectionReader,
+        devices: DeviceRepository,
+        mutations: DeviceMutationUnitOfWork,
+        ids: IdGenerator,
+        clock: Clock,
+    ) -> None:
+        self._claims = claims
+        self._devices = devices
+        self._mutations = mutations
+        self._ids = ids
+        self._clock = clock
+
+    async def execute(self, *, assertion: AssertDeviceManifest) -> DeviceManifestAcceptance:
+        device_ref = assertion.device_ref
+        claim = await self._claims.get_exact(device_ref=device_ref)
+        if claim is None or claim.state != "active":
+            raise KeyError(device_ref.device_instance_id)
+        if not _same_operational_key(claim.operational_public_key_spki, assertion.public_key_spki):
+            raise PermissionError("manifest assertion key differs from the Claim")
+        verify_p256_signature(
+            public_key_spki=assertion.public_key_spki,
+            signing_document=assertion.signing_document(),
+            signature=assertion.device_signature,
+        )
+
+        current = await self._devices.get(device_ref.device_instance_id)
+        if current is None or current.device_ref != device_ref:
+            raise KeyError(device_ref.device_instance_id)
+
+        declared = assertion.manifest
+        accepted = DeviceManifestDocument.from_declaration(
+            document=declared.document, declared_revision=declared.revision
+        )
+        if declared.revision < current.manifest_declared_revision:
+            raise ManifestRevisionConflict(
+                "manifest revision is older than the accepted declaration"
+            )
+        if declared.revision == current.manifest_declared_revision:
+            if accepted.digest != current.manifest_digest:
+                raise ManifestRevisionConflict("manifest revision was reused for different content")
+            # A device asserts on every boot; agreeing is the common case.
+            return self._acceptance(assertion, outcome="unchanged")
+
+        now = self._clock.now()
+        await self._mutations.commit(
+            expected=current,
+            device=self._with_manifest(current, accepted, declared.manifest_id, now),
+            event=DeviceManagementEventRecord(
+                event_id=self._ids.new("manifest-acceptance"),
+                event_type=self.MANIFEST_ACCEPTED,
+                source="urn:eidolon:authority:device-control",
+                principal_id=device_ref.device_instance_id,
+                subject=device_ref.device_instance_id,
+                occurred_at=now,
+                data={
+                    "manifest_id": declared.manifest_id,
+                    "revision": declared.revision,
+                    "digest": accepted.digest,
+                    "superseded_digest": current.manifest_digest,
+                },
+            ),
+        )
+        return self._acceptance(assertion, outcome="accepted")
+
+    @staticmethod
+    def _with_manifest(
+        device: ManagedDevice,
+        manifest: DeviceManifestDocument,
+        manifest_id: str,
+        now,
+    ) -> ManagedDevice:
+        return replace(
+            device,
+            manifest=manifest,
+            device_kind=manifest_id,
+            updated_at=now,
+            aggregate_revision=device.aggregate_revision + 1,
+        )
+
+    def _acceptance(
+        self, assertion: AssertDeviceManifest, *, outcome: str
+    ) -> DeviceManifestAcceptance:
+        return DeviceManifestAcceptance(
+            device_ref=assertion.device_ref,
+            nonce=assertion.nonce,
+            accepted=assertion.manifest.ref,
+            outcome=outcome,
+            accepted_at=self._clock.now(),
+        )
 
 
 class ReconcileDeviceEraseOperations:

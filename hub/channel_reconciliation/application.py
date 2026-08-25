@@ -70,7 +70,7 @@ class ReconcileChannelBinding:
         provision_id = _operation_id(
             "channel-provision",
             device_ref.model_dump_json(),
-            device.manifest_revision,
+            device.manifest_digest,
         )
         values = {
             "device_ref": device_ref,
@@ -78,7 +78,9 @@ class ReconcileChannelBinding:
             "display_name": device.display_name,
             "device_kind": device.device_kind,
             "manifest": manifest,
-            "manifest_revision": device.manifest_revision,
+            # The Provider keys its binding on this; a re-asserted Manifest
+            # therefore invalidates the binding by changing the digest.
+            "manifest_revision": device.manifest_digest,
         }
         try:
             channels = await self._provider.provision(operation_id=provision_id, **values)

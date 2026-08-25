@@ -58,6 +58,20 @@ class _Configuration:
         raise AssertionError("configuration was not requested")
 
 
+class _Manifest:
+    """Manifest assertion is a separate surface; these tests do not exercise it."""
+
+    def __init__(self, acceptance=None) -> None:
+        self.acceptance = acceptance
+        self.asserted = []
+
+    async def execute(self, *, assertion):
+        if self.acceptance is None:
+            raise AssertionError("manifest assertion was not requested")
+        self.asserted.append(assertion)
+        return self.acceptance
+
+
 class _ChannelBinding:
     def __init__(self, channels=()) -> None:
         self.channels = channels
@@ -121,6 +135,7 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=PullDeviceConfiguration(
                     claims=_ClaimReader(
                         DeviceClaimProjection(
@@ -258,6 +273,7 @@ def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=PullDeviceConfiguration(
                     claims=_ClaimReader(
                         DeviceClaimProjection(
@@ -309,6 +325,7 @@ def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=_Configuration(),
                 channel_binding=_ChannelBinding(),
                 pull=_Pull(),
@@ -342,6 +359,7 @@ def test_https_delivery_adapter_uses_only_canonical_envelopes() -> None:
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=_Configuration(),
                 channel_binding=_ChannelBinding(),
                 pull=_Pull(),
@@ -412,6 +430,7 @@ def test_nothing_to_deliver_is_an_empty_204_not_a_failure() -> None:
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=_Configuration(),
                 channel_binding=_ChannelBinding(),
                 pull=_NothingPending(),
@@ -442,6 +461,7 @@ def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
     app.include_router(
         create_device_erase_router(
             DeviceEraseHttpServices(
+                manifest=_Manifest(),
                 configuration=_Configuration(),
                 channel_binding=_ChannelBinding(),
                 pull=_Pull(),
@@ -480,3 +500,111 @@ def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
     assert response.status_code == 409
     assert response.json()["detail"] == "STALE_GENERATION"
     assert acknowledge.called is False
+
+
+def _manifest_document(*, camera: bool) -> dict[str, object]:
+    from eidolon_sdk.device_foundation.v1 import ManifestDocument, manifest_digest
+
+    document = {
+        "schema_version": 1,
+        "media": [{"kind": "audio"}] + ([{"kind": "video"}] if camera else []),
+    }
+    return ManifestDocument(
+        manifest_id="esp-box-3",
+        revision=2 if camera else 1,
+        digest=manifest_digest(document),
+        document=document,
+    )
+
+
+def test_manifest_assertion_is_refused_unless_the_claim_key_signed_it() -> None:
+    """The route exists so a claimed device can correct its own declaration.
+
+    It is on the device-authenticated surface, so the only thing that makes an
+    assertion this device's assertion is the signature its Claim recorded.
+    """
+
+    from datetime import datetime as _datetime
+
+    from eidolon_sdk.device_foundation.v1 import (
+        AssertDeviceManifest,
+        DeviceManifestAcceptance,
+    )
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    stranger = ec.generate_private_key(ec.SECP256R1())
+    manifest = _manifest_document(camera=True)
+    accepted = DeviceManifestAcceptance(
+        device_ref=REF,
+        nonce="manifest_nonce_00001",
+        accepted=manifest.ref,
+        outcome="accepted",
+        accepted_at=_datetime(2026, 8, 25, tzinfo=UTC),
+    )
+
+    class _Accepting:
+        def __init__(self) -> None:
+            self.asserted = []
+
+        async def execute(self, *, assertion):
+            # The router must hand over exactly what the device signed.
+            verify = {
+                "public_key_spki": assertion.public_key_spki,
+                "signing_document": assertion.signing_document(),
+                "signature": assertion.device_signature,
+            }
+            from eidolon_sdk.device_foundation.v1 import verify_p256_signature
+
+            verify_p256_signature(**verify)
+            self.asserted.append(assertion)
+            return accepted
+
+    service = _Accepting()
+    app = FastAPI()
+    app.include_router(
+        create_device_erase_router(
+            DeviceEraseHttpServices(
+                manifest=service,
+                configuration=_Configuration(),
+                channel_binding=_ChannelBinding(),
+                pull=_Pull(),
+                acknowledge=_Ack(),
+                reconcile=_Reconcile(),
+                ledger=_Ledger(),
+                authorizer=object(),
+            )
+        )
+    )
+
+    def _body(signer: ec.EllipticCurvePrivateKey) -> dict:
+        unsigned = AssertDeviceManifest(
+            device_ref=REF,
+            manifest=manifest,
+            nonce="manifest_nonce_00001",
+            public_key_spki=_spki(signer),
+            device_signature="A" * 86,
+        )
+        signed = unsigned.model_copy(
+            update={"device_signature": _sign(signer, unsigned.signing_document())}
+        )
+        return signed.model_dump(mode="json")
+
+    with TestClient(app) as client:
+        response = client.post("/api/device-control/v1/manifest:assert", json=_body(key))
+        assert response.status_code == 200
+        assert response.json()["outcome"] == "accepted"
+        assert response.json()["accepted"]["revision"] == 2
+
+        forged = _body(key)
+        forged["public_key_spki"] = _spki(stranger)
+        assert client.post("/api/device-control/v1/manifest:assert", json=forged).status_code == 403
+
+        # A document whose digest does not describe it is not a Manifest at all,
+        # and is refused by the contract before any use case sees it.
+        tampered = _body(key)
+        tampered["manifest"]["document"]["media"] = []
+        assert (
+            client.post("/api/device-control/v1/manifest:assert", json=tampered).status_code == 422
+        )
+
+    assert len(service.asserted) == 1

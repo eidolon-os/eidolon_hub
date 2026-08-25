@@ -16,9 +16,9 @@ def _entry(device_id="device-1", owner_scope="owner-1"):
         owner_scope=owner_scope,
         display_name="Device",
         device_kind="generic",
-        manifest=DeviceManifestDocument.from_mapping(
+        manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": "Device"}
-        ),
+        , declared_revision=1),
         lifecycle_state=DeviceLifecycleState.APPROVED,
         claim_generation=1,
         trust_epoch=1,

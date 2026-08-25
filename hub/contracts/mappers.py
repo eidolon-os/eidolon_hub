@@ -32,7 +32,7 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         display_name=entry.display_name,
         device_kind=entry.device_kind,
         manifest=DeviceManifest.model_validate_json(entry.manifest.canonical_json),
-        manifest_revision=entry.manifest_revision,
+        manifest_revision=entry.manifest_digest,
         lifecycle_state=entry.lifecycle_state.value,
         enrolled_at=entry.enrolled_at,
         updated_at=entry.updated_at,

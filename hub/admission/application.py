@@ -1058,6 +1058,7 @@ class AdmissionAuthority:
                     manifest_id=proposal.manifest_id,
                     manifest_json=proposal.manifest_json,
                     manifest_digest=proposal.manifest_digest,
+                    manifest_declared_revision=proposal.manifest_revision,
                     activated_at=now,
                 )
                 proposal.state = "grant_acknowledged"

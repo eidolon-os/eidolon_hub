@@ -12,23 +12,30 @@ from pydantic import BaseModel, ConfigDict, Field
 from hub.channel_reconciliation.application import ReconcileChannelBinding
 from hub.channel_reconciliation.domain import ChannelBinding
 from hub.contracts.bindings.device import (
+    AssertDeviceManifest,
     DeliverEnvelope,
     DeliveryAcceptance,
     DeviceEraseContractError,
     DeviceEvidenceEnvelope,
     DeviceLocalEraseAck,
     DeviceLocalEraseOperationStatus,
+    DeviceManifestAcceptance,
     DeviceRef,
 )
 from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 
 from .application import (
+    AcceptDeviceManifest,
     AcknowledgeDeviceEraseOperation,
     PullDeviceConfiguration,
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
-from .domain import DeviceEraseGenerationConflict, DeviceEraseIdempotencyConflict
+from .domain import (
+    DeviceEraseGenerationConflict,
+    DeviceEraseIdempotencyConflict,
+    ManifestRevisionConflict,
+)
 from .ports import DeviceEraseLedger
 
 
@@ -58,6 +65,7 @@ class DeviceConfigurationResult(_AdapterModel):
 @dataclass(frozen=True, slots=True)
 class DeviceEraseHttpServices:
     configuration: PullDeviceConfiguration
+    manifest: AcceptDeviceManifest
     channel_binding: ReconcileChannelBinding
     pull: PullDeviceEraseOperation
     acknowledge: AcknowledgeDeviceEraseOperation
@@ -129,6 +137,22 @@ def create_device_erase_router(
             lifecycle_state="approved" if claim.state == "active" else "revoked",
             channels=channels,
         )
+
+    @router.post(
+        "/manifest:assert",
+        response_model=DeviceManifestAcceptance,
+    )
+    async def assert_manifest(payload: AssertDeviceManifest) -> DeviceManifestAcceptance:
+        """A claimed device's own, current account of what it can do."""
+
+        try:
+            return await current().manifest.execute(assertion=payload)
+        except KeyError as exc:
+            raise HTTPException(status_code=409, detail="CLAIM_NOT_ACTIVE") from exc
+        except ManifestRevisionConflict as exc:
+            raise HTTPException(status_code=409, detail="MANIFEST_REVISION_CONFLICT") from exc
+        except (PermissionError, DeviceEraseContractError) as exc:
+            raise HTTPException(status_code=403, detail="device proof rejected") from exc
 
     @router.post(
         "/erase-operations:pull",

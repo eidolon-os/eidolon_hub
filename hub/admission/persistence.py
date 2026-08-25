@@ -199,6 +199,7 @@ class SqlAdmissionStore:
         manifest_id: str,
         manifest_json: str,
         manifest_digest: str,
+        manifest_declared_revision: int,
         activated_at: datetime,
     ) -> None:
         """Update the owner-facing read model in the Claim ACK transaction.
@@ -223,6 +224,7 @@ class SqlAdmissionStore:
             "device_kind": manifest_id,
             "manifest_json": manifest_json,
             "manifest_revision": manifest_digest,
+            "manifest_declared_revision": manifest_declared_revision,
             "enrolled_at": activated_at,
             "updated_at": activated_at,
             "owner_domain_generation": device_ref.owner_domain_generation,
