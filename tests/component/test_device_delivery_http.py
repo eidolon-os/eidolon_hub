@@ -234,6 +234,76 @@ class _Authorizer:
         )
 
 
+def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
+    """One key, two contracts, two spellings — compared as a key, not a string.
+
+    Admission records `p256-spki:<base64>`; Device Control's schema forbids the
+    colon and receives `<base64>`. A plain `!=` between them could never be
+    false for a correct device, so every claimed device was refused on the first
+    call it makes after a reboot, and neither spelling could have passed.
+
+    Every fixture here stored the Device Control spelling, which is why the
+    Authority's own tests agreed with it and a real Host did not.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    presented = _spki(key)
+    nonce = "fresh_nonce_000003"
+    document = {
+        "device_ref": REF.model_dump(mode="json"),
+        "nonce": nonce,
+        "operation_type": "device-control.configuration",
+    }
+    app = FastAPI()
+    app.include_router(
+        create_device_erase_router(
+            DeviceEraseHttpServices(
+                configuration=PullDeviceConfiguration(
+                    claims=_ClaimReader(
+                        DeviceClaimProjection(
+                            device_ref=REF,
+                            state="active",
+                            # As Admission wrote it.
+                            operational_public_key_spki="p256-spki:" + presented,
+                        )
+                    )
+                ),
+                channel_binding=_ChannelBinding(),
+                pull=_Pull(),
+                acknowledge=_Ack(),
+                reconcile=_Reconcile(),
+                ledger=_Ledger(),
+                authorizer=object(),
+            )
+        )
+    )
+    client = TestClient(app)
+    accepted = client.post(
+        "/api/device-control/v1/configuration:pull",
+        json={
+            "device_ref": REF.model_dump(mode="json"),
+            "nonce": nonce,
+            "public_key_spki": presented,
+            "device_signature": _sign(key, document),
+        },
+    )
+    other = ec.generate_private_key(ec.SECP256R1())
+    refused = client.post(
+        "/api/device-control/v1/configuration:pull",
+        json={
+            "device_ref": REF.model_dump(mode="json"),
+            "nonce": nonce,
+            "public_key_spki": _spki(other),
+            "device_signature": _sign(other, document),
+        },
+    )
+
+    assert accepted.status_code == 200
+    assert accepted.json()["lifecycle_state"] == "approved"
+    # Another key is still another key.
+    assert refused.status_code == 403
+
+
 def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
     app = FastAPI()
     app.include_router(

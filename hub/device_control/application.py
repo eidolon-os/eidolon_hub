@@ -23,6 +23,25 @@ from .ports import DeviceClaimProjection, DeviceClaimProjectionReader, DeviceEra
 
 _LOG = logging.getLogger(__name__)
 
+#: The scheme Admission records an operational SPKI under. Device Control's own
+#: contract spells the same key as bare base64url — its schema pattern forbids
+#: the colon — so the two adjacent contracts hold one key in two spellings.
+_SPKI_SCHEME = "p256-spki:"
+
+
+def _same_operational_key(recorded: str | None, presented: str) -> bool:
+    """Is the key a device presents the key its Claim recorded?
+
+    Compared as a key, not as a string. Admission stores `p256-spki:<base64>`
+    and Device Control receives `<base64>`, so a plain `!=` could never be
+    false for a correct device — every claimed device was refused on the first
+    call it makes after a reboot, and neither spelling could have passed.
+    """
+
+    if recorded is None:
+        return False
+    return recorded.removeprefix(_SPKI_SCHEME) == presented.removeprefix(_SPKI_SCHEME)
+
 
 @dataclass(frozen=True, slots=True)
 class DeviceEraseDelivery:
@@ -47,7 +66,7 @@ class PullDeviceConfiguration:
         claim = await self._claims.get_exact(device_ref=device_ref)
         if claim is None:
             raise KeyError(device_ref.device_instance_id)
-        if claim.operational_public_key_spki != public_key_spki:
+        if not _same_operational_key(claim.operational_public_key_spki, public_key_spki):
             raise PermissionError("configuration key differs from the Claim")
         verify_p256_signature(
             public_key_spki=public_key_spki,
@@ -97,7 +116,7 @@ class PullDeviceEraseOperation:
         operation = await self._ledger.get_for_device(device_ref=device_ref)
         if operation is None:
             return None
-        if operation.public_key_spki is None or public_key_spki != operation.public_key_spki:
+        if not _same_operational_key(operation.public_key_spki, public_key_spki):
             raise PermissionError("operation delivery key does not match the Claim generation")
         signing_document = {
             "device_ref": device_ref.model_dump(mode="json"),
