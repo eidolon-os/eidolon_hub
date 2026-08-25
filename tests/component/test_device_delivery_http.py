@@ -324,6 +324,48 @@ def test_https_delivery_adapter_uses_only_canonical_envelopes() -> None:
     assert DeliveryAcceptance.model_validate(accepted.json()).state == "accepted"
 
 
+def test_nothing_to_deliver_is_an_empty_204_not_a_failure() -> None:
+    """The normal answer for a healthy claimed device.
+
+    A device polls this on every boot, and almost always there is nothing
+    waiting for it. Declaring a response model made that answer unrepresentable
+    — FastAPI validated the absent body against the envelope and answered 500 —
+    so a claimed BOX-3 could not finish booting at all: it retried, backed off,
+    and never reached its runtime.
+    """
+
+    class _NothingPending:
+        async def execute(self, **_kwargs):
+            return None
+
+    app = FastAPI()
+    app.include_router(
+        create_device_erase_router(
+            DeviceEraseHttpServices(
+                configuration=_Configuration(),
+                channel_binding=_ChannelBinding(),
+                pull=_NothingPending(),
+                acknowledge=_Ack(),
+                reconcile=_Reconcile(),
+                ledger=_Ledger(),
+                authorizer=object(),
+            )
+        )
+    )
+    pulled = TestClient(app).post(
+        "/api/device-control/v1/erase-operations:pull",
+        json={
+            "device_ref": REF.model_dump(mode="json"),
+            "nonce": "fresh_nonce_000002",
+            "public_key_spki": "K" * 120,
+            "device_signature": "A" * 86,
+        },
+    )
+
+    assert pulled.status_code == 204
+    assert pulled.content == b""
+
+
 def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
     acknowledge = _RecordingAck()
     app = FastAPI()

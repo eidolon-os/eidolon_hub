@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from hub.channel_reconciliation.application import ReconcileChannelBinding
@@ -131,12 +132,20 @@ def create_device_erase_router(
 
     @router.post(
         "/erase-operations:pull",
-        response_model=DeliverEnvelope,
-        responses={204: {"description": "No non-terminal operation for this generation"}},
+        # Deliberately not a response model. "There is nothing to deliver" is
+        # the normal answer for every healthy claimed device, and it is a 204
+        # with no body — which a declared model cannot express: FastAPI
+        # validated `None` against it and answered 500 instead. That made the
+        # first call a device makes after a reboot fail, so a claimed device
+        # could not finish booting at all. The envelope is still constructed
+        # here, so the contract is checked where it is produced.
+        response_model=None,
+        responses={
+            200: {"model": DeliverEnvelope},
+            204: {"description": "No non-terminal operation for this generation"},
+        },
     )
-    async def pull_operation(
-        payload: PullEraseOperationRequest, response: Response
-    ) -> DeliverEnvelope | None:
+    async def pull_operation(payload: PullEraseOperationRequest) -> Response:
         runtime = current()
         await runtime.reconcile.execute()
         try:
@@ -149,9 +158,8 @@ def create_device_erase_router(
         except (PermissionError, DeviceEraseContractError) as exc:
             raise HTTPException(status_code=403, detail="device proof rejected") from exc
         if delivery is None:
-            response.status_code = status.HTTP_204_NO_CONTENT
-            return None
-        return DeliverEnvelope(
+            return Response(status_code=status.HTTP_204_NO_CONTENT)
+        envelope = DeliverEnvelope(
             delivery_attempt_id=delivery.delivery_attempt_id,
             message_id=delivery.command.operation_id,
             kind="operation",
@@ -163,6 +171,7 @@ def create_device_erase_router(
             ),
             payload=delivery.command.model_dump(mode="json"),
         )
+        return JSONResponse(status_code=200, content=envelope.model_dump(mode="json"))
 
     @router.post(
         "/erase-operations/{operation_id}/ack",
