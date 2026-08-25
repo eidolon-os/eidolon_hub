@@ -136,6 +136,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             device_erase = DeviceEraseHttpServices(
                 configuration=PullDeviceConfiguration(
                     claims=resources.repositories.device_erase,
+                    devices=resources.repositories.devices,
                 ),
                 manifest=AcceptDeviceManifest(
                     claims=resources.repositories.device_erase,

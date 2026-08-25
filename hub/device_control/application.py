@@ -14,6 +14,7 @@ from hub.contracts.bindings.device import (
     DeviceLocalEraseCommand,
     DeviceManifestAcceptance,
     DeviceRef,
+    ManifestRef,
     canonical_bytes,
     verify_device_erase_ack,
     verify_p256_signature,
@@ -59,11 +60,33 @@ class DeviceEraseDelivery:
     command: DeviceLocalEraseCommand
 
 
+@dataclass(frozen=True, slots=True)
+class DeviceConfiguration:
+    """What a device is told about itself when it asks.
+
+    The accepted Manifest reference is part of a device's configuration, not a
+    separate query: it is how a device learns which of its own declarations the
+    Authority currently holds, and therefore whether it has anything to correct.
+    Without it a device would have to guess the revision to assert at, and a
+    wrong guess is refused — which is exactly the trap a device with a stale
+    Manifest was already in.
+    """
+
+    claim: DeviceClaimProjection
+    manifest: ManifestRef | None
+
+
 class PullDeviceConfiguration:
     """Return one exact Claim projection without provisioning a business Channel."""
 
-    def __init__(self, *, claims: DeviceClaimProjectionReader) -> None:
+    def __init__(
+        self,
+        *,
+        claims: DeviceClaimProjectionReader,
+        devices: DeviceRepository,
+    ) -> None:
         self._claims = claims
+        self._devices = devices
 
     async def execute(
         self,
@@ -72,7 +95,7 @@ class PullDeviceConfiguration:
         public_key_spki: str,
         nonce: str,
         signature: str,
-    ) -> DeviceClaimProjection:
+    ) -> DeviceConfiguration:
         claim = await self._claims.get_exact(device_ref=device_ref)
         if claim is None:
             raise KeyError(device_ref.device_instance_id)
@@ -87,7 +110,17 @@ class PullDeviceConfiguration:
             },
             signature=signature,
         )
-        return claim
+        device = await self._devices.get(device_ref.device_instance_id)
+        manifest = (
+            None
+            if device is None or device.device_ref != device_ref
+            else ManifestRef(
+                manifest_id=device.device_kind,
+                revision=device.manifest_declared_revision,
+                digest=device.manifest_digest,
+            )
+        )
+        return DeviceConfiguration(claim=claim, manifest=manifest)
 
 
 class AcceptDeviceManifest:

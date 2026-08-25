@@ -58,6 +58,42 @@ class _Configuration:
         raise AssertionError("configuration was not requested")
 
 
+def _directory_device():
+    from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
+    from hub.domain.devices.identity import DeviceIdentity
+    from hub.domain.devices.manifest import DeviceManifestDocument
+
+    return ManagedDevice(
+        identity=DeviceIdentity(REF.device_instance_id),
+        display_name="Box",
+        device_kind="esp-box-3",
+        manifest=DeviceManifestDocument.from_declaration(
+            document={"schema_version": 1, "media": [{"kind": "audio"}]},
+            declared_revision=4,
+        ),
+        enrolled_at=NOW,
+        updated_at=NOW,
+        owner_domain_id=str(REF.owner_domain_id),
+        owner_domain_generation=REF.owner_domain_generation,
+        claim_generation=REF.claim_generation,
+        trust_epoch=REF.trust_epoch,
+        owner_id="owner_01",
+        lifecycle_state=DeviceLifecycleState.APPROVED,
+    )
+
+
+class _Devices:
+    """The directory row a configuration answer reports the accepted Manifest from."""
+
+    def __init__(self, device=None) -> None:
+        self.device = device
+
+    async def get(self, device_id: str):
+        if self.device is None or device_id != self.device.identity.device_id:
+            return None
+        return self.device
+
+
 class _Manifest:
     """Manifest assertion is a separate surface; these tests do not exercise it."""
 
@@ -143,7 +179,8 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
                             state="active",
                             operational_public_key_spki=public_key_spki,
                         )
-                    )
+                    ),
+                    devices=_Devices(_directory_device()),
                 ),
                 channel_binding=binding,
                 pull=_Pull(),
@@ -170,6 +207,13 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
         "nonce": nonce,
         "device_ref": REF.model_dump(mode="json"),
         "lifecycle_state": "approved",
+        # A device learns which of its own declarations the Authority holds from
+        # the same answer that tells it where to connect.
+        "manifest": {
+            "manifest_id": "esp-box-3",
+            "revision": 4,
+            "digest": _directory_device().manifest_digest,
+        },
         "channels": [
             {
                 "channel_id": "channel_01",
@@ -282,7 +326,8 @@ def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
                             # As Admission wrote it.
                             operational_public_key_spki="p256-spki:" + presented,
                         )
-                    )
+                    ),
+                    devices=_Devices(),
                 ),
                 channel_binding=_ChannelBinding(),
                 pull=_Pull(),

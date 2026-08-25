@@ -21,6 +21,7 @@ from hub.contracts.bindings.device import (
     DeviceLocalEraseOperationStatus,
     DeviceManifestAcceptance,
     DeviceRef,
+    ManifestRef,
 )
 from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 
@@ -59,6 +60,9 @@ class DeviceConfigurationResult(_AdapterModel):
     nonce: str
     device_ref: DeviceRef
     lifecycle_state: str
+    # Which of this device's own declarations the Authority currently holds, so
+    # a device with something to correct knows what it is correcting.
+    manifest: ManifestRef | None = None
     channels: tuple[ChannelBinding, ...] = Field(default=(), max_length=1)
 
 
@@ -114,7 +118,7 @@ def create_device_erase_router(
         payload: PullDeviceConfigurationRequest,
     ) -> DeviceConfigurationResult:
         try:
-            claim = await current().configuration.execute(
+            configuration = await current().configuration.execute(
                 device_ref=payload.device_ref,
                 public_key_spki=payload.public_key_spki,
                 nonce=payload.nonce,
@@ -124,6 +128,7 @@ def create_device_erase_router(
             raise HTTPException(status_code=409, detail="STALE_GENERATION") from exc
         except (PermissionError, DeviceEraseContractError) as exc:
             raise HTTPException(status_code=403, detail="device proof rejected") from exc
+        claim = configuration.claim
         if claim.state not in {"active", "revoked"}:
             raise HTTPException(status_code=409, detail="CLAIM_NOT_ACTIVE")
         channels = (
@@ -135,6 +140,7 @@ def create_device_erase_router(
             nonce=payload.nonce,
             device_ref=claim.device_ref,
             lifecycle_state="approved" if claim.state == "active" else "revoked",
+            manifest=configuration.manifest,
             channels=channels,
         )
 
