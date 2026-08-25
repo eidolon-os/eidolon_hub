@@ -86,6 +86,17 @@ async def open_runtime_resources(
     )
 
 
+#: The one registry format this build of the Hub can read.
+#:
+#: Stated as a constant rather than inline so a deployment can *ask* before it
+#: switches the links. The registry is an ops-installed input, not part of a
+#: sealed release, so the file and the code can end up on opposite sides of a
+#: format change — that is how a rollback across this boundary left a Host with
+#: a v2 file and a v1-only Hub, crash-looping 110 times while the rollback that
+#: caused it reported a readiness timeout.
+DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE = "eidolon-development-hmac-commissioning-v2"
+
+
 def read_development_commissioning_registry(
     path: Path,
 ) -> dict[str, DevelopmentCommissioningIdentity]:
@@ -99,8 +110,13 @@ def read_development_commissioning_registry(
     """
 
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("profile") != "eidolon-development-hmac-commissioning-v2":
-        raise ValueError("development commissioning registry profile differs")
+    profile = document.get("profile")
+    if profile != DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE:
+        raise ValueError(
+            "development commissioning registry profile is not one this Hub reads: "
+            f"file states {profile!r}, this Hub reads "
+            f"{DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE!r}"
+        )
     encoded = document["devices"]
     if not isinstance(encoded, dict) or not encoded:
         raise ValueError("development commissioning registry has no devices")
@@ -142,7 +158,12 @@ def load_commissioning_proof_verifier(
     try:
         identities_by_lookup = read_development_commissioning_registry(path)
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        raise RuntimeError("development commissioning registry is invalid") from exc
+        # Carry the specific cause into the message. This is a startup failure
+        # under systemd: whether an operator can act on it depends entirely on
+        # whether the reason survives to the log line, and "is invalid" left
+        # the one fact that mattered — which profile the file states — visible
+        # only in a chained traceback.
+        raise RuntimeError(f"development commissioning registry is invalid: {exc}") from exc
     return (
         HmacCommissioningProofVerifier(identities_by_lookup.get),
         True,
