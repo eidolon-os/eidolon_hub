@@ -9,10 +9,12 @@ from typing import Protocol
 from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.entities import ManagedDevice
 
-from .domain import ChannelBinding, ChannelRevocationDelivery
+from .domain import ChannelBinding, ChannelRevocationDelivery, CurrentChannelBinding
 
 
 class ChannelBindingProvider(Protocol):
+    async def current(self, *, device_ref: DeviceRef) -> CurrentChannelBinding | None: ...
+
     async def provision(
         self,
         *,

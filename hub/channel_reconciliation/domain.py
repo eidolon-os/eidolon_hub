@@ -24,6 +24,26 @@ class ChannelBinding(BaseModel):
     opaque_binding: str = Field(min_length=1, max_length=131_072)
 
 
+class CurrentChannelBinding(BaseModel):
+    """The binding a device holds now, as the Provider reports it.
+
+    Carries the operation that established it so the Authority can chain the
+    next advance off it. Deriving the next operation id from the original
+    provision instead is what made the sequence restart at an idempotency key
+    the first refresh had already spent.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
+
+    operation_id: str = Field(min_length=1, max_length=128)
+    manifest_revision: str = Field(min_length=1, max_length=128)
+    channels: tuple[ChannelBinding, ...] = Field(min_length=1, max_length=1)
+
+    @property
+    def expires_at_ms(self) -> int:
+        return self.channels[0].expires_at_ms
+
+
 @dataclass(frozen=True, slots=True)
 class ChannelRevocationDelivery:
     source_event_id: str

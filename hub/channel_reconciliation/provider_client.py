@@ -11,7 +11,12 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hub.contracts.bindings.device import DeviceRef
 
-from .domain import ChannelBinding, ChannelProviderError, ChannelProviderUnavailable
+from .domain import (
+    ChannelBinding,
+    ChannelProviderError,
+    ChannelProviderUnavailable,
+    CurrentChannelBinding,
+)
 
 
 class _WireModel(BaseModel):
@@ -24,6 +29,11 @@ class _ProvisionResponse(_WireModel):
     device_ref: DeviceRef
     manifest_revision: str
     channels: tuple[ChannelBinding, ...] = Field(min_length=1, max_length=1)
+
+
+class _CurrentResponse(_WireModel):
+    operation: Literal["channel.current-device"]
+    binding: _ProvisionResponse | None
 
 
 class _RevokeResponse(_WireModel):
@@ -52,6 +62,39 @@ class ChannelProviderHttpClient:
         self._base = contract_url.rstrip("/")
         self._headers = {"Authorization": f"Bearer {token}"}
         self._timeout = timeout_seconds
+
+    async def current(self, *, device_ref: DeviceRef) -> CurrentChannelBinding | None:
+        """What the Provider holds for this device now, without changing it."""
+
+        raw = await self._post(
+            "device-channels/current",
+            {
+                "operation": "channel.current-device",
+                "device_ref": device_ref.model_dump(mode="json"),
+            },
+        )
+        try:
+            response = _CurrentResponse.model_validate_json(raw)
+        except ValidationError as exc:
+            raise ChannelProviderError(
+                "INVALID_PROVIDER_RESPONSE",
+                retryable=False,
+                detail="invalid current binding response",
+            ) from exc
+        binding = response.binding
+        if binding is None:
+            return None
+        if binding.device_ref != device_ref:
+            raise ChannelProviderError(
+                "INVALID_PROVIDER_RESPONSE",
+                retryable=False,
+                detail="current binding response names another device",
+            )
+        return CurrentChannelBinding(
+            operation_id=binding.operation_id,
+            manifest_revision=binding.manifest_revision,
+            channels=binding.channels,
+        )
 
     async def provision(self, **values) -> tuple[ChannelBinding, ...]:
         return await self._provision("channel.provision-device", **values)

@@ -82,21 +82,35 @@ class ReconcileChannelBinding:
             # therefore invalidates the binding by changing the digest.
             "manifest_revision": device.manifest_digest,
         }
+        # Read before deciding. ``provision`` begins a generation and
+        # ``refresh`` advances one, and only the Provider knows which is
+        # needed. Issuing ``provision`` every time and refreshing if its answer
+        # looked expired worked exactly once: the first refresh fences the
+        # provision row, so the next reconcile replayed a spent idempotency key
+        # and was refused as "a terminal fenced lifecycle" — permanently. Every
+        # device lost its channel about two hours after enrolment and could
+        # never get one again, while the Claim, the mount and the Companion
+        # binding all still read healthy.
         try:
-            channels = await self._provider.provision(operation_id=provision_id, **values)
-            expires_at_ms = channels[0].expires_at_ms
             now_ms = int(self._clock.now().timestamp() * 1000)
-            if expires_at_ms > now_ms:
-                return channels
-            refresh_id = _operation_id("channel-refresh", provision_id, expires_at_ms)
-            refreshed = await self._provider.refresh(operation_id=refresh_id, **values)
-            if refreshed[0].expires_at_ms <= now_ms:
-                raise ChannelProviderError(
-                    "EXPIRED_PROVIDER_BINDING",
-                    retryable=True,
-                    detail="Provider refresh returned expired credentials",
+            current = await self._provider.current(device_ref=device_ref)
+            if current is None or current.manifest_revision != device.manifest_digest:
+                # No binding, or one established for a Manifest this device no
+                # longer asserts. Either way this begins a generation, and the
+                # Manifest digest in the id keeps a re-asserted Manifest from
+                # reusing the previous one's key.
+                return _unexpired(
+                    await self._provider.provision(operation_id=provision_id, **values),
+                    now_ms,
                 )
-            return refreshed
+            if current.expires_at_ms > now_ms:
+                return current.channels
+            refresh_id = _operation_id(
+                "channel-refresh", current.operation_id, current.expires_at_ms
+            )
+            return _unexpired(
+                await self._provider.refresh(operation_id=refresh_id, **values), now_ms
+            )
         except (ChannelProviderError, ValueError, IndexError, KeyError):
             _LOG.warning(
                 "Channel binding pending device=%s generation=%s/%s/%s",
@@ -107,6 +121,16 @@ class ReconcileChannelBinding:
                 exc_info=True,
             )
             return ()
+
+
+def _unexpired(channels: tuple[ChannelBinding, ...], now_ms: int) -> tuple[ChannelBinding, ...]:
+    if channels[0].expires_at_ms <= now_ms:
+        raise ChannelProviderError(
+            "EXPIRED_PROVIDER_BINDING",
+            retryable=True,
+            detail="Provider returned expired credentials",
+        )
+    return channels
 
 
 class ReconcileChannelRevocations:

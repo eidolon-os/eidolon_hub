@@ -22,6 +22,7 @@ from hub.channel_reconciliation.domain import (
     ChannelBinding,
     ChannelProviderError,
     ChannelProviderUnavailable,
+    CurrentChannelBinding,
 )
 from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
 from hub.contracts.bindings.device import DeviceRef
@@ -48,8 +49,8 @@ class Clock:
 
 
 def _manifest() -> DeviceManifestDocument:
-    return DeviceManifestDocument.from_declaration(document=
-        {
+    return DeviceManifestDocument.from_declaration(
+        document={
             "schema_version": 1,
             "title": "BOX-3",
             "properties": [],
@@ -62,8 +63,9 @@ def _manifest() -> DeviceManifestDocument:
                     "codecs": ["audio/opus"],
                 }
             ],
-        }
-    , declared_revision=1)
+        },
+        declared_revision=1,
+    )
 
 
 def _canonical_device_manifest() -> DeviceManifestDocument:
@@ -109,24 +111,66 @@ def _channel(expires_at_ms: int) -> tuple[ChannelBinding, ...]:
 
 
 class RecordingProvider:
+    """A fake that keeps the real Provider ledger's rules, including fencing.
+
+    A fake that answered every ``provision`` hid the defect completely: the
+    real ledger fences the provision row when a refresh lands, so replaying
+    that operation id is refused forever. Without that rule here, the sequence
+    that stranded every device two hours after enrolment passed in tests.
+    """
+
     def __init__(self) -> None:
-        self.provisions = []
-        self.refreshes = []
-        self.revocations = []
+        self.provisions: list[dict] = []
+        self.refreshes: list[dict] = []
+        self.revocations: list[dict] = []
+        self.reads = 0
         self.offline = False
-        self.expired = False
         self.stale_revoke = False
+        self._binding: CurrentChannelBinding | None = None
+        self._fenced: set[str] = set()
+
+    def seed_expired_binding(self, operation_id: str = "channel-provision-seeded") -> None:
+        self._binding = CurrentChannelBinding(
+            operation_id=operation_id,
+            manifest_revision=_device().manifest.digest,
+            channels=_channel(int(NOW.timestamp() * 1000)),
+        )
+
+    async def current(self, *, device_ref):
+        self.reads += 1
+        if self.offline:
+            raise ChannelProviderUnavailable()
+        return self._binding
 
     async def provision(self, **values):
         self.provisions.append(values)
         if self.offline:
             raise ChannelProviderUnavailable()
-        expiry = NOW if self.expired else NOW + timedelta(minutes=30)
-        return _channel(int(expiry.timestamp() * 1000))
+        if values["operation_id"] in self._fenced:
+            raise ChannelProviderError(
+                "INVALID_TRANSITION",
+                retryable=False,
+                detail="the operation belongs to a terminal fenced lifecycle",
+            )
+        return self._establish(values, NOW + timedelta(minutes=30))
 
     async def refresh(self, **values):
         self.refreshes.append(values)
-        return _channel(int((NOW + timedelta(minutes=30)).timestamp() * 1000))
+        if self.offline:
+            raise ChannelProviderUnavailable()
+        # Landing a refresh ends the operation it advances past.
+        if self._binding is not None:
+            self._fenced.add(self._binding.operation_id)
+        return self._establish(values, NOW + timedelta(minutes=30))
+
+    def _establish(self, values: dict, expiry) -> tuple[ChannelBinding, ...]:
+        channels = _channel(int(expiry.timestamp() * 1000))
+        self._binding = CurrentChannelBinding(
+            operation_id=values["operation_id"],
+            manifest_revision=values["manifest_revision"],
+            channels=channels,
+        )
+        return channels
 
     async def revoke(self, **values):
         self.revocations.append(values)
@@ -155,16 +199,62 @@ async def test_active_claim_provider_outage_is_waiting_binding_then_idempotent_r
 
 
 @pytest.mark.asyncio
-async def test_expired_binding_uses_one_deterministic_refresh_operation() -> None:
+async def test_a_live_binding_is_returned_without_issuing_any_operation() -> None:
+    """Reading is not writing. The steady state must mutate nothing."""
+
     provider = RecordingProvider()
-    provider.expired = True
+    reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=provider, clock=Clock())
+    await reconcile.execute(device_ref=REF)
+    provisions_after_first = len(provider.provisions)
+
+    again = await reconcile.execute(device_ref=REF)
+
+    assert len(again) == 1
+    assert len(provider.provisions) == provisions_after_first
+    assert provider.refreshes == []
+
+
+@pytest.mark.asyncio
+async def test_an_expired_binding_advances_with_a_refresh_chained_off_it() -> None:
+    provider = RecordingProvider()
+    provider.seed_expired_binding("channel-provision-seeded")
     reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=provider, clock=Clock())
 
     channels = await reconcile.execute(device_ref=REF)
 
     assert channels[0].expires_at_ms > int(NOW.timestamp() * 1000)
+    assert provider.provisions == []
     assert len(provider.refreshes) == 1
     assert provider.refreshes[0]["operation_id"].startswith("channel-refresh-")
+
+
+@pytest.mark.asyncio
+async def test_a_device_keeps_its_channel_across_repeated_credential_expiry() -> None:
+    """The defect: a channel could be advanced exactly once, then never again.
+
+    provision -> expiry -> refresh worked, and the refresh fenced the provision
+    row. The next reconcile began again at ``provision`` with the same derived
+    id and was refused as "a terminal fenced lifecycle" for good. On hardware a
+    device lost its channel about two hours after enrolment while its Claim,
+    mount and Companion binding all still read healthy, and it sat in
+    waiting-binding forever.
+    """
+
+    provider = RecordingProvider()
+    reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=provider, clock=Clock())
+    first = await reconcile.execute(device_ref=REF)
+    assert len(first) == 1
+
+    for round_number in range(4):
+        provider.seed_expired_binding(provider._binding.operation_id)
+        channels = await reconcile.execute(device_ref=REF)
+        assert len(channels) == 1, f"lost its channel on round {round_number}"
+        assert channels[0].expires_at_ms > int(NOW.timestamp() * 1000)
+
+    # Advancing is what carried it; the first operation was never re-issued.
+    assert len(provider.provisions) == 1
+    assert len(provider.refreshes) == 4
+    assert len({call["operation_id"] for call in provider.refreshes}) == 4
 
 
 @pytest.mark.asyncio
@@ -327,6 +417,9 @@ async def test_a_manifest_in_the_device_s_own_vocabulary_still_binds() -> None:
     forwarded: list[object] = []
 
     class _Provider:
+        async def current(self, *, device_ref):
+            return None
+
         async def provision(self, *, manifest, **_values):
             forwarded.append(manifest)
             return (

@@ -35,7 +35,7 @@ from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
 from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 from hub.channel_reconciliation.application import ReconcileChannelBinding
-from hub.channel_reconciliation.domain import ChannelBinding
+from hub.channel_reconciliation.domain import ChannelBinding, CurrentChannelBinding
 from hub.device_control.application import AcceptDeviceManifest, PullDeviceConfiguration
 from hub.device_control.http import DeviceEraseHttpServices, create_device_erase_router
 from hub.device_control.ports import DeviceClaimProjection
@@ -119,6 +119,10 @@ class _Provider:
 
     def __init__(self) -> None:
         self.provisioned: list[dict] = []
+        self._binding = None
+
+    async def current(self, *, device_ref):
+        return self._binding
 
     async def provision(self, *, operation_id, manifest, manifest_revision, **_kw):
         self.provisioned.append({"operation_id": operation_id, "manifest": manifest})
@@ -129,7 +133,7 @@ class _Provider:
         )
         if not kinds:
             raise ValueError("nothing to provision: the device declares no media")
-        return (
+        channels = (
             ChannelBinding(
                 channel_id="channel_01",
                 purpose="device-session",
@@ -140,6 +144,12 @@ class _Provider:
                 opaque_binding="e30=",
             ),
         )
+        self._binding = CurrentChannelBinding(
+            operation_id=operation_id,
+            manifest_revision=manifest_revision,
+            channels=channels,
+        )
+        return channels
 
     async def refresh(self, **kwargs):  # pragma: no cover - not reached here
         raise AssertionError("a live binding was not expected to need refreshing")
