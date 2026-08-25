@@ -23,7 +23,11 @@ from hub.domain.devices.entities import ManagedDevice
 from hub.domain.devices.manifest import DeviceManifestDocument
 from hub.ports.identity import Clock, IdGenerator
 from hub.ports.management_events import DeviceManagementEventRecord
-from hub.ports.repositories import DeviceMutationUnitOfWork, DeviceRepository
+from hub.ports.repositories import (
+    DeviceDirectoryProjector,
+    DeviceMutationUnitOfWork,
+    DeviceRepository,
+)
 
 from .domain import (
     DeviceEraseGenerationConflict,
@@ -141,12 +145,18 @@ class AcceptDeviceManifest:
         claims: DeviceClaimProjectionReader,
         devices: DeviceRepository,
         mutations: DeviceMutationUnitOfWork,
+        # The owner-facing directory is a projection of the device facts this
+        # use case changes. Required rather than optional: a Manifest accepted
+        # into facts nobody re-projected is a directory that quietly disagrees
+        # with what the device declared.
+        directory: DeviceDirectoryProjector,
         ids: IdGenerator,
         clock: Clock,
     ) -> None:
         self._claims = claims
         self._devices = devices
         self._mutations = mutations
+        self._directory = directory
         self._ids = ids
         self._clock = clock
 
@@ -200,6 +210,7 @@ class AcceptDeviceManifest:
                 },
             ),
         )
+        await self._directory.execute(device_ref.device_instance_id)
         return self._acceptance(assertion, outcome="accepted")
 
     @staticmethod

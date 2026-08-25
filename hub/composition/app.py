@@ -142,6 +142,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     claims=resources.repositories.device_erase,
                     devices=resources.repositories.devices,
                     mutations=resources.repositories.device_mutations,
+                    directory=projector,
                     ids=resources.ids,
                     clock=resources.clock,
                 ),

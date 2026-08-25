@@ -91,6 +91,17 @@ class _Devices:
         return self.device if device_id == self.device.identity.device_id else None
 
 
+class _Directory:
+    """The owner-facing projection, which must be told what changed."""
+
+    def __init__(self) -> None:
+        self.projected: list[str] = []
+
+    async def execute(self, device_id: str):
+        self.projected.append(device_id)
+        return device_id
+
+
 class _Mutations:
     def __init__(self, devices: _Devices) -> None:
         self._devices = devices
@@ -151,6 +162,7 @@ def _use_case(devices: _Devices, key: ec.EllipticCurvePrivateKey, *, state: str 
         )
     )
     mutations = _Mutations(devices)
+    directory = _Directory()
     return (
         AcceptDeviceManifest(
             claims=_ClaimReader(
@@ -158,10 +170,12 @@ def _use_case(devices: _Devices, key: ec.EllipticCurvePrivateKey, *, state: str 
             ),
             devices=devices,
             mutations=mutations,
+            directory=directory,
             ids=_Ids(),
             clock=_Clock(),
         ),
         mutations,
+        directory,
     )
 
 
@@ -169,7 +183,7 @@ def _use_case(devices: _Devices, key: ec.EllipticCurvePrivateKey, *, state: str 
 async def test_a_later_revision_replaces_what_the_authority_had_accepted() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     devices = _Devices(_device(_manifest(revision=1, camera=False)))
-    accept, mutations = _use_case(devices, key)
+    accept, mutations, directory = _use_case(devices, key)
 
     upgraded = _manifest(revision=2, camera=True)
     acceptance = await accept.execute(assertion=_assertion(upgraded, key))
@@ -185,6 +199,7 @@ async def test_a_later_revision_replaces_what_the_authority_had_accepted() -> No
     assert [event.event_type for event in mutations.events] == [
         "live.eidolon.device.manifest-accepted.v1"
     ]
+    assert directory.projected == [REF.device_instance_id]
 
 
 @pytest.mark.asyncio
@@ -194,20 +209,21 @@ async def test_reasserting_the_same_manifest_is_not_a_change() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     current = _manifest(revision=3, camera=True)
     devices = _Devices(_device(current))
-    accept, mutations = _use_case(devices, key)
+    accept, mutations, directory = _use_case(devices, key)
 
     acceptance = await accept.execute(assertion=_assertion(current, key))
 
     assert acceptance.outcome == "unchanged"
     assert acceptance.accepted == current.ref
     assert mutations.events == []
+    assert directory.projected == []
 
 
 @pytest.mark.asyncio
 async def test_an_older_revision_can_never_reinstate_itself() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     devices = _Devices(_device(_manifest(revision=5, camera=True)))
-    accept, _ = _use_case(devices, key)
+    accept, _, _directory = _use_case(devices, key)
 
     with pytest.raises(ManifestRevisionConflict):
         await accept.execute(assertion=_assertion(_manifest(revision=4, camera=False), key))
@@ -218,7 +234,7 @@ async def test_an_older_revision_can_never_reinstate_itself() -> None:
 async def test_one_revision_cannot_describe_two_different_manifests() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     devices = _Devices(_device(_manifest(revision=5, camera=True)))
-    accept, _ = _use_case(devices, key)
+    accept, _, _directory = _use_case(devices, key)
 
     with pytest.raises(ManifestRevisionConflict):
         await accept.execute(assertion=_assertion(_manifest(revision=5, camera=False), key))
@@ -230,11 +246,11 @@ async def test_a_manifest_is_only_accepted_from_the_claimed_key_and_an_active_cl
     stranger = ec.generate_private_key(ec.SECP256R1())
     devices = _Devices(_device(_manifest(revision=1, camera=False)))
 
-    accept, _ = _use_case(devices, key)
+    accept, _, _directory = _use_case(devices, key)
     with pytest.raises(PermissionError):
         await accept.execute(assertion=_assertion(_manifest(revision=2, camera=True), stranger))
 
-    revoked, _ = _use_case(devices, key, state="revoked")
+    revoked, _, _ = _use_case(devices, key, state="revoked")
     with pytest.raises(KeyError):
         await revoked.execute(assertion=_assertion(_manifest(revision=2, camera=True), key))
     assert devices.device.manifest.declared_revision == 1
