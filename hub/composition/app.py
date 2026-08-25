@@ -126,12 +126,13 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             await channel_revocations.start()
             stack.push_async_callback(channel_revocations.stop)
 
+            erase_operation_ttl = timedelta(
+                seconds=app_config.device_control.erase_operation_ttl_seconds
+            )
             erase_reconcile = ReconcileDeviceEraseOperations(
                 ledger=resources.repositories.device_erase,
                 clock=resources.clock,
-                operation_ttl=timedelta(
-                    seconds=app_config.device_control.erase_operation_ttl_seconds
-                ),
+                operation_ttl=erase_operation_ttl,
             )
             device_erase = DeviceEraseHttpServices(
                 configuration=PullDeviceConfiguration(
@@ -154,6 +155,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
                     clock=resources.clock,
+                    operation_ttl=erase_operation_ttl,
                 ),
                 acknowledge=AcknowledgeDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,

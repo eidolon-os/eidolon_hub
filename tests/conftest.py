@@ -80,6 +80,7 @@ def owner_directory_config(tmp_path):
                 owner_domain_id=owner_domain_id,
                 owner_domain_generation=1,
                 directory_revision=1,
+                descriptor_uri=f"https://{host}/api/device-onboarding/v1/descriptor",
                 trust_root_refs=(descriptor_key_id(root_spki),),
                 endpoints=(
                     AuthorityEndpoint(

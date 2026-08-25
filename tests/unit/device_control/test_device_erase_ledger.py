@@ -170,7 +170,9 @@ async def test_canonical_revoke_materializes_operation_and_signed_ack(database) 
         "nonce": nonce,
         "operation_type": "device-local.erase",
     }
-    delivery = await PullDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
+    delivery = await PullDeviceEraseOperation(
+        ledger=ledger, clock=Clock(), operation_ttl=timedelta(days=7)
+    ).execute(
         device_ref=_ref(),
         public_key_spki=_spki(key),
         nonce=nonce,
@@ -209,6 +211,112 @@ async def test_late_ack_and_conflicting_duplicate_fail_closed(database) -> None:
         await service.execute(
             ack=_ack(key, operation.command.operation_id, result_code="DIFFERENT")
         )
+
+
+async def test_a_device_that_comes_back_late_is_still_told_to_erase(database) -> None:
+    """A lapsed deadline ends one delivery attempt, not the Owner's instruction.
+
+    The device this matters for is the one that was broken or unplugged for
+    longer than the TTL. It is also the only device for which local erase is
+    still possible at all — and it was the one the Host had nothing left to say
+    to: the operation went terminal `expired`, the pull answered 204 forever,
+    and a device carrying Owner data could rejoin the network without ever
+    being told to drop it.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    ledger, operation = await _materialize(database, key, ttl=timedelta(minutes=5))
+    lapsed = Clock(NOW + timedelta(days=30))
+    assert await ledger.expire_due(now=lapsed.now()) == 1
+
+    nonce = "returning_nonce_01"
+    document = {
+        "device_ref": _ref().model_dump(mode="json"),
+        "nonce": nonce,
+        "operation_type": "device-local.erase",
+    }
+    delivery = await PullDeviceEraseOperation(
+        ledger=ledger, clock=lapsed, operation_ttl=timedelta(minutes=5)
+    ).execute(
+        device_ref=_ref(),
+        public_key_spki=_spki(key),
+        nonce=nonce,
+        signature=_sign(key, document),
+    )
+    assert delivery is not None
+    # The same instruction, re-armed: one Owner decision, not a second one.
+    assert delivery.command.operation_id == operation.command.operation_id
+    assert delivery.command.deadline > lapsed.now()
+
+    terminal = await AcknowledgeDeviceEraseOperation(ledger=ledger, clock=lapsed).execute(
+        ack=_ack(key, operation.command.operation_id)
+    )
+    assert terminal.state is DeviceEraseState.ACKNOWLEDGED
+    assert terminal.terminal_result == "erased"
+
+
+async def test_an_acknowledged_erase_is_never_re_armed(database) -> None:
+    """Re-arming is for an unfinished instruction, never a finished one."""
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    ledger, operation = await _materialize(database, key, ttl=timedelta(minutes=5))
+    await AcknowledgeDeviceEraseOperation(ledger=ledger, clock=Clock()).execute(
+        ack=_ack(key, operation.command.operation_id)
+    )
+    lapsed = Clock(NOW + timedelta(days=30))
+
+    nonce = "acknowledged_nonce1"
+    document = {
+        "device_ref": _ref().model_dump(mode="json"),
+        "nonce": nonce,
+        "operation_type": "device-local.erase",
+    }
+    assert (
+        await PullDeviceEraseOperation(
+            ledger=ledger, clock=lapsed, operation_ttl=timedelta(minutes=5)
+        ).execute(
+            device_ref=_ref(),
+            public_key_spki=_spki(key),
+            nonce=nonce,
+            signature=_sign(key, document),
+        )
+        is None
+    )
+    settled = await ledger.get(operation_id=operation.command.operation_id)
+    assert settled is not None and settled.state is DeviceEraseState.ACKNOWLEDGED
+
+
+async def test_re_arming_needs_the_device_proof_first(database) -> None:
+    """An unauthenticated caller cannot move the ledger by asking.
+
+    The re-arm is a write, and it happens on the pull path — so the key and the
+    signature have to be checked before it, or a stranger who knows a DeviceRef
+    could keep an expired instruction alive.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    stranger = ec.generate_private_key(ec.SECP256R1())
+    ledger, operation = await _materialize(database, key, ttl=timedelta(minutes=5))
+    lapsed = Clock(NOW + timedelta(days=30))
+    assert await ledger.expire_due(now=lapsed.now()) == 1
+
+    nonce = "stranger_nonce_0001"
+    document = {
+        "device_ref": _ref().model_dump(mode="json"),
+        "nonce": nonce,
+        "operation_type": "device-local.erase",
+    }
+    with pytest.raises(PermissionError):
+        await PullDeviceEraseOperation(
+            ledger=ledger, clock=lapsed, operation_ttl=timedelta(minutes=5)
+        ).execute(
+            device_ref=_ref(),
+            public_key_spki=_spki(stranger),
+            nonce=nonce,
+            signature=_sign(stranger, document),
+        )
+    untouched = await ledger.get(operation_id=operation.command.operation_id)
+    assert untouched is not None and untouched.state is DeviceEraseState.EXPIRED
 
 
 async def test_old_generation_ack_cannot_change_operation(database) -> None:

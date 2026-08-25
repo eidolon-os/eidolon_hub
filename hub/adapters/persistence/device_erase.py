@@ -100,11 +100,28 @@ class SqlDeviceEraseLedger:
                         deadline=deadline,
                     )
                     fingerprint = operation_fingerprint(command)
+                    # Identity, not content: `operation_id` is derived from the
+                    # event and the exact generation, and the deadline inside the
+                    # command legitimately moves when a lapsed attempt is
+                    # re-armed. Comparing fingerprints here made every reconcile
+                    # pass after a re-arm fail closed on its own writer.
                     existing = await session.get(DeviceEraseOperationRow, operation_id)
                     if existing is not None:
-                        if existing.request_fingerprint != fingerprint:
+                        if existing.source_event_id != event.id or (
+                            existing.device_id,
+                            existing.owner_domain_id,
+                            existing.owner_domain_generation,
+                            existing.claim_generation,
+                            existing.trust_epoch,
+                        ) != (
+                            device_ref.device_instance_id,
+                            str(device_ref.owner_domain_id),
+                            device_ref.owner_domain_generation,
+                            device_ref.claim_generation,
+                            device_ref.trust_epoch,
+                        ):
                             raise DeviceEraseIdempotencyConflict(
-                                "operation_id was reused with different content"
+                                "operation_id was reused for another Claim generation"
                             )
                         continue
                     by_event = await session.scalar(
@@ -113,9 +130,9 @@ class SqlDeviceEraseLedger:
                         )
                     )
                     if by_event is not None:
-                        if by_event.request_fingerprint != fingerprint:
+                        if by_event.operation_id != operation_id:
                             raise DeviceEraseIdempotencyConflict(
-                                "Claim event was projected with different erase content"
+                                "Claim event was projected under another operation identity"
                             )
                         continue
                     claim = await session.get(AdmissionClaimRow, device_ref.device_instance_id)
@@ -255,6 +272,57 @@ class SqlDeviceEraseLedger:
                 )
             )
         return None if row is None else self._decode(row)
+
+    async def rearm_lapsed(
+        self,
+        *,
+        operation_id: str,
+        now: datetime,
+        operation_ttl: timedelta,
+    ) -> DeviceEraseOperation:
+        """Give one unfinished erase instruction a fresh delivery deadline.
+
+        The Owner's instruction and the deadline a device is held to are two
+        different things, and the ledger used to keep only one of them: once the
+        deadline passed the row became terminal `expired` and nothing would ever
+        be delivered again. That stranded exactly the device the instruction
+        exists for — the one that was away longer than the window and can still
+        comply when it returns.
+
+        The row is re-armed rather than duplicated, so an Owner who asked once
+        keeps one instruction with one identity, and a device that erased under
+        the previous attempt and ACKs late is still ACKing the same operation.
+        `created_at` stays the instruction's own birth; only the attempt moves.
+        """
+
+        if operation_ttl <= timedelta(0):
+            raise ValueError("device erase operation TTL must be positive")
+        async with self._lock:
+            async with self._database.sessions.begin() as session:
+                row = await session.get(DeviceEraseOperationRow, operation_id)
+                if row is None:
+                    raise KeyError(operation_id)
+                if row.state in {
+                    DeviceEraseState.ACKNOWLEDGED.value,
+                    DeviceEraseState.PERMANENT_FAILURE.value,
+                }:
+                    return self._decode(row)
+                if row.state != DeviceEraseState.EXPIRED.value and _aware(row.deadline) > now:
+                    return self._decode(row)
+                command = DeviceLocalEraseCommand.model_validate(
+                    json.loads(row.command_json)
+                ).model_copy(update={"deadline": now + operation_ttl})
+                row.command_json = json.dumps(
+                    command.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+                )
+                row.request_fingerprint = operation_fingerprint(command)
+                row.deadline = command.deadline
+                row.state = DeviceEraseState.PENDING.value
+                row.terminal_result = None
+                row.result_code = ""
+                row.delivery_attempt_id = None
+                row.delivery_accepted_at = None
+                return self._decode(row)
 
     async def accept_delivery(
         self,

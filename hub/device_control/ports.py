@@ -40,6 +40,14 @@ class DeviceEraseLedger(Protocol):
 
     async def get_for_device(self, *, device_ref: DeviceRef) -> DeviceEraseOperation | None: ...
 
+    async def rearm_lapsed(
+        self,
+        *,
+        operation_id: str,
+        now: datetime,
+        operation_ttl: timedelta,
+    ) -> DeviceEraseOperation: ...
+
     async def accept_delivery(
         self,
         *,

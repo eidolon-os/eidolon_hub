@@ -261,9 +261,30 @@ class ReconcileDeviceEraseOperations:
 
 
 class PullDeviceEraseOperation:
-    def __init__(self, *, ledger: DeviceEraseLedger, clock: Clock) -> None:
+    """Hand a returning device the Owner's erase instruction, re-armed if stale.
+
+    A deadline bounds one delivery attempt; it does not expire the Owner's
+    decision that this device must drop their data. Treating the two as one
+    thing meant the ledger went terminal `expired` after the TTL and this pull
+    answered 204 from then on — so the only device for which local erase was
+    still possible, the one that was broken or unplugged for longer than the
+    window, was the one the Host had stopped telling. A device carrying Owner
+    data could rejoin the network and never hear about it.
+
+    Re-arming happens only after the device has proved possession of the key its
+    revoked Claim recorded: it is a write on an unauthenticated route otherwise.
+    """
+
+    def __init__(
+        self,
+        *,
+        ledger: DeviceEraseLedger,
+        clock: Clock,
+        operation_ttl: timedelta,
+    ) -> None:
         self._ledger = ledger
         self._clock = clock
+        self._ttl = operation_ttl
 
     async def execute(
         self,
@@ -288,8 +309,18 @@ class PullDeviceEraseOperation:
             signing_document=signing_document,
             signature=signature,
         )
-        if operation.state.value in {"acknowledged", "expired", "permanent-failure"}:
+        # Settled is settled. Only a lapsed attempt is re-armed.
+        if operation.state.value in {"acknowledged", "permanent-failure"}:
             return None
+        now = self._clock.now()
+        if operation.state.value == "expired" or operation.command.deadline <= now:
+            operation = await self._ledger.rearm_lapsed(
+                operation_id=operation.command.operation_id,
+                now=now,
+                operation_ttl=self._ttl,
+            )
+            if operation.state.value in {"acknowledged", "expired", "permanent-failure"}:
+                return None
         attempt_id = (
             "erase_delivery_"
             + hashlib.sha256(f"{operation.command.operation_id}\0{nonce}".encode()).hexdigest()[:40]
