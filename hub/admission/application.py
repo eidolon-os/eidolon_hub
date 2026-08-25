@@ -20,6 +20,7 @@ from hub.admission.domain import (
     fingerprint,
     require_transition,
 )
+from hub.admission.hardware_identity import VerifiedHardwareLookup
 from hub.admission.persistence import SqlAdmissionStore, aware
 from hub.contracts.bindings.admission import (
     AdmissionListCursor,
@@ -50,18 +51,15 @@ from hub.ports.identity import Clock, IdGenerator
 
 
 @dataclass(frozen=True)
-class VerifiedHardwareIdentity:
-    """Stable hardware identity returned only by a verified adapter."""
-
-    hardware_identity_ref: str
-
-
-@dataclass(frozen=True)
 class DevelopmentCommissioningIdentity:
-    """Private development-registry material; never serialized or logged."""
+    """Private development-registry material; never serialized or logged.
+
+    It holds only the pre-shared secret. The registry deliberately cannot state
+    a hardware identity: that is derived from the lookup id the secret is bound
+    to, so no hand-typed entry can assert an unverifiable fact about a board.
+    """
 
     setup_secret: bytes
-    hardware_identity_ref: str
 
 
 class CommissioningProofVerifier(Protocol):
@@ -74,7 +72,7 @@ class CommissioningProofVerifier(Protocol):
         proof: str,
         hardware_identity_evidence: dict,
         operational_public_key: str,
-    ) -> VerifiedHardwareIdentity | None: ...
+    ) -> VerifiedHardwareLookup | None: ...
 
 
 class ClaimDirectoryProjector(Protocol):
@@ -99,7 +97,7 @@ class HmacCommissioningProofVerifier:
         proof: str,
         hardware_identity_evidence: dict,
         operational_public_key: str,
-    ) -> VerifiedHardwareIdentity | None:
+    ) -> VerifiedHardwareLookup | None:
         if hardware_identity_evidence.get("scheme") != "dev-self-signed-p256":
             return None
         try:
@@ -144,7 +142,7 @@ class HmacCommissioningProofVerifier:
         )
         if not hmac.compare_digest(expected, proof):
             return None
-        return VerifiedHardwareIdentity(identity.hardware_identity_ref)
+        return VerifiedHardwareLookup(hardware_lookup_id)
 
 
 class RejectingCommissioningProofVerifier:
@@ -164,7 +162,7 @@ class RejectingCommissioningProofVerifier:
         proof: str,
         hardware_identity_evidence: dict,
         operational_public_key: str,
-    ) -> VerifiedHardwareIdentity | None:
+    ) -> VerifiedHardwareLookup | None:
         del (
             device_instance_id,
             owner_domain_id,
@@ -303,7 +301,7 @@ class AdmissionAuthority:
                 category="invalid",
             )
         proof = payload["commissioning_proof"]
-        verified_hardware = self.commissioning_proofs.verify(
+        verified_lookup = self.commissioning_proofs.verify(
             device_instance_id=payload["device_instance_candidate_id"],
             owner_domain_id=str(requested),
             nonce=proof["nonce"],
@@ -311,7 +309,7 @@ class AdmissionAuthority:
             hardware_identity_evidence=hardware,
             operational_public_key=payload["operational_key"]["public_key"],
         )
-        if verified_hardware is None:
+        if verified_lookup is None:
             raise AdmissionProblem(
                 "UNAUTHENTICATED", "commissioning proof is invalid", status=401, category="auth"
             )
@@ -374,7 +372,7 @@ class AdmissionAuthority:
                     session,
                     enrollment_id=enrollment_id,
                     device_instance_id=payload["device_instance_candidate_id"],
-                    hardware_identity_ref=verified_hardware.hardware_identity_ref,
+                    hardware_identity_ref=verified_lookup.hardware_identity_ref(),
                     requested_owner_domain_id=str(requested),
                     state="pending_review",
                     revision=1,

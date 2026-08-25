@@ -60,6 +60,7 @@ from hub.admission.application import (
 )
 from hub.admission.crypto import key_id
 from hub.admission.domain import ActorContext, AdmissionProblem
+from hub.admission.hardware_identity import derive_hardware_identity_ref
 from hub.admission.http import create_admission_router
 from hub.admission.persistence import SqlAdmissionStore
 from hub.admission.target_app import create_admission_target_app
@@ -95,7 +96,7 @@ def instance_id(key: ec.EllipticCurvePrivateKey) -> str:
 
 
 HARDWARE_LOOKUP_ID = "box-3-test-fixture"
-HARDWARE_IDENTITY_REF = "hardware-box-3-test-fixture"
+HARDWARE_IDENTITY_REF = derive_hardware_identity_ref(HARDWARE_LOOKUP_ID)
 
 
 def sign(key: ec.EllipticCurvePrivateKey, document: dict) -> str:
@@ -173,10 +174,7 @@ async def harness(tmp_path):
         owner_domain_id="owner-domain_01",
         owner_domain_generation=3,
         commissioning_proofs=HmacCommissioningProofVerifier(
-            lambda lookup_id: DevelopmentCommissioningIdentity(
-                setup_secret=setup_secret,
-                hardware_identity_ref=HARDWARE_IDENTITY_REF,
-            )
+            lambda lookup_id: DevelopmentCommissioningIdentity(setup_secret=setup_secret)
             if lookup_id == HARDWARE_LOOKUP_ID
             else None
         ),
@@ -614,6 +612,32 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
         assert new_claim.state == "active"
         assert old_claim.hardware_identity_ref == new_claim.hardware_identity_ref
         assert old_claim.hardware_identity_ref == HARDWARE_IDENTITY_REF
+
+
+async def test_persisted_hardware_identity_is_derived_and_repeats_no_device_claim(harness):
+    """A Proposal records a derived hardware identity, never the device's words.
+
+    The fixture lookup id says "box-3" the way a hand-filled registry entry
+    once said "hardware-box3-1cdbd47aef0c" for a Waveshare board. The Authority
+    verifies possession of a pre-shared secret, not a board type, so the
+    permanent record must not repeat an unverified claim about the hardware.
+    """
+
+    database, authority, _clock, secret = harness
+    created = await authority.create_enrollment(
+        command_id="create_01",
+        correlation_id="intent_01",
+        payload=create_payload(
+            ec.derive_private_key(0x123456789, ec.SECP256R1()),
+            ec.derive_private_key(0x234567891, ec.SECP256R1()),
+            secret,
+        ),
+    )
+    async with database.sessions() as session:
+        proposal = await session.get(AdmissionProposalRow, created["enrollment_id"])
+
+    assert proposal.hardware_identity_ref == derive_hardware_identity_ref(HARDWARE_LOOKUP_ID)
+    assert "box" not in proposal.hardware_identity_ref
 
 
 async def test_projection_failure_replays_committed_claim_and_converges(harness):

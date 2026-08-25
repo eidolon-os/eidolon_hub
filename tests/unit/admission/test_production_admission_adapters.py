@@ -101,21 +101,20 @@ def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_cl
     path.write_text(
         json.dumps(
             {
-                "profile": "eidolon-development-hmac-commissioning-v1",
-                "devices": {
-                    "box-3": {
-                        "setup_secret": encoded,
-                        "hardware_identity_ref": "hardware-box-3",
-                    }
-                },
+                "profile": "eidolon-development-hmac-commissioning-v2",
+                "devices": {"box-3": {"setup_secret": encoded}},
             }
         ),
         encoding="utf-8",
     )
     real_stat = type(path).stat
 
-    def root_owned(candidate):
-        value = real_stat(candidate)
+    # Patching Path.stat replaces it for every path, pytest's own traceback
+    # rendering included, so the stub has to keep the real signature; without
+    # it a genuine failure in this test crashed the reporter instead of being
+    # reported.
+    def root_owned(candidate, **kwargs):
+        value = real_stat(candidate, **kwargs)
         if candidate == path:
             return SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o640)
         return value
@@ -165,7 +164,7 @@ def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_cl
         operational_public_key=operational_spki,
     )
     assert verified is not None
-    assert verified.hardware_identity_ref == "hardware-box-3"
+    assert verified.hardware_lookup_id == "box-3"
     assert verifier.verify(
         device_instance_id=instance_id,
         owner_domain_id="owner-local",
@@ -181,8 +180,61 @@ def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_cl
     path.write_text(
         json.dumps(
             {
-                "profile": "eidolon-development-hmac-commissioning-v1",
+                "profile": "eidolon-development-hmac-commissioning-v2",
                 "devices": {"box-3": encoded},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="registry is invalid"):
+        load_commissioning_proof_verifier(config)
+
+    # A v1 file asserted a hand-written hardware_identity_ref per device, which
+    # is how a Waveshare AMOLED board ended up permanently claiming to be an
+    # ESP-BOX-3. Such a file must fail closed rather than be read with the
+    # unverifiable field quietly ignored.
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "eidolon-development-hmac-commissioning-v1",
+                "devices": {
+                    "box-3": {
+                        "setup_secret": encoded,
+                        "hardware_identity_ref": "hardware-box-3",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="registry is invalid"):
+        load_commissioning_proof_verifier(config)
+
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "eidolon-development-hmac-commissioning-v2",
+                "devices": {
+                    "box-3": {
+                        "setup_secret": encoded,
+                        "hardware_identity_ref": "hardware-box-3",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="registry is invalid"):
+        load_commissioning_proof_verifier(config)
+
+    # The profile names the format, so entries alone are not enough: a file
+    # still labelled v1 has not been reviewed against the rule that an entry
+    # may not assert a hardware identity, and is not read on its say-so.
+    path.write_text(
+        json.dumps(
+            {
+                "profile": "eidolon-development-hmac-commissioning-v1",
+                "devices": {"box-3": {"setup_secret": encoded}},
             }
         ),
         encoding="utf-8",

@@ -5,7 +5,6 @@ from __future__ import annotations
 import base64
 import json
 import os
-import re
 import stat
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
@@ -100,7 +99,7 @@ def read_development_commissioning_registry(
     """
 
     document = json.loads(path.read_text(encoding="utf-8"))
-    if document.get("profile") != "eidolon-development-hmac-commissioning-v1":
+    if document.get("profile") != "eidolon-development-hmac-commissioning-v2":
         raise ValueError("development commissioning registry profile differs")
     encoded = document["devices"]
     if not isinstance(encoded, dict) or not encoded:
@@ -108,25 +107,19 @@ def read_development_commissioning_registry(
     identities_by_lookup: dict[str, DevelopmentCommissioningIdentity] = {}
     for raw_lookup_id, raw_entry in encoded.items():
         lookup_id = str(raw_lookup_id)
-        if not isinstance(raw_entry, dict) or set(raw_entry) != {
-            "setup_secret",
-            "hardware_identity_ref",
-        }:
+        # An entry may pre-share a secret and nothing else. The v1 format also
+        # carried a typed hardware_identity_ref, which is how a Waveshare
+        # AMOLED board came to be permanently recorded as "hardware-box3-...":
+        # a fact about the hardware that commissioning never verifies. The
+        # identity is derived from the lookup id this secret is bound to, so an
+        # entry that still states one is rejected rather than read past.
+        if not isinstance(raw_entry, dict) or set(raw_entry) != {"setup_secret"}:
             raise ValueError("development commissioning registry entry is invalid")
         encoded_secret = str(raw_entry["setup_secret"])
-        hardware_identity_ref = str(raw_entry["hardware_identity_ref"])
         secret = base64.urlsafe_b64decode(encoded_secret + "=" * (-len(encoded_secret) % 4))
-        if (
-            not lookup_id.strip()
-            or len(lookup_id) > 128
-            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:-]{2,127}", hardware_identity_ref)
-            or len(secret) < 16
-        ):
+        if not lookup_id.strip() or len(lookup_id.encode()) > 128 or len(secret) < 16:
             raise ValueError("development commissioning registry entry is invalid")
-        identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(
-            setup_secret=secret,
-            hardware_identity_ref=hardware_identity_ref,
-        )
+        identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(setup_secret=secret)
     return identities_by_lookup
 
 

@@ -22,6 +22,7 @@ from hub.adapters.persistence.models import (
     DeviceRow,
 )
 from hub.admission.domain import AdmissionProblem
+from hub.admission.hardware_identity import require_derived_hardware_identity_ref
 
 
 def aware(value: datetime) -> datetime:
@@ -172,6 +173,11 @@ class SqlAdmissionStore:
 
     @staticmethod
     def add_proposal(session, **values) -> None:
+        # The Proposal is the first durable record of a hardware identity, and
+        # Grants and Claims only copy it forward across generations. Refusing a
+        # ref that was not derived here is what stops an operator-typed or
+        # adapter-invented board claim from becoming permanent history.
+        require_derived_hardware_identity_ref(values["hardware_identity_ref"])
         session.add(AdmissionProposalRow(**values))
 
     @staticmethod
