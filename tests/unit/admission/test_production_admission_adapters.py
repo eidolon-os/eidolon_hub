@@ -241,3 +241,68 @@ def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_cl
     )
     with pytest.raises(RuntimeError, match="registry is invalid"):
         load_commissioning_proof_verifier(config)
+
+
+async def test_every_claim_this_surface_requires_is_required_by_name() -> None:
+    """The Admission credential's claim set, pinned from the reader's side.
+
+    Admin holds the other half. The two were allowed to drift once already: the
+    removal path minted the Management surface's vocabulary — ``actor_ref`` as a
+    bare string, ``owner_id`` instead of ``owner_domain_id``, no
+    ``business_owner_id`` — and presented it here. This reader took
+    ``claims["actor"]``, raised KeyError inside its own
+    ``except (JWTError, KeyError, TypeError, ValueError)``, and answered 401
+    with "invalid Admission credential". Every device removal ever attempted
+    was refused by that, and nothing in the refusal mentioned a credential.
+
+    Dropping any one of these has to be refused, or a half-shaped credential
+    could be accepted and the drift would go unnoticed in the other direction.
+    """
+
+    secret = b"admission-owner-secret-value-000001"
+    required = {
+        "sub": "eidolon-admin/lifecycle-workflow",
+        "presenter": "eidolon-admin/lifecycle-workflow",
+        "aud": "eidolon-admission",
+        "actor": {
+            "principal_id": "controller_01",
+            "owner_domain_id": "owner-domain_01",
+            "granted_scopes": ["device.claim.revoke"],
+            "authentication_strength": "software",
+        },
+        "owner_domain_id": "owner-domain_01",
+        "business_owner_id": "owner_01",
+        "scopes": ["device.claim.revoke"],
+        "exp": 4_000_000_000,
+    }
+
+    whole = jwt.encode(required, secret, algorithm="HS256")
+    context = await JwtAdmissionActorProvider(secret=secret)(_request(whole))
+    assert context.actor.granted_scopes == ("device.claim.revoke",)
+
+    for name in ("sub", "presenter", "actor", "owner_domain_id", "business_owner_id", "exp"):
+        without = {key: value for key, value in required.items() if key != name}
+        token = jwt.encode(without, secret, algorithm="HS256")
+        with pytest.raises(AdmissionProblem) as refused:
+            await JwtAdmissionActorProvider(secret=secret)(_request(token))
+        assert refused.value.code == "UNAUTHENTICATED", name
+
+    # The Management surface's vocabulary is not this surface's, whatever else
+    # the token carries.
+    management_shaped = jwt.encode(
+        {
+            "sub": "eidolon-admin/lifecycle-workflow",
+            "presenter": "eidolon-admin/lifecycle-workflow",
+            "aud": "eidolon-admission",
+            "actor_ref": "controller:controller_01",
+            "owner_id": "owner-domain_01",
+            "roles": ["device-manager"],
+            "scopes": ["device.claim.revoke"],
+            "target_device_id": "device-instance-01",
+            "exp": 4_000_000_000,
+        },
+        secret,
+        algorithm="HS256",
+    )
+    with pytest.raises(AdmissionProblem):
+        await JwtAdmissionActorProvider(secret=secret)(_request(management_shaped))
