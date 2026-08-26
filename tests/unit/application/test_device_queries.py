@@ -6,7 +6,6 @@ from datetime import UTC, datetime
 import pytest
 
 from hub.application.queries.get_device import GetDevice
-from hub.application.queries.list_devices import DeviceListQuery, ListDevices
 from hub.contracts.mappers import directory_entry_to_wire
 from hub.domain.devices.entities import (
     DeviceDirectoryEntry,
@@ -102,70 +101,3 @@ async def test_get_device_is_owner_scoped_and_exact() -> None:
     ).device_id == "device-a"
     with pytest.raises(KeyError):
         await query.execute(owner_scope="other-owner", device_id="device-a")
-
-
-@pytest.mark.asyncio
-async def test_list_devices_combines_structured_filters_and_stable_cursor() -> None:
-    query = ListDevices(_Directory(), clock=_Clock())
-
-    first = await query.execute(
-        DeviceListQuery(
-            owner_scope="owner-1",
-            lifecycle_state=DeviceLifecycleState.APPROVED,
-            device_kind="display",
-            capability="display.render",
-            limit=1,
-        )
-    )
-    second = await query.execute(
-        DeviceListQuery(
-            owner_scope="owner-1",
-            lifecycle_state=DeviceLifecycleState.APPROVED,
-            device_kind="display",
-            capability="display.render",
-            after=first.next_cursor,
-            limit=1,
-        )
-    )
-
-    assert [entry.device_id for entry in first.entries] == ["device-a"]
-    assert first.next_cursor == "device-a"
-    assert [entry.device_id for entry in second.entries] == ["device-c"]
-    assert second.next_cursor is None
-
-
-@pytest.mark.asyncio
-async def test_list_q_is_a_bounded_ui_filter_not_a_separate_search_contract() -> None:
-    directory = _Directory()
-    directory.entries = (replace(_entry("device-a"), display_name="Kitchen Display"),)
-
-    page = await ListDevices(directory, clock=_Clock()).execute(
-        DeviceListQuery(owner_scope="owner-1", q=" kitchen ", limit=20)
-    )
-
-    assert [entry.device_id for entry in page.entries] == ["device-a"]
-
-
-@pytest.mark.parametrize(
-    "query",
-    (
-        DeviceListQuery(owner_scope="owner-1", limit=1),
-        DeviceListQuery(owner_scope="owner-1", limit=100),
-    ),
-)
-def test_list_query_accepts_only_bounded_pages(query) -> None:
-    assert 1 <= query.limit <= 100
-
-
-@pytest.mark.parametrize(
-    "values",
-    (
-        {"owner_scope": ""},
-        {"owner_scope": "owner-1", "limit": 0},
-        {"owner_scope": "owner-1", "limit": 101},
-        {"owner_scope": "owner-1", "q": "x" * 129},
-    ),
-)
-def test_list_query_rejects_unbounded_or_ambiguous_inputs(values) -> None:
-    with pytest.raises(ValueError):
-        DeviceListQuery(**values)

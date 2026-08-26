@@ -25,9 +25,14 @@ def test_public_contract_routes_exist_before_lifespan_start() -> None:
     assert "/api/admission/v1/claims/{device_instance_id}:revoke" in paths
     assert not any(path.startswith("/api/device-access/") for path in paths)
     assert not any("signals" in path for path in paths)
-    assert "/api/device-management/v1/owners/{owner_scope}/devices" in paths
+    # The exact read Kernel makes, and nothing wider. The list, the event feed
+    # and the rename were reachable only with an Owner-scoped JWT that nothing
+    # minted any more; a route no credential can open is not a route, it is a
+    # thing that looks like one.
     assert "/api/device-management/v1/owners/{owner_scope}/devices/{device_id}" in paths
-    assert "/api/device-management/v1/owners/{owner_scope}/events" in paths
+    assert "/api/device-management/v1/owners/{owner_scope}/devices" not in paths
+    assert "/api/device-management/v1/owners/{owner_scope}/events" not in paths
+    assert "/api/device-management/v1/devices/{device_id}" not in paths
     assert "/api/device-management/v1/directory/{owner_scope}" not in paths
     assert "/api/device-management/v1/events/{owner_scope}" not in paths
     assert "/api/device-management/v1/devices/{device_id}/channels/{profile_name}" not in paths

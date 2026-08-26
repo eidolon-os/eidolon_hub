@@ -7,12 +7,12 @@ import json
 import stat
 from types import SimpleNamespace
 
+import jwt
 import pytest
 import rfc8785
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from jose import jwt
 from starlette.requests import Request
 
 from hub.admission.auth import JwtAdmissionActorProvider

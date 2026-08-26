@@ -91,13 +91,8 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 clock=resources.clock,
             )
             management = build_device_management(
-                repositories=resources.repositories,
                 directory=resources.directory,
-                projector=projector,
-                management_jwt_secret=secrets.management_jwt,
                 device_registry_reader_token=secrets.device_registry_reader_token,
-                clock=resources.clock,
-                ids=resources.ids,
             )
             admission = AdmissionAuthority(
                 store=SqlAdmissionStore(resources.database),
