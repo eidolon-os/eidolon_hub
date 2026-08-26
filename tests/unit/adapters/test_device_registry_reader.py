@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import pytest
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.adapters.security.device_registry_reader import DeviceRegistryReaderAuthorizer
 from hub.ports.identity import ManagementPermission
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_01 = named_device_instance_id("device_01")
 
 TOKEN = "device-registry-reader-token-000001"
 
@@ -17,7 +22,7 @@ async def test_kernel_may_read_one_device_it_names() -> None:
         credential=f"Bearer {TOKEN}",
         permission=ManagementPermission.DEVICE_GET,
         owner_scope="owner-domain_01",
-        device_id="device_01",
+        device_id=_DEVICE_01,
     )
 
     assert principal.subject_id == "eidolon-kernel/device-authority"
@@ -38,7 +43,7 @@ async def test_kernel_may_follow_the_claim_stream() -> None:
 async def test_a_read_that_names_no_device_is_not_an_exact_read() -> None:
     """The reader is exact by construction, not by the caller's good manners."""
 
-    for owner_scope, device_id in ((None, "device_01"), ("owner-domain_01", None)):
+    for owner_scope, device_id in ((None, _DEVICE_01), ("owner-domain_01", None)):
         with pytest.raises(PermissionError, match="exact reads"):
             await _authorizer().authorize(
                 credential=f"Bearer {TOKEN}",
@@ -58,7 +63,7 @@ async def test_anything_that_is_not_this_token_is_refused(credential: str) -> No
             credential=credential,
             permission=ManagementPermission.DEVICE_GET,
             owner_scope="owner-domain_01",
-            device_id="device_01",
+            device_id=_DEVICE_01,
         )
 
 

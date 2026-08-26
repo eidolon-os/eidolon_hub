@@ -4,6 +4,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.application.queries.get_device import GetDevice
 from hub.contracts.mappers import directory_entry_to_wire
@@ -12,6 +13,10 @@ from hub.domain.devices.entities import (
     DeviceLifecycleState,
 )
 from hub.domain.devices.manifest import DeviceManifestDocument
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_10_51_DB_7E_24_44 = named_device_instance_id("10:51:db:7e:24:44")
 
 NOW = datetime(2026, 8, 3, tzinfo=UTC)
 
@@ -80,14 +85,14 @@ class _Directory:
 
 def test_directory_wire_accepts_deployed_mac_style_device_id() -> None:
     entry = replace(
-        _entry("10:51:db:7e:24:44"),
+        _entry(_10_51_DB_7E_24_44),
         owner_scope="business_owner_account_1",
         owner_domain_id="owner-domain_01",
     )
     wire = directory_entry_to_wire(entry)
 
     assert wire.device_ref is not None
-    assert wire.device_ref.device_instance_id == "10:51:db:7e:24:44"
+    assert wire.device_ref.device_instance_id == _10_51_DB_7E_24_44
     assert str(wire.device_ref.owner_domain_id) == "owner-domain_01"
     assert str(wire.device_ref.owner_domain_id) != wire.owner_scope
 

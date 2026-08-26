@@ -33,7 +33,9 @@ from eidolon_sdk.device_foundation.v1 import (
     EnrollmentProposalState,
     OwnerDomainId,
     RevokeClaimResult,
+    derive_device_instance_id,
 )
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from fastapi import FastAPI
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -66,6 +68,10 @@ from hub.admission.persistence import SqlAdmissionStore
 from hub.admission.target_app import create_admission_target_app
 from hub.application.projections.device_directory import ProjectDeviceDirectory
 
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_OTHER = named_device_instance_id("device_other")
+
 
 class FixedClock:
     def __init__(self) -> None:
@@ -92,7 +98,9 @@ def spki(key: ec.EllipticCurvePrivateKey) -> str:
 
 
 def instance_id(key: ec.EllipticCurvePrivateKey) -> str:
-    return "device-instance-" + key_id(spki(key)).removeprefix("sha256:")
+    """Through the contract's derivation, not a second copy of it here."""
+
+    return derive_device_instance_id(spki(key))
 
 
 HARDWARE_LOOKUP_ID = "box-3-test-fixture"
@@ -1235,7 +1243,7 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
     plaintext = open_wire_envelope(handoff, envelope, envelope["aad"])
     assert plaintext["grant_id"] == collected["grant_id"]
     assert plaintext["device_ref"]["owner_domain_id"] == "owner-domain_01"
-    tampered_aad = {**envelope["aad"], "device_instance_id": "device_other"}
+    tampered_aad = {**envelope["aad"], "device_instance_id": _DEVICE_OTHER}
     with pytest.raises(InvalidTag):
         open_wire_envelope(handoff, envelope, tampered_aad)
 

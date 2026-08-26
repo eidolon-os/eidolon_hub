@@ -19,6 +19,7 @@ from eidolon_sdk.device_foundation.v1 import (
     canonical_bytes,
     issue_admission_credential,
 )
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -28,9 +29,13 @@ from hub.device_control.domain import DeviceEraseOperation, DeviceEraseState
 from hub.device_control.http import DeviceEraseHttpServices, create_device_erase_router
 from hub.device_control.ports import DeviceClaimProjection
 
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_01 = named_device_instance_id("device_01")
+
 NOW = datetime(2026, 8, 24, tzinfo=UTC)
 REF = DeviceRef(
-    device_instance_id="device_01",
+    device_instance_id=_DEVICE_01,
     owner_domain_id="owner-domain_01",
     owner_domain_generation=3,
     claim_generation=7,

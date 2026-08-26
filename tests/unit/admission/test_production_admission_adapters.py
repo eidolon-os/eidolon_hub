@@ -13,12 +13,19 @@ import rfc8785
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
+from eidolon_sdk.device_foundation.v1 import derive_device_instance_id
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from starlette.requests import Request
 
 from hub.admission.auth import JwtAdmissionActorProvider
 from hub.admission.domain import AdmissionProblem
 from hub.composition.resources import load_commissioning_proof_verifier
 from hub.config import CommissioningProofConfig, HubConfig
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_INSTANCE_01 = named_device_instance_id("device-instance-01")
+_DEVICE_01 = named_device_instance_id("device_01")
 
 
 def _spki(key: ec.EllipticCurvePrivateKey) -> tuple[str, bytes]:
@@ -83,7 +90,7 @@ def test_manufacturer_profile_is_not_ready_without_real_verifier() -> None:
     verifier, ready = load_commissioning_proof_verifier(HubConfig())
     assert ready is False
     assert verifier.verify(
-        device_instance_id="device_01",
+        device_instance_id=_DEVICE_01,
         owner_domain_id="owner-domain_01",
         nonce="nonce_01",
         proof="opaque-proof",
@@ -130,7 +137,7 @@ def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_cl
     assert ready is True
     operational = ec.derive_private_key(17, ec.SECP256R1())
     operational_spki, operational_der = _spki(operational)
-    instance_id = "device-instance-" + hashlib.sha256(operational_der).hexdigest()
+    instance_id = derive_device_instance_id(operational_spki)
     evidence_document = {
         "device_instance_id": instance_id,
         "hardware_lookup_id": "box-3",
@@ -298,7 +305,7 @@ async def test_every_claim_this_surface_requires_is_required_by_name() -> None:
             "owner_id": "owner-domain_01",
             "roles": ["device-manager"],
             "scopes": ["device.claim.revoke"],
-            "target_device_id": "device-instance-01",
+            "target_device_id": _DEVICE_INSTANCE_01,
             "exp": 4_000_000_000,
         },
         secret,

@@ -5,12 +5,17 @@ from __future__ import annotations
 import hashlib
 
 import pytest
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.admission.hardware_identity import (
     HARDWARE_IDENTITY_REF_PATTERN,
     derive_hardware_identity_ref,
 )
 from hub.admission.persistence import SqlAdmissionStore
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_INSTANCE_01 = named_device_instance_id("device-instance-01")
 
 
 class _RecordingSession:
@@ -82,7 +87,7 @@ def test_a_proposal_cannot_persist_a_ref_that_was_not_derived() -> None:
         SqlAdmissionStore.add_proposal(
             _RecordingSession(),
             enrollment_id="enrollment_01",
-            device_instance_id="device-instance-01",
+            device_instance_id=_DEVICE_INSTANCE_01,
             hardware_identity_ref="hardware-box3-1cdbd47aef0c",
         )
 
@@ -90,7 +95,7 @@ def test_a_proposal_cannot_persist_a_ref_that_was_not_derived() -> None:
     SqlAdmissionStore.add_proposal(
         session,
         enrollment_id="enrollment_01",
-        device_instance_id="device-instance-01",
+        device_instance_id=_DEVICE_INSTANCE_01,
         hardware_identity_ref=derive_hardware_identity_ref("1c:db:d4:7a:ef:0c"),
     )
     assert len(session.added) == 1

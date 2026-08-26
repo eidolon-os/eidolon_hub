@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from eidolon_sdk.device_foundation.v1 import DeviceLocalEraseAck, DeviceRef, canonical_bytes
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.device_erase import SqlDeviceEraseLedger
@@ -23,6 +24,10 @@ from hub.device_control.domain import (
     DeviceEraseIdempotencyConflict,
     DeviceEraseState,
 )
+
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_ERASE_01 = named_device_instance_id("device_erase_01")
 
 NOW = datetime(2026, 8, 23, 10, 0, tzinfo=UTC)
 MANIFEST = "sha256:" + "a" * 64
@@ -57,7 +62,7 @@ def _sign(key: ec.EllipticCurvePrivateKey, document: dict[str, object]) -> str:
 
 def _ref(generation: int = 7) -> DeviceRef:
     return DeviceRef(
-        device_instance_id="device_erase_01",
+        device_instance_id=_DEVICE_ERASE_01,
         owner_domain_id="owner-domain_01",
         owner_domain_generation=1,
         claim_generation=generation,
@@ -72,7 +77,7 @@ async def _seed_revoke(database, key, *, occurred_at=NOW) -> None:
         "id": "claim_event_7",
         "source": "urn:eidolon:authority:admission",
         "type": "live.eidolon.device.claim-revoked.v1",
-        "subject": "device-instances/device_erase_01",
+        "subject": f"device-instances/{_DEVICE_ERASE_01}",
         "time": occurred_at.isoformat().replace("+00:00", "Z"),
         "datacontenttype": "application/json",
         "dataschema": "https://contracts.eidolon.live/device-foundation/v1/events/claim-revoked-data.schema.json",

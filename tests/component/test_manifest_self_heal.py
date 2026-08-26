@@ -27,6 +27,7 @@ from eidolon_sdk.device_foundation.v1 import (
     canonical_bytes,
     manifest_digest,
 )
+from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -43,9 +44,13 @@ from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 
+# Tests name the device they mean; the name becomes a real device
+# instance id, which is a digest of a key and never a chosen string.
+_DEVICE_01 = named_device_instance_id("device_01")
+
 NOW = datetime(2026, 8, 25, tzinfo=UTC)
 REF = DeviceRef(
-    device_instance_id="device_01",
+    device_instance_id=_DEVICE_01,
     owner_domain_id="owner-domain_01",
     owner_domain_generation=1,
     claim_generation=2,
