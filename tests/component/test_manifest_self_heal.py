@@ -222,7 +222,7 @@ async def test_a_device_that_declared_nothing_repairs_itself_and_gets_a_binding(
                 acknowledge=_Unused(),
                 reconcile=_Unused(),
                 ledger=_Unused(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )

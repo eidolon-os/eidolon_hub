@@ -3,6 +3,8 @@
 from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     AckClaimGrant,
     AckClaimGrantResult,
+    AdmissionCredential,
+    AdmissionCredentialError,
     AdmissionEventSource,
     AdmissionEventType,
     AdmissionListCursor,
@@ -42,6 +44,8 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     OwnerDomainId,
     RevokeClaim,
     RevokeClaimResult,
+    issue_admission_credential,
+    read_admission_credential,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

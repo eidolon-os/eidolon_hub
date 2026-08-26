@@ -11,6 +11,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from hub.channel_reconciliation.application import ReconcileChannelBinding
 from hub.channel_reconciliation.domain import ChannelBinding
+from hub.contracts.bindings.admission import (
+    AdmissionCredentialError,
+    read_admission_credential,
+)
 from hub.contracts.bindings.device import (
     AssertDeviceManifest,
     DeliverEnvelope,
@@ -23,7 +27,6 @@ from hub.contracts.bindings.device import (
     DeviceRef,
     ManifestRef,
 )
-from hub.ports.identity import ManagementAuthorizer, ManagementPermission
 
 from .application import (
     AcceptDeviceManifest,
@@ -75,7 +78,8 @@ class DeviceEraseHttpServices:
     acknowledge: AcknowledgeDeviceEraseOperation
     reconcile: ReconcileDeviceEraseOperations
     ledger: DeviceEraseLedger
-    authorizer: ManagementAuthorizer
+    #: The installation secret this surface reads Admission credentials with.
+    secret: bytes
 
 
 def create_device_erase_router(
@@ -91,24 +95,30 @@ def create_device_erase_router(
         authorization: str,
         device_ref: DeviceRef,
     ) -> None:
-        principal = await current().authorizer.authorize(
-            credential=authorization,
-            permission=ManagementPermission.DEVICE_CONTROL_GET,
-            owner_scope=str(device_ref.owner_domain_id),
-            device_id=device_ref.device_instance_id,
-        )
-        expected = (
-            device_ref.owner_domain_generation,
-            device_ref.claim_generation,
-            device_ref.trust_epoch,
-        )
-        actual = (
-            principal.target_owner_domain_generation,
-            principal.target_claim_generation,
-            principal.target_trust_epoch,
-        )
-        if actual != expected:
-            raise PermissionError("management credential generation scope mismatch")
+        """Fence this read to the exact device the credential authorizes.
+
+        The same Admission credential the Claim revocation is presented with:
+        one removal, one authorization, read by both surfaces. Each enforces
+        what it needs — revocation checks the command's DeviceRef against the
+        stored Claim, this checks the request against what the credential was
+        minted for — but there is one credential and one vocabulary. Two
+        vocabularies for one authorization is what answered 401 to every
+        device removal ever attempted.
+
+        A credential with no target is refused rather than treated as
+        authorizing whatever arrived: "not fenced" is not "fenced to this".
+        """
+
+        try:
+            credential = read_admission_credential(authorization, secret=current().secret)
+        except AdmissionCredentialError as exc:
+            raise PermissionError(str(exc)) from exc
+        if "device.claim.revoke" not in credential.scopes:
+            raise PermissionError("credential lacks device.claim.revoke scope")
+        if credential.target_device_ref is None:
+            raise PermissionError("credential authorizes no device")
+        if credential.target_device_ref != device_ref:
+            raise PermissionError("credential authorizes another device or generation")
 
     @router.post(
         "/configuration:pull",

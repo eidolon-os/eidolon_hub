@@ -7,6 +7,9 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from eidolon_sdk.device_foundation.v1 import (
+    AdmissionCredential,
+    BusinessOwnerId,
+    ControllerActorRef,
     DeliverEnvelope,
     DeliveryAcceptance,
     DeviceEvidenceEnvelope,
@@ -14,6 +17,7 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceLocalEraseCommand,
     DeviceRef,
     canonical_bytes,
+    issue_admission_credential,
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -23,7 +27,6 @@ from hub.device_control.application import DeviceEraseDelivery, PullDeviceConfig
 from hub.device_control.domain import DeviceEraseOperation, DeviceEraseState
 from hub.device_control.http import DeviceEraseHttpServices, create_device_erase_router
 from hub.device_control.ports import DeviceClaimProjection
-from hub.ports.identity import ManagementPrincipal
 
 NOW = datetime(2026, 8, 24, tzinfo=UTC)
 REF = DeviceRef(
@@ -187,7 +190,7 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -276,23 +279,6 @@ class _Ledger:
         return await self.get(operation_id=COMMAND.operation_id)
 
 
-class _Authorizer:
-    async def authorize(self, *, credential, permission, owner_scope, device_id):
-        assert credential == "Bearer exact-removal"
-        assert owner_scope == str(REF.owner_domain_id)
-        assert device_id == REF.device_instance_id
-        return ManagementPrincipal(
-            subject_id="eidolon-admin/lifecycle-workflow",
-            owner_id=str(REF.owner_domain_id),
-            roles=frozenset({"device-manager"}),
-            scopes=frozenset({"device.claim.revoke"}),
-            target_device_id=REF.device_instance_id,
-            target_owner_domain_generation=REF.owner_domain_generation,
-            target_claim_generation=REF.claim_generation,
-            target_trust_epoch=REF.trust_epoch,
-        )
-
-
 def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
     """One key, two contracts, two spellings — compared as a key, not a string.
 
@@ -334,7 +320,7 @@ def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -365,7 +351,10 @@ def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
     assert refused.status_code == 403
 
 
-def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
+_SECRET = b"admission-owner-secret-value-0001"
+
+
+def _erase_app() -> FastAPI:
     app = FastAPI()
     app.include_router(
         create_device_erase_router(
@@ -377,11 +366,37 @@ def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=_Authorizer(),
+                secret=_SECRET,
             )
         )
     )
-    response = TestClient(app).get(
+    return app
+
+
+def _removal_credential(**overrides) -> str:
+    """The credential Admin mints for a removal, minted the same way here."""
+
+    values = {
+        "subject": "eidolon-admin/admission-consumer",
+        "actor": ControllerActorRef(
+            principal_id="ectrl-0123456789abcdefabcd",
+            owner_domain_id=REF.owner_domain_id,
+            granted_scopes=("device.claim.revoke",),
+            authentication_strength="software",
+        ),
+        "owner_domain_id": REF.owner_domain_id,
+        "business_owner_id": BusinessOwnerId("owner_683f963f54885e868924"),
+        "scopes": ("device.claim.revoke",),
+        "target_device_ref": REF,
+    }
+    values.update(overrides)
+    return issue_admission_credential(
+        AdmissionCredential(**values), secret=_SECRET, ttl_seconds=60
+    )
+
+
+def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
+    response = TestClient(_erase_app()).get(
         f"/api/device-control/v1/owners/{REF.owner_domain_id}/devices/"
         f"{REF.device_instance_id}/erase-operations",
         params={
@@ -390,7 +405,7 @@ def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
             "claim_generation": REF.claim_generation,
             "trust_epoch": REF.trust_epoch,
         },
-        headers={"Authorization": "Bearer exact-removal"},
+        headers={"Authorization": _removal_credential()},
     )
 
     assert response.status_code == 200
@@ -411,7 +426,7 @@ def test_https_delivery_adapter_uses_only_canonical_envelopes() -> None:
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -482,7 +497,7 @@ def test_nothing_to_deliver_is_an_empty_204_not_a_failure() -> None:
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -513,7 +528,7 @@ def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
                 acknowledge=acknowledge,
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -616,7 +631,7 @@ def test_manifest_assertion_is_refused_unless_the_claim_key_signed_it() -> None:
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
                 ledger=_Ledger(),
-                authorizer=object(),
+                secret=b"m" * 32,
             )
         )
     )
@@ -653,3 +668,74 @@ def test_manifest_assertion_is_refused_unless_the_claim_key_signed_it() -> None:
         )
 
     assert len(service.asserted) == 1
+
+
+def _erase_status(credential: str):
+    return TestClient(_erase_app()).get(
+        f"/api/device-control/v1/owners/{REF.owner_domain_id}/devices/"
+        f"{REF.device_instance_id}/erase-operations",
+        params={
+            "source_claim_event_id": "admission-event_01",
+            "owner_domain_generation": REF.owner_domain_generation,
+            "claim_generation": REF.claim_generation,
+            "trust_epoch": REF.trust_epoch,
+        },
+        headers={"Authorization": credential},
+    )
+
+
+def test_a_credential_for_another_generation_cannot_read_this_one() -> None:
+    """What the fencing is for: a credential names one exact incarnation."""
+
+    older = REF.model_copy(update={"claim_generation": REF.claim_generation - 1})
+
+    refused = _erase_status(_removal_credential(target_device_ref=older))
+
+    assert refused.status_code == 403
+
+
+def test_a_credential_that_names_no_device_authorizes_none() -> None:
+    """"Not fenced" is not "fenced to whatever arrived"."""
+
+    refused = _erase_status(_removal_credential(target_device_ref=None))
+
+    assert refused.status_code == 403
+
+
+def test_a_credential_without_the_revoke_scope_cannot_read_the_erase_state() -> None:
+    reading_only = ControllerActorRef(
+        principal_id="ectrl-0123456789abcdefabcd",
+        owner_domain_id=REF.owner_domain_id,
+        granted_scopes=("device.read",),
+        authentication_strength="software",
+    )
+
+    refused = _erase_status(
+        _removal_credential(actor=reading_only, scopes=("device.read",))
+    )
+
+    assert refused.status_code == 403
+
+
+def test_the_other_surface_s_vocabulary_is_refused_here_too() -> None:
+    """The shape that answered 401 for every removal, refused by name."""
+
+    import jwt
+
+    token = jwt.encode(
+        {
+            "sub": "eidolon-admin/lifecycle-workflow",
+            "presenter": "eidolon-admin/lifecycle-workflow",
+            "aud": "eidolon-admission",
+            "actor_ref": "controller:ectrl-0123456789abcdefabcd",
+            "owner_id": str(REF.owner_domain_id),
+            "roles": ["device-manager"],
+            "scopes": ["device.claim.revoke"],
+            "target_device_id": REF.device_instance_id,
+            "exp": 4_000_000_000,
+        },
+        _SECRET,
+        algorithm="HS256",
+    )
+
+    assert _erase_status(f"Bearer {token}").status_code == 403

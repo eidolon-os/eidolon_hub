@@ -163,7 +163,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 ),
                 reconcile=erase_reconcile,
                 ledger=resources.repositories.device_erase,
-                authorizer=management.authorizer,
+                secret=secrets.management_jwt,
             )
             periodic_erase = PeriodicDeviceEraseReconcile(
                 erase_reconcile,
