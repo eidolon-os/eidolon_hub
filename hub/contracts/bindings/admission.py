@@ -44,6 +44,7 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     OwnerDomainId,
     RevokeClaim,
     RevokeClaimResult,
+    derive_device_instance_id,
     issue_admission_credential,
     read_admission_credential,
 )

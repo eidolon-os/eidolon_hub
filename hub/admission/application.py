@@ -46,6 +46,7 @@ from hub.contracts.bindings.admission import (
     GrantDeliveryRecord,
     ManifestRef,
     OwnerDomainId,
+    derive_device_instance_id,
 )
 from hub.ports.identity import Clock, IdGenerator
 
@@ -286,13 +287,16 @@ class AdmissionAuthority:
         try:
             handoff_key_id = key_id(payload["handoff_key"]["public_key"])
             operational_key_id = key_id(payload["operational_key"]["public_key"])
+            # What the candidate id must be is the contract's rule, not this
+            # module's string concatenation. Derived inside the same guard as
+            # the key ids because it reads the very same key.
+            expected_instance_id = derive_device_instance_id(
+                payload["operational_key"]["public_key"]
+            )
         except ValueError as exc:
             raise AdmissionProblem(
                 "INVALID_ARGUMENT", str(exc), status=422, category="invalid"
             ) from exc
-        expected_instance_id = "device-instance-" + operational_key_id.removeprefix(
-            "sha256:"
-        )
         if payload["device_instance_candidate_id"] != expected_instance_id:
             raise AdmissionProblem(
                 "INVALID_ARGUMENT",
