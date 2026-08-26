@@ -182,9 +182,11 @@ async def harness(tmp_path):
         owner_domain_id="owner-domain_01",
         owner_domain_generation=3,
         commissioning_proofs=HmacCommissioningProofVerifier(
-            lambda lookup_id: DevelopmentCommissioningIdentity(setup_secret=setup_secret)
-            if lookup_id == HARDWARE_LOOKUP_ID
-            else None
+            lambda lookup_id: (
+                DevelopmentCommissioningIdentity(setup_secret=setup_secret)
+                if lookup_id == HARDWARE_LOOKUP_ID
+                else None
+            )
         ),
     )
     yield database, authority, clock, setup_secret
@@ -224,8 +226,8 @@ def create_payload(handoff_key, operational_key, setup_secret, manifest_document
         "operational_public_key": operational_public_key,
         "profile_id": "eidolon-trust-p256-hpke-v1",
     }
-    evidence = rfc8785.dumps(evidence_document).decode() + "." + sign(
-        operational_key, evidence_document
+    evidence = (
+        rfc8785.dumps(evidence_document).decode() + "." + sign(operational_key, evidence_document)
     )
     # The Authority does not author this; a device does, in whatever vocabulary
     # its firmware uses. The default here is this repository's own shape, and a
@@ -239,9 +241,7 @@ def create_payload(handoff_key, operational_key, setup_secret, manifest_document
         "media": [],
     }
     nonce = "commissioning-nonce-01"
-    message = (
-        f"{HARDWARE_LOOKUP_ID}\0{candidate_id}\0owner-domain_01\0{nonce}"
-    ).encode()
+    message = (f"{HARDWARE_LOOKUP_ID}\0{candidate_id}\0owner-domain_01\0{nonce}").encode()
     proof = (
         base64.urlsafe_b64encode(hmac.new(setup_secret, message, hashlib.sha256).digest())
         .rstrip(b"=")
@@ -285,9 +285,7 @@ async def create_and_approve(harness, manifest_document=None):
     created = await authority.create_enrollment(
         command_id="create_01",
         correlation_id="intent_01",
-        payload=create_payload(
-            handoff_key, operational_key, secret, manifest_document
-        ),
+        payload=create_payload(handoff_key, operational_key, secret, manifest_document),
     )
     decision = await authority.decide_enrollment(
         command_id="decide_01",
@@ -310,9 +308,7 @@ async def create_and_approve(harness, manifest_document=None):
 
 async def collect_and_ack(harness, manifest_document=None):
     database, authority, _clock, _secret = harness
-    created, decision, handoff, operational = await create_and_approve(
-        harness, manifest_document
-    )
+    created, decision, handoff, operational = await create_and_approve(harness, manifest_document)
     collection_document = {
         "contract": "eidolon.device-foundation.claim-grant-collection",
         "enrollment_id": created["enrollment_id"],
@@ -505,9 +501,7 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
     authority.claim_directory_projector = projector.execute
 
     created, _decision, collected, device_ref, ack_proof, active = await collect_and_ack(harness)
-    visible = await directory.get(
-        owner_scope="owner_01", device_id=device_ref.device_instance_id
-    )
+    visible = await directory.get(owner_scope="owner_01", device_id=device_ref.device_instance_id)
     assert visible is not None
     assert visible.device_ref == device_ref
 
@@ -523,9 +517,7 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
     assert replay["outcome"] == "replayed"
     assert replay["occurred_at"] == active["occurred_at"]
     assert (
-        await directory.get(
-            owner_scope="owner_01", device_id=device_ref.device_instance_id
-        )
+        await directory.get(owner_scope="owner_01", device_id=device_ref.device_instance_id)
         == visible
     )
 
@@ -533,10 +525,15 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
 async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_claim_is_fenced(
     harness,
 ):
-    database, authority, _clock, setup_secret = harness
-    first_created, _decision, first_collected, first_ref, first_ack_proof, _active = (
-        await collect_and_ack(harness)
-    )
+    database, authority, clock, setup_secret = harness
+    (
+        first_created,
+        _decision,
+        first_collected,
+        first_ref,
+        first_ack_proof,
+        _active,
+    ) = await collect_and_ack(harness)
     await authority.revoke_claim(
         command_id="revoke_first",
         correlation_id="remove_first",
@@ -620,6 +617,185 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
         assert new_claim.state == "active"
         assert old_claim.hardware_identity_ref == new_claim.hardware_identity_ref
         assert old_claim.hardware_identity_ref == HARDWARE_IDENTITY_REF
+
+
+async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_ref(
+    harness,
+):
+    """I-016: an old lifecycle's commands cannot consume the next one's work."""
+
+    database, authority, clock, setup_secret = harness
+    refs: list[DeviceRef] = []
+    terminal_results: list[dict] = []
+
+    for lifecycle, (handoff_seed, operational_seed) in enumerate(
+        ((0x123456789, 0x234567891), (0x345678912, 0x456789123)),
+        start=1,
+    ):
+        handoff = ec.derive_private_key(handoff_seed, ec.SECP256R1())
+        operational = ec.derive_private_key(operational_seed, ec.SECP256R1())
+        command = f"lifecycle_{lifecycle}"
+        payload = create_payload(handoff, operational, setup_secret)
+        created = await authority.create_enrollment(
+            command_id=f"create_{command}", correlation_id=command, payload=payload
+        )
+        replayed_create = await authority.create_enrollment(
+            command_id=f"create_{command}", correlation_id=f"{command}_retry", payload=payload
+        )
+        assert replayed_create["enrollment_id"] == created["enrollment_id"]
+
+        decided = await authority.decide_enrollment(
+            command_id=f"decide_{command}",
+            correlation_id=command,
+            enrollment_id=created["enrollment_id"],
+            payload={
+                "expected_proposal_revision": 1,
+                "decision": "approve",
+                "target_owner_domain_id": "owner-domain_01",
+                "target_business_owner_id": "owner_01",
+                "target_space_id": None,
+                "reviewed_manifest_ref": created["reviewed_manifest_ref"],
+                "initial_assignment_intent": None,
+                "initial_capability_policy_refs": [],
+            },
+            context=actor(),
+        )
+        collection_document = {
+            "contract": "eidolon.device-foundation.claim-grant-collection",
+            "enrollment_id": created["enrollment_id"],
+            "proposal_revision": 1,
+            "collection_challenge": created["collection_challenge"],
+        }
+        collected = await authority.collect_claim_grant(
+            command_id=f"collect_{command}",
+            correlation_id=command,
+            enrollment_id=created["enrollment_id"],
+            proposal_revision=1,
+            collection_challenge=created["collection_challenge"],
+            handoff_key_proof=sign(handoff, collection_document),
+        )
+        async with database.sessions() as session:
+            grant = await session.get(AdmissionGrantRow, decided["grant_id"])
+            ref = DeviceRef.model_validate_json(grant.device_ref_json)
+        ack_document = {
+            "contract": "eidolon.device-foundation.claim-grant-ack",
+            "enrollment_id": created["enrollment_id"],
+            "grant_id": collected["grant_id"],
+            "device_ref": ref.model_dump(mode="json"),
+        }
+        ack_proof = sign(operational, ack_document)
+        acked = await authority.ack_claim_grant(
+            command_id=f"ack_{command}",
+            correlation_id=command,
+            enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"],
+            operational_key_proof=ack_proof,
+            stored_claim_generation=ref.claim_generation,
+            stored_trust_epoch=ref.trust_epoch,
+        )
+        replayed_ack = await authority.ack_claim_grant(
+            command_id=f"ack_{command}",
+            correlation_id=f"{command}_ack_retry",
+            enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"],
+            operational_key_proof=ack_proof,
+            stored_claim_generation=ref.claim_generation,
+            stored_trust_epoch=ref.trust_epoch,
+        )
+        assert replayed_ack["occurred_at"] == acked["occurred_at"]
+
+        revoked = await authority.revoke_claim(
+            command_id=f"revoke_{command}",
+            correlation_id=command,
+            device_ref=ref,
+            reason="owner-removed",
+            context=actor(),
+        )
+        replayed_revoke = await authority.revoke_claim(
+            command_id=f"revoke_{command}",
+            correlation_id=f"{command}_revoke_retry",
+            device_ref=ref,
+            reason="owner-removed",
+            context=actor(),
+        )
+        assert replayed_revoke["occurred_at"] == revoked["occurred_at"]
+        refs.append(ref)
+        terminal_results.append(revoked)
+        clock.value += timedelta(seconds=1)
+
+    assert refs[0].device_instance_id != refs[1].device_instance_id
+    assert [ref.claim_generation for ref in refs] == [1, 2]
+    assert terminal_results[0]["occurred_at"] < terminal_results[1]["occurred_at"]
+    async with database.sessions() as session:
+        claims = (
+            await session.scalars(
+                select(AdmissionClaimRow).order_by(AdmissionClaimRow.claim_generation)
+            )
+        ).all()
+        assert [claim.state for claim in claims] == ["revoked", "revoked"]
+        assert [claim.claim_generation for claim in claims] == [1, 2]
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdmissionOutboxRow)
+                .where(AdmissionOutboxRow.event_type == "live.eidolon.device.claim-revoked.v1")
+            )
+            == 2
+        )
+
+
+async def test_one_thousand_replays_queries_and_terminal_commands_have_bounded_cardinality(
+    harness,
+):
+    """J-006: volume must not turn retries into new business facts."""
+
+    database, authority, _clock, _secret = harness
+    created, _decision, collected, ref, ack_proof, active = await collect_and_ack(harness)
+    revoked = await authority.revoke_claim(
+        command_id="revoke_stress",
+        correlation_id="stress",
+        device_ref=ref,
+        reason="owner-removed",
+        context=actor(),
+    )
+
+    for index in range(400):
+        replayed = await authority.ack_claim_grant(
+            command_id="ack_01",
+            correlation_id=f"stress_ack_{index}",
+            enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"],
+            operational_key_proof=ack_proof,
+            stored_claim_generation=ref.claim_generation,
+            stored_trust_epoch=ref.trust_epoch,
+        )
+        assert replayed["occurred_at"] == active["occurred_at"]
+    for _index in range(300):
+        claim = await authority.get_claim(
+            device_instance_id=ref.device_instance_id, context=actor()
+        )
+        assert claim.state == ClaimState.REVOKED
+    for index in range(300):
+        replayed = await authority.revoke_claim(
+            command_id="revoke_stress",
+            correlation_id=f"stress_revoke_{index}",
+            device_ref=ref,
+            reason="owner-removed",
+            context=actor(),
+        )
+        assert replayed["occurred_at"] == revoked["occurred_at"]
+
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(AdmissionClaimRow)) == 1
+        assert await session.scalar(select(func.count()).select_from(AdmissionGrantAckRow)) == 1
+        assert (
+            await session.scalar(
+                select(func.count())
+                .select_from(AdmissionOutboxRow)
+                .where(AdmissionOutboxRow.event_type == "live.eidolon.device.claim-revoked.v1")
+            )
+            == 1
+        )
 
 
 async def test_persisted_hardware_identity_is_derived_and_repeats_no_device_claim(harness):
@@ -716,9 +892,7 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
     )
     assert replay["outcome"] == "replayed"
     assert attempts == 2
-    visible = await directory.get(
-        owner_scope="owner_01", device_id=device_ref.device_instance_id
-    )
+    visible = await directory.get(owner_scope="owner_01", device_id=device_ref.device_instance_id)
     assert visible is not None and visible.device_ref == device_ref
 
 
