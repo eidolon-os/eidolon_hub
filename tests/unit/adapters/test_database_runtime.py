@@ -333,3 +333,73 @@ async def test_product_empty_database_without_bootstrap_fails_closed(tmp_path) -
             await database.initialize_schema()
     finally:
         await database.close()
+
+
+async def test_product_consumed_bootstrap_marker_is_not_a_replayable_capability(
+    tmp_path,
+) -> None:
+    """Ops re-ships this file on every release cutover, spent.
+
+    ``authority-bootstrap.json`` is a refreshable Host layer input, so after
+    the capability has been used the controller keeps shipping the same path
+    carrying ``owner-authority.bootstrap-consumed``.  A Host that later lost
+    its database must not be able to bootstrap a second, empty Authority from
+    that spent marker: only an explicit ResetAuthority mints a generation.
+    """
+
+    bootstrap = tmp_path / "authority-bootstrap.json"
+    bootstrap.write_text(
+        json.dumps(
+            {
+                "contract_version": 1,
+                "operation": "owner-authority.bootstrap-consumed",
+                "owner_domain_id": "owner-test",
+                "owner_domain_generation": 1,
+                "state_id": "authority-state_already-spent",
+            }
+        ),
+        encoding="utf-8",
+    )
+    database = HubDatabase.sqlite(tmp_path / "hub.sqlite3", authority_bootstrap_path=bootstrap)
+    try:
+        with pytest.raises(RuntimeError, match="no matching.*bootstrap capability"):
+            await database.initialize_schema()
+    finally:
+        await database.close()
+    assert bootstrap.exists()
+
+
+async def test_product_consumed_bootstrap_marker_survives_an_established_hub(
+    tmp_path,
+) -> None:
+    """Hub only ever unlinks a capability it actually used.
+
+    A spent marker re-shipped alongside a populated database is inert, and
+    leaving it in place is what lets a release cutover ship the file at all.
+    """
+
+    path = tmp_path / "hub.sqlite3"
+    bootstrap = tmp_path / "authority-bootstrap.json"
+    live = {
+        "contract_version": 1,
+        "operation": "owner-authority.bootstrap",
+        "owner_domain_id": "owner-test",
+        "owner_domain_generation": 1,
+        "state_id": "authority-state_established",
+    }
+    bootstrap.write_text(json.dumps(live), encoding="utf-8")
+    database = HubDatabase.sqlite(path, authority_bootstrap_path=bootstrap)
+    try:
+        await database.initialize_schema()
+    finally:
+        await database.close()
+    assert not bootstrap.exists()
+
+    spent = {**live, "operation": "owner-authority.bootstrap-consumed"}
+    bootstrap.write_text(json.dumps(spent), encoding="utf-8")
+    restarted = HubDatabase.sqlite(path, authority_bootstrap_path=bootstrap)
+    try:
+        await restarted.initialize_schema()
+    finally:
+        await restarted.close()
+    assert json.loads(bootstrap.read_text(encoding="utf-8")) == spent
