@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import base64
-import json
 import os
-import stat
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,11 +13,11 @@ from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
 from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.adapters.runtime import LocalProcessLock, SecureIdGenerator, SystemClock
-from hub.admission.application import (
+from hub.admission.commissioning import (
     CommissioningProofVerifier,
-    DevelopmentCommissioningIdentity,
-    HmacCommissioningProofVerifier,
+    IssuedBaseIdentityVerifier,
     RejectingCommissioningProofVerifier,
+    derive_voucher_signing_key,
 )
 from hub.config import HubConfig
 from hub.ports.identity import Clock, IdGenerator
@@ -57,6 +54,7 @@ def load_runtime_secrets() -> RuntimeSecrets:
 async def open_runtime_resources(
     config: HubConfig,
     stack: AsyncExitStack,
+    secrets: RuntimeSecrets | None = None,
 ) -> RuntimeResources:
     database_path = resolve_database_path(config)
     process_lock = LocalProcessLock(f"{database_path}.lock")
@@ -72,7 +70,9 @@ async def open_runtime_resources(
     http_client = await stack.enter_async_context(httpx.AsyncClient(trust_env=False))
     repositories = SqlHubRepositories(database)
     directory: DeviceDirectoryRepository = InMemoryDeviceDirectoryRepository()
-    commissioning_proofs, commissioning_ready = load_commissioning_proof_verifier(config)
+    commissioning_proofs, commissioning_ready = load_commissioning_proof_verifier(
+        config, secrets if secrets is not None else load_runtime_secrets()
+    )
 
     return RuntimeResources(
         database=database,
@@ -86,86 +86,24 @@ async def open_runtime_resources(
     )
 
 
-#: The one registry format this build of the Hub can read.
-#:
-#: Stated as a constant rather than inline so a deployment can *ask* before it
-#: switches the links. The registry is an ops-installed input, not part of a
-#: sealed release, so the file and the code can end up on opposite sides of a
-#: format change — that is how a rollback across this boundary left a Host with
-#: a v2 file and a v1-only Hub, crash-looping 110 times while the rollback that
-#: caused it reported a readiness timeout.
-DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE = "eidolon-development-hmac-commissioning-v2"
+def load_commissioning_proof_verifier(
+    config: HubConfig, secrets: RuntimeSecrets
+) -> tuple[CommissioningProofVerifier, bool]:
+    """Install the voucher verifier, or fail closed.
 
-
-def read_development_commissioning_registry(
-    path: Path,
-) -> dict[str, DevelopmentCommissioningIdentity]:
-    """Parse one development commissioning registry, without any file policy.
-
-    Kept separate from the loader below because who may own the file is a
-    deployment fact and what the file means is a contract. A consumer that
-    cannot reproduce the deployment's ownership — an unprivileged process test,
-    say — needs its own policy, not its own parser: the fork is how the two
-    drift until the test passes against a format nothing else accepts.
+    What used to be here read a root-owned per-device registry file, pinned its
+    format in a constant, and refused to start when the two disagreed — a gate
+    added after a rollback across that file's format left the Hub restarting
+    110 times. There is no file to disagree with now: the signing key is derived
+    from the management secret this process already loads, so a Hub that can
+    read its own secrets can verify vouchers, and one that cannot does not
+    pretend to.
     """
 
-    document = json.loads(path.read_text(encoding="utf-8"))
-    profile = document.get("profile")
-    if profile != DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE:
-        raise ValueError(
-            "development commissioning registry profile is not one this Hub reads: "
-            f"file states {profile!r}, this Hub reads "
-            f"{DEVELOPMENT_COMMISSIONING_REGISTRY_PROFILE!r}"
-        )
-    encoded = document["devices"]
-    if not isinstance(encoded, dict) or not encoded:
-        raise ValueError("development commissioning registry has no devices")
-    identities_by_lookup: dict[str, DevelopmentCommissioningIdentity] = {}
-    for raw_lookup_id, raw_entry in encoded.items():
-        lookup_id = str(raw_lookup_id)
-        # An entry may pre-share a secret and nothing else. The v1 format also
-        # carried a typed hardware_identity_ref, which is how a Waveshare
-        # AMOLED board came to be permanently recorded as "hardware-box3-...":
-        # a fact about the hardware that commissioning never verifies. The
-        # identity is derived from the lookup id this secret is bound to, so an
-        # entry that still states one is rejected rather than read past.
-        if not isinstance(raw_entry, dict) or set(raw_entry) != {"setup_secret"}:
-            raise ValueError("development commissioning registry entry is invalid")
-        encoded_secret = str(raw_entry["setup_secret"])
-        secret = base64.urlsafe_b64decode(encoded_secret + "=" * (-len(encoded_secret) % 4))
-        if not lookup_id.strip() or len(lookup_id.encode()) > 128 or len(secret) < 16:
-            raise ValueError("development commissioning registry entry is invalid")
-        identities_by_lookup[lookup_id] = DevelopmentCommissioningIdentity(setup_secret=secret)
-    return identities_by_lookup
-
-
-def load_commissioning_proof_verifier(
-    config: HubConfig,
-) -> tuple[CommissioningProofVerifier, bool]:
-    """Load the explicit development registry or fail closed for production."""
-
-    proof = config.commissioning_proof
-    if proof.profile != "development-hmac":
+    if not config.commissioning_proof.enabled:
         return RejectingCommissioningProofVerifier(), False
-    path = Path(proof.setup_secret_registry_path or "")
-    if not path.is_file():
-        return RejectingCommissioningProofVerifier(), False
-    metadata = path.stat()
-    if metadata.st_uid != 0 or not stat.S_ISREG(metadata.st_mode) or metadata.st_mode & 0o037:
-        raise RuntimeError(
-            "development commissioning registry must be root-owned and inaccessible to others"
-        )
-    try:
-        identities_by_lookup = read_development_commissioning_registry(path)
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
-        # Carry the specific cause into the message. This is a startup failure
-        # under systemd: whether an operator can act on it depends entirely on
-        # whether the reason survives to the log line, and "is invalid" left
-        # the one fact that mattered — which profile the file states — visible
-        # only in a chained traceback.
-        raise RuntimeError(f"development commissioning registry is invalid: {exc}") from exc
     return (
-        HmacCommissioningProofVerifier(identities_by_lookup.get),
+        IssuedBaseIdentityVerifier(derive_voucher_signing_key(secrets.management_jwt)),
         True,
     )
 

@@ -11,9 +11,11 @@ from sqlalchemy import and_, func, or_, select
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import (
+    AdmissionBaseIdentityRow,
     AdmissionClaimEventStreamRow,
     AdmissionClaimRow,
     AdmissionCommandResultRow,
+    AdmissionCommissioningVoucherRow,
     AdmissionDecisionRow,
     AdmissionGrantAckRow,
     AdmissionGrantRow,
@@ -193,8 +195,24 @@ class SqlAdmissionStore:
         session.add(AdmissionGrantAckRow(**values))
 
     @staticmethod
-    def add_claim(session, **values) -> None:
-        session.add(AdmissionClaimRow(**values))
+    async def upsert_claim(session, **values) -> None:
+        """Activate a Claim, including one this Body already had and lost.
+
+        A Body that was removed keeps its operational key unless somebody
+        erased it, so coming back is the same instance at the next generation —
+        not a second row with the same primary key. Inserting blindly raised an
+        IntegrityError at the end of a re-approval the Owner had already
+        granted, which is the worst possible moment to discover it.
+        """
+
+        existing = await session.get(AdmissionClaimRow, values["device_instance_id"])
+        if existing is None:
+            session.add(AdmissionClaimRow(**values))
+            return
+        revision = existing.revision + 1
+        for column, value in values.items():
+            setattr(existing, column, value)
+        existing.revision = revision
 
     @staticmethod
     async def project_active_claim(
@@ -268,6 +286,133 @@ class SqlAdmissionStore:
         row.lifecycle_state = "revoked"
         row.updated_at = revoked_at
         row.aggregate_revision += 1
+
+    async def base_identity(self, session, device_base_id: str):
+        return await session.get(AdmissionBaseIdentityRow, device_base_id)
+
+    async def base_identity_for_key(self, session, operational_key_id: str):
+        return await session.scalar(
+            select(AdmissionBaseIdentityRow).where(
+                AdmissionBaseIdentityRow.operational_key_id == operational_key_id
+            )
+        )
+
+    async def bind_base_identity(
+        self,
+        session,
+        *,
+        device_base_id: str,
+        owner_domain_id: str,
+        hardware_identity_ref: str,
+        operational_key_id: str,
+        provenance: str,
+        bound_at: datetime,
+    ) -> None:
+        """Record the one-to-one binding, or refuse a second one.
+
+        Both directions are checked because both are ways to end up with a Body
+        that can be two identities or an identity that can be two Bodies, and
+        the anti-rollback fence hangs off exactly this pair.
+        """
+
+        require_derived_hardware_identity_ref(hardware_identity_ref)
+        existing = await self.base_identity(session, device_base_id)
+        if existing is not None:
+            if existing.operational_key_id != operational_key_id:
+                raise AdmissionProblem(
+                    "UNAUTHENTICATED",
+                    "base identity is bound to another operational key",
+                    status=401,
+                    category="auth",
+                )
+            return
+        held = await self.base_identity_for_key(session, operational_key_id)
+        if held is not None:
+            raise AdmissionProblem(
+                "UNAUTHENTICATED",
+                "operational key is already bound to another base identity",
+                status=401,
+                category="auth",
+            )
+        session.add(
+            AdmissionBaseIdentityRow(
+                device_base_id=device_base_id,
+                owner_domain_id=owner_domain_id,
+                hardware_identity_ref=hardware_identity_ref,
+                operational_key_id=operational_key_id,
+                provenance=provenance,
+                bound_at=bound_at,
+            )
+        )
+
+    async def consume_commissioning_voucher(
+        self,
+        session,
+        *,
+        jti: str,
+        device_base_id: str,
+        operational_key_id: str,
+        expires_at: datetime,
+        consumed_at: datetime,
+    ) -> None:
+        """Spend a voucher exactly once, durably.
+
+        A voucher that could be spent twice would let a captured commissioning
+        session be replayed after the Owner revoked the Controller that earned
+        it; the ledger is what makes the window end when the Owner says so
+        rather than when the token expires.
+        """
+
+        if await session.get(AdmissionCommissioningVoucherRow, jti) is not None:
+            raise AdmissionProblem(
+                "UNAUTHENTICATED",
+                "commissioning voucher was already used",
+                status=401,
+                category="auth",
+            )
+        session.add(
+            AdmissionCommissioningVoucherRow(
+                jti=jti,
+                device_base_id=device_base_id,
+                operational_key_id=operational_key_id,
+                expires_at=expires_at,
+                consumed_at=consumed_at,
+            )
+        )
+
+    async def requires_fresh_presence(
+        self, session, *, owner_domain_id: str, hardware_identity_ref: str
+    ) -> bool:
+        """Has this base identity already been told no?
+
+        A Rejected or Revoked identity may come back, but not on its own: the
+        Owner said no once, and the way back in is another moment of physical
+        presence with a Controller, not a device that keeps asking. Without this
+        an Owner who removed a device would watch it reappear in the queue by
+        itself, and "remove" would mean nothing until the device was unplugged.
+        """
+
+        rejected = await session.scalar(
+            select(func.count())
+            .select_from(AdmissionProposalRow)
+            .where(
+                AdmissionProposalRow.requested_owner_domain_id == owner_domain_id,
+                AdmissionProposalRow.hardware_identity_ref == hardware_identity_ref,
+                AdmissionProposalRow.state == "rejected",
+            )
+        )
+        if rejected:
+            return True
+        revoked = await session.scalar(
+            select(func.count())
+            .select_from(AdmissionClaimRow)
+            .where(
+                AdmissionClaimRow.owner_domain_id == owner_domain_id,
+                AdmissionClaimRow.hardware_identity_ref == hardware_identity_ref,
+                AdmissionClaimRow.state == "revoked",
+            )
+        )
+        return bool(revoked)
 
     async def load_claim(self, *, device_instance_id: str):
         async with self.database.sessions() as session:

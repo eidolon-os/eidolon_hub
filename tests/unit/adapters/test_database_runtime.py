@@ -46,10 +46,12 @@ async def test_sqlite_schema_is_created_from_current_orm_and_is_idempotent(tmp_p
             actual = await connection.run_sync(table_names)
 
             assert actual == {
+                "admission_base_identities_v1",
                 "admission_claim_grants_v1",
                 "admission_claim_event_stream_v1",
                 "admission_claims_v1",
                 "admission_command_results_v1",
+                "admission_commissioning_vouchers_v1",
                 "admission_decisions_v1",
                 "admission_grant_acks_v1",
                 "admission_outbox_v1",

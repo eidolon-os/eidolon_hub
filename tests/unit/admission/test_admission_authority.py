@@ -55,10 +55,10 @@ from hub.adapters.persistence.models import (
 )
 from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.admission import crypto as admission_crypto
-from hub.admission.application import (
-    AdmissionAuthority,
-    DevelopmentCommissioningIdentity,
-    HmacCommissioningProofVerifier,
+from hub.admission.application import AdmissionAuthority
+from hub.admission.commissioning import (
+    IssuedBaseIdentityVerifier,
+    derive_voucher_signing_key,
 )
 from hub.admission.crypto import key_id
 from hub.admission.domain import ActorContext, AdmissionProblem
@@ -103,8 +103,90 @@ def instance_id(key: ec.EllipticCurvePrivateKey) -> str:
     return derive_device_instance_id(spki(key))
 
 
-HARDWARE_LOOKUP_ID = "box-3-test-fixture"
-HARDWARE_IDENTITY_REF = derive_hardware_identity_ref(HARDWARE_LOOKUP_ID)
+DEVICE_BASE_ID = "device-base-" + "b0" * 32
+
+
+def encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def base_id_for(operational_key) -> str:
+    """One base identity per Body, the way the Hub mints them.
+
+    Sharing one across two keys is not a shortcut here — it is the refusal this
+    design turns on, so tests that want it must ask for it by name.
+    """
+
+    return "device-base-" + hashlib.sha256(
+        ("eidolon-test-base|" + spki(operational_key)).encode()
+    ).hexdigest()
+
+
+def identity_ref_for(operational_key) -> str:
+    return derive_hardware_identity_ref(base_id_for(operational_key))
+HARDWARE_IDENTITY_REF = derive_hardware_identity_ref(DEVICE_BASE_ID)
+MANAGEMENT_SECRET = b"management-secret-for-tests-32-bytes"
+
+
+def voucher_for(
+    operational_key,
+    *,
+    device_base_id: str = DEVICE_BASE_ID,
+    owner_domain_id: str = "owner-domain_01",
+    jti: str | None = None,
+    expires_at: int = 4_102_444_800,
+    signing_key: bytes | None = None,
+) -> tuple[str, str]:
+    """Mint the one-shot voucher a Host signs during a witnessed commissioning."""
+
+    claims = {
+        "base_identity_provenance": "minted",
+        "device_base_id": device_base_id,
+        "exp": expires_at,
+        "jti": jti or f"jti-{next(_JTI_SEQUENCE):032d}",
+        "operational_spki_sha256": key_id(spki(operational_key)),
+        "owner_domain_id": owner_domain_id,
+        "purpose": "eidolon-commissioning-voucher-v1",
+    }
+    header = {"alg": "HS256", "typ": "JWT"}
+    signing_input = (
+        f"{encode(rfc8785.dumps(header))}.{encode(rfc8785.dumps(claims))}"
+    )
+    signature = hmac.new(
+        signing_key or derive_voucher_signing_key(MANAGEMENT_SECRET),
+        signing_input.encode(),
+        hashlib.sha256,
+    ).digest()
+    return f"{signing_input}.{encode(signature)}", str(claims["jti"])
+
+
+def continuation_proof(
+    operational_key,
+    *,
+    device_base_id: str | None = None,
+    owner_domain_id: str = "owner-domain_01",
+    nonce: str = "continuation-nonce-0123456789",
+) -> tuple[str, str]:
+    """The proof a Body signs to continue one Claim lifecycle, with no Controller."""
+
+    document = {
+        "contract": "eidolon.device-foundation.enrolled-base-key-v1",
+        "device_base_id": device_base_id or base_id_for(operational_key),
+        "device_instance_id": instance_id(operational_key),
+        "nonce": nonce,
+        "owner_domain_id": owner_domain_id,
+    }
+    return sign(operational_key, document), nonce
+
+
+def _sequence():
+    value = 0
+    while True:
+        value += 1
+        yield value
+
+
+_JTI_SEQUENCE = _sequence()
 
 
 def sign(key: ec.EllipticCurvePrivateKey, document: dict) -> str:
@@ -174,22 +256,16 @@ async def harness(tmp_path):
     await database.initialize_schema()
     clock = FixedClock()
     ids = SequenceIds()
-    setup_secret = b"per-device-setup-secret"
+    voucher_signing_key = derive_voucher_signing_key(MANAGEMENT_SECRET)
     authority = AdmissionAuthority(
         store=SqlAdmissionStore(database),
         clock=clock,
         ids=ids,
         owner_domain_id="owner-domain_01",
         owner_domain_generation=3,
-        commissioning_proofs=HmacCommissioningProofVerifier(
-            lambda lookup_id: (
-                DevelopmentCommissioningIdentity(setup_secret=setup_secret)
-                if lookup_id == HARDWARE_LOOKUP_ID
-                else None
-            )
-        ),
+        commissioning_proofs=IssuedBaseIdentityVerifier(voucher_signing_key),
     )
-    yield database, authority, clock, setup_secret
+    yield database, authority, clock, voucher_signing_key
     await database.close()
 
 
@@ -217,12 +293,22 @@ def actor(
     )
 
 
-def create_payload(handoff_key, operational_key, setup_secret, manifest_document=None) -> dict:
+def create_payload(
+    handoff_key,
+    operational_key,
+    signing_key=None,
+    manifest_document=None,
+    *,
+    device_base_id: str | None = None,
+    voucher: tuple[str, str] | None = None,
+    proof_scheme: str = "hub-issued-commissioning-voucher-v1",
+) -> dict:
+    device_base_id = device_base_id or base_id_for(operational_key)
     candidate_id = instance_id(operational_key)
     operational_public_key = spki(operational_key)
     evidence_document = {
+        "device_base_id": device_base_id,
         "device_instance_id": candidate_id,
-        "hardware_lookup_id": HARDWARE_LOOKUP_ID,
         "operational_public_key": operational_public_key,
         "profile_id": "eidolon-trust-p256-hpke-v1",
     }
@@ -240,24 +326,20 @@ def create_payload(handoff_key, operational_key, setup_secret, manifest_document
         "events": [],
         "media": [],
     }
-    nonce = "commissioning-nonce-01"
-    message = (f"{HARDWARE_LOOKUP_ID}\0{candidate_id}\0owner-domain_01\0{nonce}").encode()
-    proof = (
-        base64.urlsafe_b64encode(hmac.new(setup_secret, message, hashlib.sha256).digest())
-        .rstrip(b"=")
-        .decode()
+    proof, nonce = voucher or voucher_for(
+        operational_key, device_base_id=device_base_id, signing_key=signing_key
     )
     return {
         "profile_id": "eidolon-trust-p256-hpke-v1",
         "device_instance_candidate_id": candidate_id,
         "requested_owner_domain_id": "owner-domain_01",
         "hardware_identity_evidence": {
-            "scheme": "dev-self-signed-p256",
+            "scheme": "hub-issued-base-p256",
             "evidence": evidence,
             "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
         },
         "commissioning_proof": {
-            "scheme": "protocomm-security2-srp6a-aes256gcm",
+            "scheme": proof_scheme,
             "proof": proof,
             "nonce": nonce,
         },
@@ -522,10 +604,16 @@ async def test_claim_ack_and_replay_immediately_refresh_public_directory(harness
     )
 
 
-async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_claim_is_fenced(
-    harness,
-):
-    database, authority, clock, setup_secret = harness
+async def test_revoked_body_rejoins_on_its_base_identity_at_generation_two(harness):
+    """Removed and admitted again: same Body, next generation, old Claim fenced.
+
+    Nothing was erased, so the device still holds the operational key its base
+    identity is bound to and is the same DeviceInstance. What it does not hold
+    is standing: the Owner said no once, so coming back needs another
+    Controller-witnessed voucher rather than a device that keeps asking.
+    """
+
+    database, authority, clock, voucher_signing_key = harness
     (
         first_created,
         _decision,
@@ -542,12 +630,26 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
         context=actor(),
     )
 
-    second_handoff = ec.derive_private_key(0x345678912, ec.SECP256R1())
-    second_operational = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    with pytest.raises(AdmissionProblem) as unattended:
+        await authority.create_enrollment(
+            command_id="create_unattended",
+            correlation_id="rejoin_unattended",
+            payload=create_payload(
+                handoff,
+                operational,
+                voucher_signing_key,
+                voucher=continuation_proof(operational),
+                proof_scheme="enrolled-base-key-v1",
+            ),
+        )
+    assert unattended.value.status == 403
+
     second_created = await authority.create_enrollment(
         command_id="create_second",
         correlation_id="rejoin_second",
-        payload=create_payload(second_handoff, second_operational, setup_secret),
+        payload=create_payload(handoff, operational, voucher_signing_key),
     )
     await authority.decide_enrollment(
         command_id="decide_second",
@@ -577,7 +679,7 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
         enrollment_id=second_created["enrollment_id"],
         proposal_revision=1,
         collection_challenge=second_created["collection_challenge"],
-        handoff_key_proof=sign(second_handoff, collection_document),
+        handoff_key_proof=sign(handoff, collection_document),
     )
     async with database.sessions() as session:
         second_grant = await session.get(AdmissionGrantRow, second_collected["grant_id"])
@@ -593,12 +695,12 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
         correlation_id="rejoin_second",
         enrollment_id=second_created["enrollment_id"],
         grant_id=second_collected["grant_id"],
-        operational_key_proof=sign(second_operational, ack_document),
+        operational_key_proof=sign(operational, ack_document),
         stored_claim_generation=second_ref.claim_generation,
         stored_trust_epoch=second_ref.trust_epoch,
     )
 
-    assert second_ref.device_instance_id != first_ref.device_instance_id
+    assert second_ref.device_instance_id == first_ref.device_instance_id
     assert second_ref.claim_generation == first_ref.claim_generation + 1 == 2
     old_ack_replay = await authority.ack_claim_grant(
         command_id="ack_01",
@@ -611,12 +713,121 @@ async def test_same_hardware_rejoins_as_new_instance_generation_two_and_old_clai
     )
     assert old_ack_replay["device_ref"] == first_ref.model_dump(mode="json")
     async with database.sessions() as session:
-        old_claim = await session.get(AdmissionClaimRow, first_ref.device_instance_id)
-        new_claim = await session.get(AdmissionClaimRow, second_ref.device_instance_id)
-        assert old_claim.state == "revoked"
-        assert new_claim.state == "active"
-        assert old_claim.hardware_identity_ref == new_claim.hardware_identity_ref
-        assert old_claim.hardware_identity_ref == HARDWARE_IDENTITY_REF
+        claim = await session.get(AdmissionClaimRow, second_ref.device_instance_id)
+        assert claim.state == "active"
+        assert claim.claim_generation == 2
+        assert claim.hardware_identity_ref == identity_ref_for(operational)
+
+
+async def test_erased_body_arrives_as_a_new_base_identity_and_inherits_nothing(harness):
+    """Erasing local storage ends the lineage instead of continuing it.
+
+    The factory secret that used to survive an erase is gone, so a wiped device
+    cannot prove it is the same board — and a platform that recognised it anyway
+    would be inheriting ownership from an unauthenticated MAC. It is a new Body,
+    and the Owner is asked as if it were.
+    """
+
+    database, authority, _clock, voucher_signing_key = harness
+    (_created, _decision, _collected, first_ref, _proof, _active) = await collect_and_ack(harness)
+    await authority.revoke_claim(
+        command_id="revoke_first",
+        correlation_id="remove_first",
+        device_ref=first_ref,
+        reason="owner-removed",
+        context=actor(),
+    )
+
+    erased_handoff = ec.derive_private_key(0x345678912, ec.SECP256R1())
+    erased_operational = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    created = await authority.create_enrollment(
+        command_id="create_erased",
+        correlation_id="rejoin_erased",
+        payload=create_payload(erased_handoff, erased_operational, voucher_signing_key),
+    )
+    async with database.sessions() as session:
+        proposal = await session.get(AdmissionProposalRow, created["enrollment_id"])
+    assert proposal.hardware_identity_ref == identity_ref_for(erased_operational)
+    assert proposal.hardware_identity_ref != identity_ref_for(
+        ec.derive_private_key(0x234567891, ec.SECP256R1())
+    )
+
+
+async def test_a_second_key_may_not_present_an_already_bound_base_identity(harness):
+    """One base identity, one operational key, checked at the write.
+
+    Two keys under one identity would let a Body hand its lineage to another
+    Body: the anti-rollback fence hangs off this pair, and a Claim generation
+    that can be inherited is not a fence.
+    """
+
+    _database, authority, _clock, voucher_signing_key = harness
+    first = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    await authority.create_enrollment(
+        command_id="create_first",
+        correlation_id="intent_first",
+        payload=create_payload(ec.derive_private_key(0x123456789, ec.SECP256R1()), first),
+    )
+    impostor = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    with pytest.raises(AdmissionProblem) as refused:
+        await authority.create_enrollment(
+            command_id="create_impostor",
+            correlation_id="intent_impostor",
+            payload=create_payload(
+                ec.derive_private_key(0x345678912, ec.SECP256R1()),
+                impostor,
+                voucher_signing_key,
+                device_base_id=base_id_for(first),
+            ),
+        )
+    assert refused.value.status == 401
+
+
+async def test_host_can_ask_whether_this_owner_domain_issued_a_base_identity(harness):
+    """Before signing a voucher the Host asks; it never takes the device's word.
+
+    A device presents whatever it has stored. If the Host signed that value
+    unchecked, a self-chosen base identity would become permanent history the
+    moment the signature landed — so the one process that knows what it issued
+    is the one that answers.
+    """
+
+    _database, authority, _clock, voucher_signing_key = harness
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    unknown = await authority.describe_base_identity(
+        device_base_id=base_id_for(operational),
+        operational_key_id=key_id(spki(operational)),
+        context=actor(),
+    )
+    assert unknown["known"] is False
+    assert unknown["bound_to_this_key"] is False
+
+    await authority.create_enrollment(
+        command_id="create_01",
+        correlation_id="intent_01",
+        payload=create_payload(
+            ec.derive_private_key(0x123456789, ec.SECP256R1()),
+            operational,
+            voucher_signing_key,
+        ),
+    )
+    described = await authority.describe_base_identity(
+        device_base_id=base_id_for(operational),
+        operational_key_id=key_id(spki(operational)),
+        context=actor(),
+    )
+    assert described["known"] is True
+    assert described["bound_to_this_key"] is True
+    assert described["requires_fresh_presence"] is False
+
+    impostor = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    for_impostor = await authority.describe_base_identity(
+        device_base_id=base_id_for(operational),
+        operational_key_id=key_id(spki(impostor)),
+        context=actor(),
+    )
+    assert for_impostor["known"] is True
+    assert for_impostor["bound_to_this_key"] is False
 
 
 async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_ref(
@@ -624,18 +835,18 @@ async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_re
 ):
     """I-016: an old lifecycle's commands cannot consume the next one's work."""
 
-    database, authority, clock, setup_secret = harness
+    database, authority, clock, voucher_signing_key = harness
     refs: list[DeviceRef] = []
     terminal_results: list[dict] = []
 
-    for lifecycle, (handoff_seed, operational_seed) in enumerate(
-        ((0x123456789, 0x234567891), (0x345678912, 0x456789123)),
-        start=1,
-    ):
+    # One Body living two lifecycles. Nothing was erased between them, so the
+    # operational key — and therefore the DeviceInstance — is the same one; what
+    # changes is the generation, which is exactly what the fence is made of.
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    for lifecycle, handoff_seed in enumerate((0x123456789, 0x345678912), start=1):
         handoff = ec.derive_private_key(handoff_seed, ec.SECP256R1())
-        operational = ec.derive_private_key(operational_seed, ec.SECP256R1())
         command = f"lifecycle_{lifecycle}"
-        payload = create_payload(handoff, operational, setup_secret)
+        payload = create_payload(handoff, operational, voucher_signing_key)
         created = await authority.create_enrollment(
             command_id=f"create_{command}", correlation_id=command, payload=payload
         )
@@ -723,7 +934,7 @@ async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_re
         terminal_results.append(revoked)
         clock.value += timedelta(seconds=1)
 
-    assert refs[0].device_instance_id != refs[1].device_instance_id
+    assert refs[0].device_instance_id == refs[1].device_instance_id
     assert [ref.claim_generation for ref in refs] == [1, 2]
     assert terminal_results[0]["occurred_at"] < terminal_results[1]["occurred_at"]
     async with database.sessions() as session:
@@ -732,8 +943,8 @@ async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_re
                 select(AdmissionClaimRow).order_by(AdmissionClaimRow.claim_generation)
             )
         ).all()
-        assert [claim.state for claim in claims] == ["revoked", "revoked"]
-        assert [claim.claim_generation for claim in claims] == [1, 2]
+        assert [claim.state for claim in claims] == ["revoked"]
+        assert [claim.claim_generation for claim in claims] == [2]
         assert (
             await session.scalar(
                 select(func.count())
@@ -799,28 +1010,29 @@ async def test_one_thousand_replays_queries_and_terminal_commands_have_bounded_c
 
 
 async def test_persisted_hardware_identity_is_derived_and_repeats_no_device_claim(harness):
-    """A Proposal records a derived hardware identity, never the device's words.
+    """A Proposal records a derived identity, never the device's words.
 
-    The fixture lookup id says "box-3" the way a hand-filled registry entry
-    once said "hardware-box3-1cdbd47aef0c" for a Waveshare board. The Authority
-    verifies possession of a pre-shared secret, not a board type, so the
-    permanent record must not repeat an unverified claim about the hardware.
+    A hand-filled registry entry once said "hardware-box3-1cdbd47aef0c" for a
+    Waveshare board, and every later generation of that Claim repeated it. The
+    Authority derives this from the base identity it issued, so nothing the
+    device said about itself can become permanent history.
     """
 
     database, authority, _clock, secret = harness
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
     created = await authority.create_enrollment(
         command_id="create_01",
         correlation_id="intent_01",
         payload=create_payload(
             ec.derive_private_key(0x123456789, ec.SECP256R1()),
-            ec.derive_private_key(0x234567891, ec.SECP256R1()),
+            operational,
             secret,
         ),
     )
     async with database.sessions() as session:
         proposal = await session.get(AdmissionProposalRow, created["enrollment_id"])
 
-    assert proposal.hardware_identity_ref == derive_hardware_identity_ref(HARDWARE_LOOKUP_ID)
+    assert proposal.hardware_identity_ref == identity_ref_for(operational)
     assert "box" not in proposal.hardware_identity_ref
 
 
@@ -1130,7 +1342,11 @@ async def test_transaction_rolls_back_proposal_result_and_outbox_on_event_confli
     )
     with pytest.raises(IntegrityError):
         await colliding.create_enrollment(
-            command_id="create_rollback", correlation_id="intent_rollback", payload=payload
+            command_id="create_rollback",
+            correlation_id="intent_rollback",
+            # A second attempt by the same Body carries a second voucher: one
+            # is spent at the first attempt and never spends again.
+            payload=create_payload(handoff, operational, secret),
         )
     async with database.sessions() as session:
         assert await session.get(AdmissionProposalRow, "enrollment_rollback") is None
@@ -1170,7 +1386,9 @@ async def test_reject_cancel_and_deadline_expiry_are_distinct_terminal_facts(har
         context=actor(),
     )
     canceled = await authority.create_enrollment(
-        command_id="create_cancel", correlation_id="intent_cancel", payload=payload
+        command_id="create_cancel",
+        correlation_id="intent_cancel",
+        payload=create_payload(handoff, operational, secret),
     )
     cancel_result = await authority.cancel_enrollment(
         command_id="cancel_01",
@@ -1181,7 +1399,9 @@ async def test_reject_cancel_and_deadline_expiry_are_distinct_terminal_facts(har
     )
     assert cancel_result["proposal_state"] == "canceled"
     expiring = await authority.create_enrollment(
-        command_id="create_expire", correlation_id="intent_expire", payload=payload
+        command_id="create_expire",
+        correlation_id="intent_expire",
+        payload=create_payload(handoff, operational, secret),
     )
     clock.value += timedelta(minutes=16)
     assert await authority.expire_due() == 1
@@ -1650,7 +1870,11 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
 
         canceled_create = await client.post(
             "/api/admission/v1/enrollments",
-            json={"command_id": "http_create_02", "correlation_id": "http_intent_02", **payload},
+            json={
+                "command_id": "http_create_02",
+                "correlation_id": "http_intent_02",
+                **create_payload(handoff, operational, secret),
+            },
         )
         canceled_id = CreateEnrollmentResult.model_validate(canceled_create.json()).enrollment_id
         cancel_response = await client.post(

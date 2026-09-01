@@ -70,7 +70,11 @@ def test_composition_starts_with_only_hub_owned_sqlite(
         assert authorized_events.status_code == 200
         assert authorized_events.json()["events"] == []
 
-        assert client.get("/ready").status_code == 503
+        # Readiness used to depend on a per-device registry file being present
+        # and root-owned. There is no file: the voucher signing key is derived
+        # from the management secret this process already loads, so a Hub that
+        # started at all can verify commissioning proofs.
+        assert client.get("/ready").status_code == 200
         rejected_secret = "commissioning-proof-must-not-be-reflected"
         invalid = client.post(
             "/api/admission/v1/enrollments",

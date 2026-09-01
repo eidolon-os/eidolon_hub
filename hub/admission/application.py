@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
-import hmac
 import json
 import secrets
-from dataclasses import dataclass
-from datetime import timedelta
-from typing import Callable, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 
 import rfc8785
 
+from hub.admission.commissioning import (
+    ENROLLED_BASE_KEY_SCHEME,
+    VOUCHER_SCHEME,
+    CommissioningProofVerifier,
+    VerifiedCommissioning,
+)
 from hub.admission.crypto import key_id, seal_claim_grant, verify_p256_proof
 from hub.admission.domain import (
     ActorContext,
@@ -20,7 +23,6 @@ from hub.admission.domain import (
     fingerprint,
     require_transition,
 )
-from hub.admission.hardware_identity import VerifiedHardwareLookup
 from hub.admission.persistence import SqlAdmissionStore, aware
 from hub.contracts.bindings.admission import (
     AdmissionListCursor,
@@ -51,128 +53,8 @@ from hub.contracts.bindings.admission import (
 from hub.ports.identity import Clock, IdGenerator
 
 
-@dataclass(frozen=True)
-class DevelopmentCommissioningIdentity:
-    """Private development-registry material; never serialized or logged.
-
-    It holds only the pre-shared secret. The registry deliberately cannot state
-    a hardware identity: that is derived from the lookup id the secret is bound
-    to, so no hand-typed entry can assert an unverifiable fact about a board.
-    """
-
-    setup_secret: bytes
-
-
-class CommissioningProofVerifier(Protocol):
-    def verify(
-        self,
-        *,
-        device_instance_id: str,
-        owner_domain_id: str,
-        nonce: str,
-        proof: str,
-        hardware_identity_evidence: dict,
-        operational_public_key: str,
-    ) -> VerifiedHardwareLookup | None: ...
-
-
 class ClaimDirectoryProjector(Protocol):
     async def __call__(self, device_instance_id: str) -> object: ...
-
-
-class HmacCommissioningProofVerifier:
-    """Real test/development profile verifier backed by per-device setup secrets."""
-
-    def __init__(
-        self,
-        identity_for_lookup: Callable[[str], DevelopmentCommissioningIdentity | None],
-    ) -> None:
-        self._identity_for_lookup = identity_for_lookup
-
-    def verify(
-        self,
-        *,
-        device_instance_id: str,
-        owner_domain_id: str,
-        nonce: str,
-        proof: str,
-        hardware_identity_evidence: dict,
-        operational_public_key: str,
-    ) -> VerifiedHardwareLookup | None:
-        if hardware_identity_evidence.get("scheme") != "dev-self-signed-p256":
-            return None
-        try:
-            evidence_document_raw, signature = str(
-                hardware_identity_evidence["evidence"]
-            ).rsplit(".", 1)
-            evidence_document = json.loads(evidence_document_raw)
-            if not isinstance(evidence_document, dict) or set(evidence_document) != {
-                "device_instance_id",
-                "hardware_lookup_id",
-                "operational_public_key",
-                "profile_id",
-            }:
-                return None
-            if evidence_document_raw != rfc8785.dumps(evidence_document).decode():
-                return None
-            hardware_lookup_id = str(evidence_document["hardware_lookup_id"])
-            if (
-                evidence_document["device_instance_id"] != device_instance_id
-                or evidence_document["operational_public_key"] != operational_public_key
-                or evidence_document["profile_id"] != "eidolon-trust-p256-hpke-v1"
-                or not verify_p256_proof(
-                    operational_public_key, evidence_document, signature
-                )
-            ):
-                return None
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-            return None
-        identity = self._identity_for_lookup(hardware_lookup_id)
-        if identity is None:
-            return None
-        message = (
-            f"{hardware_lookup_id}\0{device_instance_id}\0"
-            f"{owner_domain_id}\0{nonce}"
-        ).encode()
-        expected = (
-            base64.urlsafe_b64encode(
-                hmac.new(identity.setup_secret, message, hashlib.sha256).digest()
-            )
-            .rstrip(b"=")
-            .decode()
-        )
-        if not hmac.compare_digest(expected, proof):
-            return None
-        return VerifiedHardwareLookup(hardware_lookup_id)
-
-
-class RejectingCommissioningProofVerifier:
-    """Fail closed until deployment supplies a real commissioning verifier.
-
-    The canonical Admission route is allowed to be the production route before
-    a board-specific proof adapter is installed, but an unconfigured Hub must
-    never turn an opaque commissioning string into a trusted Proposal.
-    """
-
-    def verify(
-        self,
-        *,
-        device_instance_id: str,
-        owner_domain_id: str,
-        nonce: str,
-        proof: str,
-        hardware_identity_evidence: dict,
-        operational_public_key: str,
-    ) -> VerifiedHardwareLookup | None:
-        del (
-            device_instance_id,
-            owner_domain_id,
-            nonce,
-            proof,
-            hardware_identity_evidence,
-            operational_public_key,
-        )
-        return None
 
 
 class AdmissionAuthority:
@@ -305,18 +187,40 @@ class AdmissionAuthority:
                 category="invalid",
             )
         proof = payload["commissioning_proof"]
-        verified_lookup = self.commissioning_proofs.verify(
+        now = self.clock.now()
+        verified: VerifiedCommissioning | None = self.commissioning_proofs.verify(
             device_instance_id=payload["device_instance_candidate_id"],
             owner_domain_id=str(requested),
             nonce=proof["nonce"],
             proof=proof["proof"],
             hardware_identity_evidence=hardware,
             operational_public_key=payload["operational_key"]["public_key"],
+            now_unix=int(now.timestamp()),
         )
-        if verified_lookup is None:
+        if verified is None:
             raise AdmissionProblem(
                 "UNAUTHENTICATED", "commissioning proof is invalid", status=401, category="auth"
             )
+        if verified.scheme not in (VOUCHER_SCHEME, ENROLLED_BASE_KEY_SCHEME):
+            raise AdmissionProblem(
+                "UNAUTHENTICATED", "commissioning proof is invalid", status=401, category="auth"
+            )
+        if proof["scheme"] != verified.scheme:
+            # The wire scheme is what the reviewer, the audit record and every
+            # later reader will believe. A proof that verified as one thing
+            # while announcing another is refused rather than reconciled.
+            raise AdmissionProblem(
+                "UNAUTHENTICATED",
+                "commissioning proof does not match the scheme it declares",
+                status=401,
+                category="auth",
+            )
+        try:
+            identity_ref = verified.identity.hardware_identity_ref()
+        except ValueError as exc:
+            raise AdmissionProblem(
+                "INVALID_ARGUMENT", str(exc), status=422, category="invalid"
+            ) from exc
         manifest = payload["manifest"]
         canonical_manifest = rfc8785.dumps(manifest["document"])
         actual_manifest_digest = "sha256:" + hashlib.sha256(canonical_manifest).hexdigest()
@@ -332,7 +236,6 @@ class AdmissionAuthority:
             revision=manifest["revision"],
             digest=manifest["digest"],
         )
-        now = self.clock.now()
         enrollment_id = self.ids.new("enrollment")
         challenge = secrets.token_urlsafe(32)
         result = {
@@ -372,11 +275,49 @@ class AdmissionAuthority:
                 )
                 if locked_replay is not None:
                     return locked_replay
+                # Standing was proved above; what remains is durable and
+                # therefore belongs inside this transaction. A voucher spent
+                # twice, a base identity that acquires a second key, or a
+                # Revoked identity that walks back in on its own are all
+                # outcomes of a write, not of a signature check.
+                if verified.scheme == VOUCHER_SCHEME:
+                    await self.store.consume_commissioning_voucher(
+                        session,
+                        jti=str(verified.jti),
+                        device_base_id=verified.identity.device_base_id,
+                        operational_key_id=operational_key_id,
+                        expires_at=datetime.fromtimestamp(int(verified.expires_at or 0), UTC),
+                        consumed_at=now,
+                    )
+                elif await self.store.requires_fresh_presence(
+                    session,
+                    owner_domain_id=str(requested),
+                    hardware_identity_ref=identity_ref,
+                ):
+                    raise AdmissionProblem(
+                        "FORBIDDEN",
+                        "this Body was rejected or removed and needs a new commissioning",
+                        status=403,
+                        category="policy",
+                    )
+                await self.store.bind_base_identity(
+                    session,
+                    device_base_id=verified.identity.device_base_id,
+                    owner_domain_id=str(requested),
+                    hardware_identity_ref=identity_ref,
+                    operational_key_id=operational_key_id,
+                    provenance=(
+                        "minted"
+                        if verified.identity.device_base_id.startswith("device-base-")
+                        else "derived-from-controller"
+                    ),
+                    bound_at=now,
+                )
                 self.store.add_proposal(
                     session,
                     enrollment_id=enrollment_id,
                     device_instance_id=payload["device_instance_candidate_id"],
-                    hardware_identity_ref=verified_lookup.hardware_identity_ref(),
+                    hardware_identity_ref=identity_ref,
                     requested_owner_domain_id=str(requested),
                     state="pending_review",
                     revision=1,
@@ -1035,7 +976,7 @@ class AdmissionAuthority:
                 )
                 decision = await self.store.get_decision(session, grant.decision_id)
                 manifest_ref = ManifestRef.model_validate(json.loads(grant.manifest_ref_json))
-                self.store.add_claim(
+                await self.store.upsert_claim(
                     session,
                     device_instance_id=device_ref.device_instance_id,
                     owner_domain_id=str(device_ref.owner_domain_id),
@@ -1215,7 +1156,7 @@ class AdmissionAuthority:
                     proposal.updated_at = now
                     grant.revoked_at = now
                     decision = await self.store.get_decision(session, grant.decision_id)
-                    self.store.add_claim(
+                    await self.store.upsert_claim(
                         session,
                         device_instance_id=device_ref.device_instance_id,
                         owner_domain_id=str(device_ref.owner_domain_id),
@@ -1320,6 +1261,43 @@ class AdmissionAuthority:
                     occurred_at=now,
                 )
         return result
+
+    async def describe_base_identity(
+        self, *, device_base_id: str, operational_key_id: str, context: ActorContext
+    ) -> dict:
+        """Answer whether this Owner Domain issued this base identity to this key.
+
+        The Host asks before it signs a voucher, because only the Hub knows.
+        Without this answer the Host would have to take the device's word for
+        what it is called, and a base identity a device chose for itself would
+        become permanent history the moment the Host signed it — the exact
+        failure the issued identity exists to prevent.
+        """
+
+        context.require_scope("device.read")
+        async with self.store.transaction() as session:
+            row = await self.store.base_identity(session, device_base_id)
+            held = await self.store.base_identity_for_key(session, operational_key_id)
+            requires_presence = (
+                await self.store.requires_fresh_presence(
+                    session,
+                    owner_domain_id=str(context.owner_domain_id),
+                    hardware_identity_ref=row.hardware_identity_ref,
+                )
+                if row is not None
+                else False
+            )
+        known = row is not None and row.owner_domain_id == str(context.owner_domain_id)
+        return {
+            "contract_version": "1",
+            "device_base_id": device_base_id,
+            "known": known,
+            "bound_to_this_key": bool(known and row.operational_key_id == operational_key_id),
+            "key_holds_another_identity": bool(
+                held is not None and held.device_base_id != device_base_id
+            ),
+            "requires_fresh_presence": requires_presence,
+        }
 
     async def get_claim(self, *, device_instance_id: str, context: ActorContext) -> ClaimRecord:
         context.require_scope("device.read")

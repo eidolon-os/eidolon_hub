@@ -3,9 +3,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
-import json
-import stat
-from types import SimpleNamespace
 
 import jwt
 import pytest
@@ -18,14 +15,19 @@ from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from starlette.requests import Request
 
 from hub.admission.auth import JwtAdmissionActorProvider
+from hub.admission.commissioning import derive_voucher_signing_key
 from hub.admission.domain import AdmissionProblem
-from hub.composition.resources import load_commissioning_proof_verifier
+from hub.composition.resources import RuntimeSecrets, load_commissioning_proof_verifier
 from hub.config import CommissioningProofConfig, HubConfig
 
 # Tests name the device they mean; the name becomes a real device
 # instance id, which is a digest of a key and never a chosen string.
 _DEVICE_INSTANCE_01 = named_device_instance_id("device-instance-01")
 _DEVICE_01 = named_device_instance_id("device_01")
+
+
+def encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
 
 
 def _spki(key: ec.EllipticCurvePrivateKey) -> tuple[str, bytes]:
@@ -86,168 +88,142 @@ async def test_admission_actor_is_verified_from_short_lived_credential() -> None
     assert rejected.value.code == "UNAUTHENTICATED"
 
 
-def test_manufacturer_profile_is_not_ready_without_real_verifier() -> None:
-    verifier, ready = load_commissioning_proof_verifier(HubConfig())
+def test_a_disabled_hub_fails_closed_rather_than_trusting_an_opaque_string() -> None:
+    """The canonical route may be live before a Host is configured to sign.
+
+    A Hub in that state must refuse, not improvise: an admission chain that
+    accepts anything while it is "not configured yet" is the one nobody
+    remembers to close later.
+    """
+
+    verifier, ready = load_commissioning_proof_verifier(
+        HubConfig(commissioning_proof=CommissioningProofConfig(enabled=False)),
+        RuntimeSecrets(management_jwt=b"m" * 32, device_registry_reader_token="r" * 32),
+    )
     assert ready is False
-    assert verifier.verify(
-        device_instance_id=_DEVICE_01,
-        owner_domain_id="owner-domain_01",
-        nonce="nonce_01",
-        proof="opaque-proof",
-        hardware_identity_evidence={"scheme": "manufacturer-p256", "evidence": "opaque"},
-        operational_public_key="p256-spki:opaque",
-    ) is None
-
-
-def test_development_registry_is_explicit_root_owned_and_unknown_device_fails_closed(
-    tmp_path, monkeypatch
-) -> None:
-    setup_secret = b"box-3-development-setup-secret"
-    encoded = base64.urlsafe_b64encode(setup_secret).rstrip(b"=").decode()
-    path = tmp_path / "commissioning-secrets.json"
-    path.write_text(
-        json.dumps(
-            {
-                "profile": "eidolon-development-hmac-commissioning-v2",
-                "devices": {"box-3": {"setup_secret": encoded}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    real_stat = type(path).stat
-
-    # Patching Path.stat replaces it for every path, pytest's own traceback
-    # rendering included, so the stub has to keep the real signature; without
-    # it a genuine failure in this test crashed the reporter instead of being
-    # reported.
-    def root_owned(candidate, **kwargs):
-        value = real_stat(candidate, **kwargs)
-        if candidate == path:
-            return SimpleNamespace(st_uid=0, st_mode=stat.S_IFREG | 0o640)
-        return value
-
-    monkeypatch.setattr(type(path), "stat", root_owned)
-    config = HubConfig(
-        commissioning_proof=CommissioningProofConfig(
-            profile="development-hmac",
-            setup_secret_registry_path=str(path),
+    assert (
+        verifier.verify(
+            device_instance_id=_DEVICE_01,
+            owner_domain_id="owner-domain_01",
+            nonce="nonce_01",
+            proof="opaque-proof",
+            hardware_identity_evidence={
+                "scheme": "hub-issued-base-p256",
+                "evidence": "opaque",
+            },
+            operational_public_key="p256-spki:opaque",
+            now_unix=1_700_000_000,
         )
+        is None
     )
-    verifier, ready = load_commissioning_proof_verifier(config)
+
+
+def test_configured_hub_verifies_its_own_voucher_and_refuses_another_key() -> None:
+    """The signing key is derived, never installed, so the two sides cannot drift.
+
+    What used to be here installed a root-owned per-device registry file and
+    pinned its format in a constant — a gate added after a rollback across that
+    format left the Hub restarting 110 times. The file is gone; this is what
+    replaced it.
+    """
+
+    secrets = RuntimeSecrets(management_jwt=b"m" * 32, device_registry_reader_token="r" * 32)
+    verifier, ready = load_commissioning_proof_verifier(HubConfig(), secrets)
     assert ready is True
-    operational = ec.derive_private_key(17, ec.SECP256R1())
-    operational_spki, operational_der = _spki(operational)
-    instance_id = derive_device_instance_id(operational_spki)
+
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    public_key, der = _spki(operational)
+    device_instance_id = derive_device_instance_id(public_key)
+    device_base_id = "device-base-" + "c3" * 32
     evidence_document = {
-        "device_instance_id": instance_id,
-        "hardware_lookup_id": "box-3",
-        "operational_public_key": operational_spki,
+        "device_base_id": device_base_id,
+        "device_instance_id": device_instance_id,
+        "operational_public_key": public_key,
         "profile_id": "eidolon-trust-p256-hpke-v1",
     }
-    evidence = rfc8785.dumps(evidence_document).decode() + "." + _signature(
-        operational, evidence_document
+    evidence = (
+        rfc8785.dumps(evidence_document).decode()
+        + "."
+        + _signature(operational, evidence_document)
     )
-    nonce = "physical-presence-nonce"
-    proof = (
-        base64.urlsafe_b64encode(
-            hmac.new(
-                setup_secret,
-                f"box-3\0{instance_id}\0owner-local\0{nonce}".encode(),
-                hashlib.sha256,
-            ).digest()
+    claims = {
+        "base_identity_provenance": "minted",
+        "device_base_id": device_base_id,
+        "exp": 4_102_444_800,
+        "jti": "jti-" + "0" * 32,
+        "operational_spki_sha256": "sha256:" + hashlib.sha256(der).hexdigest(),
+        "owner_domain_id": "owner-domain_01",
+        "purpose": "eidolon-commissioning-voucher-v1",
+    }
+
+    def voucher_for(payload: dict) -> str:
+        signing_input = (
+            f"{encode(rfc8785.dumps({'alg': 'HS256', 'typ': 'JWT'}))}."
+            f"{encode(rfc8785.dumps(payload))}"
         )
-        .rstrip(b"=")
-        .decode()
-    )
+        signature = hmac.new(
+            derive_voucher_signing_key(secrets.management_jwt),
+            signing_input.encode(),
+            hashlib.sha256,
+        ).digest()
+        return f"{signing_input}.{encode(signature)}"
+
     verified = verifier.verify(
-        device_instance_id=instance_id,
-        owner_domain_id="owner-local",
-        nonce=nonce,
-        proof=proof,
+        device_instance_id=device_instance_id,
+        owner_domain_id="owner-domain_01",
+        nonce=claims["jti"],
+        proof=voucher_for(claims),
         hardware_identity_evidence={
-            "scheme": "dev-self-signed-p256",
+            "scheme": "hub-issued-base-p256",
             "evidence": evidence,
+            "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
         },
-        operational_public_key=operational_spki,
+        operational_public_key=public_key,
+        now_unix=1_700_000_000,
     )
     assert verified is not None
-    assert verified.hardware_lookup_id == "box-3"
-    assert verifier.verify(
-        device_instance_id=instance_id,
-        owner_domain_id="owner-local",
-        nonce=nonce,
-        proof=proof,
-        hardware_identity_evidence={
-            "scheme": "dev-self-signed-p256",
-            "evidence": evidence.replace("box-3", "unknown", 1),
-        },
-        operational_public_key=operational_spki,
-    ) is None
+    assert verified.identity.device_base_id == device_base_id
+    assert verified.jti == claims["jti"]
 
-    path.write_text(
-        json.dumps(
-            {
-                "profile": "eidolon-development-hmac-commissioning-v2",
-                "devices": {"box-3": encoded},
-            }
-        ),
-        encoding="utf-8",
+    # The binding to one operational key is the whole of the voucher's value.
+    other = ec.derive_private_key(0x456789123, ec.SECP256R1())
+    _other_public, other_der = _spki(other)
+    assert (
+        verifier.verify(
+            device_instance_id=device_instance_id,
+            owner_domain_id="owner-domain_01",
+            nonce=claims["jti"],
+            proof=voucher_for(
+                {**claims, "operational_spki_sha256": "sha256:" + hashlib.sha256(other_der).hexdigest()}
+            ),
+            hardware_identity_evidence={
+                "scheme": "hub-issued-base-p256",
+                "evidence": evidence,
+                "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
+            },
+            operational_public_key=public_key,
+            now_unix=1_700_000_000,
+        )
+        is None
     )
-    with pytest.raises(RuntimeError, match="registry is invalid"):
-        load_commissioning_proof_verifier(config)
 
-    # A v1 file asserted a hand-written hardware_identity_ref per device, which
-    # is how a Waveshare AMOLED board ended up permanently claiming to be an
-    # ESP-BOX-3. Such a file must fail closed rather than be read with the
-    # unverifiable field quietly ignored.
-    path.write_text(
-        json.dumps(
-            {
-                "profile": "eidolon-development-hmac-commissioning-v1",
-                "devices": {
-                    "box-3": {
-                        "setup_secret": encoded,
-                        "hardware_identity_ref": "hardware-box-3",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
+    # An expired voucher is not a slow voucher.
+    assert (
+        verifier.verify(
+            device_instance_id=device_instance_id,
+            owner_domain_id="owner-domain_01",
+            nonce=claims["jti"],
+            proof=voucher_for({**claims, "exp": 1_600_000_000}),
+            hardware_identity_evidence={
+                "scheme": "hub-issued-base-p256",
+                "evidence": evidence,
+                "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
+            },
+            operational_public_key=public_key,
+            now_unix=1_700_000_000,
+        )
+        is None
     )
-    with pytest.raises(RuntimeError, match="registry is invalid"):
-        load_commissioning_proof_verifier(config)
-
-    path.write_text(
-        json.dumps(
-            {
-                "profile": "eidolon-development-hmac-commissioning-v2",
-                "devices": {
-                    "box-3": {
-                        "setup_secret": encoded,
-                        "hardware_identity_ref": "hardware-box-3",
-                    }
-                },
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="registry is invalid"):
-        load_commissioning_proof_verifier(config)
-
-    # The profile names the format, so entries alone are not enough: a file
-    # still labelled v1 has not been reviewed against the rule that an entry
-    # may not assert a hardware identity, and is not read on its say-so.
-    path.write_text(
-        json.dumps(
-            {
-                "profile": "eidolon-development-hmac-commissioning-v1",
-                "devices": {"box-3": {"setup_secret": encoded}},
-            }
-        ),
-        encoding="utf-8",
-    )
-    with pytest.raises(RuntimeError, match="registry is invalid"):
-        load_commissioning_proof_verifier(config)
 
 
 async def test_every_claim_this_surface_requires_is_required_by_name() -> None:

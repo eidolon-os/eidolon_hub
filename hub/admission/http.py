@@ -345,6 +345,25 @@ def create_admission_router(
         except (KeyError, TypeError, ValueError) as exc:
             return problem_response(_invalid(exc), command_id=command_id)
 
+    @router.get("/base-identities/{device_base_id}")
+    async def describe_base_identity(
+        device_base_id: str, request: Request, operational_key_id: str
+    ) -> JSONResponse:
+        try:
+            context = await actor_provider(request)
+            described = await current().describe_base_identity(
+                device_base_id=device_base_id,
+                operational_key_id=operational_key_id,
+                context=context,
+            )
+            return JSONResponse(status_code=200, content=described)
+        except AdmissionProblem as exc:
+            return problem_response(exc)
+        except PermissionError as exc:
+            return problem_response(
+                AdmissionProblem("FORBIDDEN", str(exc), status=403, category="forbidden")
+            )
+
     @router.get("/claims/{device_instance_id}")
     async def get_claim(device_instance_id: str, request: Request) -> JSONResponse:
         try:

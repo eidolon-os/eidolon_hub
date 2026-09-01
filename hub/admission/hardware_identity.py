@@ -34,20 +34,20 @@ _MAXIMUM_LOOKUP_ID_BYTES = 128
 HARDWARE_IDENTITY_REF_PATTERN = re.compile(r"hardware-[0-9a-f]{64}")
 
 
-def derive_hardware_identity_ref(hardware_lookup_id: str) -> str:
-    """Derive the permanent hardware identity of a verified lookup id.
+def derive_hardware_identity_ref(device_base_id: str) -> str:
+    """Derive the permanent identity of a base identity this Hub issued.
 
-    Case and surrounding whitespace are folded because a MAC address is hex:
-    firmware that starts formatting it in upper case must not fork one board
+    Case and surrounding whitespace are folded because the input is hex: a
+    producer that starts formatting it in upper case must not fork one Body
     into two identity lineages, which would silently restart its Claim
     generations and stop old Claims and tombstones from fencing it. Separators
     are deliberately *not* stripped — collapsing them would let two distinct
-    lookup ids collide into one identity, which is the worse failure.
+    base identities collide into one identity, which is the worse failure.
     """
 
-    canonical = hardware_lookup_id.strip().casefold()
+    canonical = device_base_id.strip().casefold()
     if not canonical or len(canonical.encode()) > _MAXIMUM_LOOKUP_ID_BYTES:
-        raise ValueError("hardware lookup id is empty or too long to be an identity")
+        raise ValueError("device base id is empty or too long to be an identity")
     digest = hashlib.sha256(_DERIVATION_LABEL + b"\0" + canonical.encode()).hexdigest()
     return f"hardware-{digest}"
 
@@ -67,15 +67,17 @@ def require_derived_hardware_identity_ref(hardware_identity_ref: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
-class VerifiedHardwareLookup:
-    """The only hardware fact a commissioning adapter may assert.
+class VerifiedBaseIdentity:
+    """The only identity fact a commissioning adapter may assert.
 
-    An adapter returns what it verified — the lookup id whose setup secret the
-    device proved — and never the identity itself, so no adapter can choose the
-    shape or the content of a permanent hardware identity.
+    An adapter returns the base identity it verified — one this Owner Domain
+    issued and bound to the key the device just proved it holds — and never the
+    identity ref itself, so no adapter can choose the shape or the content of
+    something that outlives every Claim. A value the *device* proposed can
+    never arrive here: the device has no say in what it is called.
     """
 
-    hardware_lookup_id: str
+    device_base_id: str
 
     def hardware_identity_ref(self) -> str:
-        return derive_hardware_identity_ref(self.hardware_lookup_id)
+        return derive_hardware_identity_ref(self.device_base_id)

@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import sysconfig
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 from urllib.parse import urlparse
 
 import yaml
@@ -87,24 +87,17 @@ class DeviceControlConfig(_StrictConfig):
 
 
 class CommissioningProofConfig(_StrictConfig):
-    """Deployment-selected verifier; development HMAC is never an implicit default."""
+    """Which commissioning proofs this Hub is configured to verify.
 
-    profile: Literal["manufacturer-p256", "development-hmac"] = "manufacturer-p256"
-    setup_secret_registry_path: str | None = Field(default=None, min_length=1)
+    There is no registry path any more and no per-device file to install. The
+    Host signs one-shot vouchers with a key derived from the management secret
+    it already holds, and this Hub verifies them with the same derivation, so
+    the two cannot be configured into disagreement. `enabled: false` keeps the
+    canonical Admission route present and failing closed — which is what an
+    unconfigured Hub must do rather than trust an opaque string.
+    """
 
-    @model_validator(mode="after")
-    def validate_profile(self) -> CommissioningProofConfig:
-        if self.profile == "development-hmac" and self.setup_secret_registry_path is None:
-            raise ValueError(
-                "commissioning_proof.setup_secret_registry_path is required for development-hmac"
-            )
-        if (
-            self.setup_secret_registry_path is not None
-            and not Path(self.setup_secret_registry_path).is_absolute()
-        ):
-            raise ValueError("commissioning_proof.setup_secret_registry_path must be absolute")
-        return self
-
+    enabled: bool = True
 
 class HubConfig(_StrictConfig):
     """Local behavior and external contract addresses."""

@@ -129,6 +129,44 @@ class DeviceEraseAckEvidenceRow(Base):
     result_code: Mapped[str] = mapped_column(String(128))
 
 
+class AdmissionBaseIdentityRow(Base):
+    """One issued base identity and the operational key it is bound to.
+
+    This is the whole of what replaced a per-device secret on both sides. The
+    binding is one-to-one and permanent for the life of the identity: the same
+    key may not acquire a second base identity, and a base identity may not be
+    presented by a second key. A device that erased its storage has no row to
+    match and is a new Body — recognising it by an unauthenticated MAC would be
+    inheriting ownership from something nobody verified.
+    """
+
+    __tablename__ = "admission_base_identities_v1"
+
+    device_base_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    hardware_identity_ref: Mapped[str] = mapped_column(String(128), index=True)
+    operational_key_id: Mapped[str] = mapped_column(String(71), unique=True, index=True)
+    provenance: Mapped[str] = mapped_column(String(32))
+    bound_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AdmissionCommissioningVoucherRow(Base):
+    """The consumed half of a one-shot voucher.
+
+    Kept durably rather than in memory because the window a voucher is valid in
+    outlives a Hub restart: an in-process ledger would make "restart the Hub"
+    the way to replay one.
+    """
+
+    __tablename__ = "admission_commissioning_vouchers_v1"
+
+    jti: Mapped[str] = mapped_column(String(256), primary_key=True)
+    device_base_id: Mapped[str] = mapped_column(String(128), index=True)
+    operational_key_id: Mapped[str] = mapped_column(String(71))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AdmissionProposalRow(Base):
     __tablename__ = "admission_proposals_v1"
 

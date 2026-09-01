@@ -80,7 +80,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         stack = AsyncExitStack()
         await stack.__aenter__()
         try:
-            resources = await open_runtime_resources(app_config, stack)
+            resources = await open_runtime_resources(app_config, stack, secrets)
             projector = ProjectDeviceDirectory(
                 devices=resources.repositories.devices,
                 directory=resources.directory,
