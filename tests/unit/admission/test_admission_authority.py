@@ -43,6 +43,7 @@ from sqlalchemy.exc import IntegrityError
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
 from hub.adapters.persistence.models import (
+    AdmissionBaseIdentityRow,
     AdmissionClaimEventStreamRow,
     AdmissionClaimRow,
     AdmissionCommandResultRow,
@@ -717,6 +718,38 @@ async def test_revoked_body_rejoins_on_its_base_identity_at_generation_two(harne
         assert claim.state == "active"
         assert claim.claim_generation == 2
         assert claim.hardware_identity_ref == identity_ref_for(operational)
+
+
+async def test_unknown_base_identity_cannot_self_enroll_with_continuation(harness):
+    """A self-signed continuation is possession evidence, not standing.
+
+    No voucher means no Controller witnessed this identity.  Accepting the
+    request and creating its binding in the same transaction would reduce
+    commissioning to "generate a key and name yourself".
+    """
+
+    database, authority, _clock, voucher_signing_key = harness
+    handoff = ec.derive_private_key(0x567891234, ec.SECP256R1())
+    operational = ec.derive_private_key(0x678912345, ec.SECP256R1())
+
+    with pytest.raises(AdmissionProblem) as refused:
+        await authority.create_enrollment(
+            command_id="create_unknown_continuation",
+            correlation_id="unknown_continuation",
+            payload=create_payload(
+                handoff,
+                operational,
+                voucher_signing_key,
+                voucher=continuation_proof(operational),
+                proof_scheme="enrolled-base-key-v1",
+            ),
+        )
+
+    assert refused.value.status == 401
+    async with database.sessions() as session:
+        assert await session.get(AdmissionBaseIdentityRow, base_id_for(operational)) is None
+        proposals = list((await session.scalars(select(AdmissionProposalRow))).all())
+        assert proposals == []
 
 
 async def test_erased_body_arrives_as_a_new_base_identity_and_inherits_nothing(harness):

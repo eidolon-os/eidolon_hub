@@ -289,30 +289,52 @@ class AdmissionAuthority:
                         expires_at=datetime.fromtimestamp(int(verified.expires_at or 0), UTC),
                         consumed_at=now,
                     )
-                elif await self.store.requires_fresh_presence(
-                    session,
-                    owner_domain_id=str(requested),
-                    hardware_identity_ref=identity_ref,
-                ):
-                    raise AdmissionProblem(
-                        "FORBIDDEN",
-                        "this Body was rejected or removed and needs a new commissioning",
-                        status=403,
-                        category="policy",
+                    await self.store.bind_base_identity(
+                        session,
+                        device_base_id=verified.identity.device_base_id,
+                        owner_domain_id=str(requested),
+                        hardware_identity_ref=identity_ref,
+                        operational_key_id=operational_key_id,
+                        provenance=(
+                            "minted"
+                            if verified.identity.device_base_id.startswith("device-base-")
+                            else "derived-from-controller"
+                        ),
+                        bound_at=now,
                     )
-                await self.store.bind_base_identity(
-                    session,
-                    device_base_id=verified.identity.device_base_id,
-                    owner_domain_id=str(requested),
-                    hardware_identity_ref=identity_ref,
-                    operational_key_id=operational_key_id,
-                    provenance=(
-                        "minted"
-                        if verified.identity.device_base_id.startswith("device-base-")
-                        else "derived-from-controller"
-                    ),
-                    bound_at=now,
-                )
+                else:
+                    # A continuation signature proves possession of a key; it
+                    # does not prove that this Owner Domain ever issued the
+                    # base identity named by the requester.  Only a previously
+                    # persisted one-to-one binding supplies that standing.
+                    # Creating the binding here would let any new key mint its
+                    # own identity and bypass Controller-witnessed commissioning.
+                    bound = await self.store.base_identity(
+                        session, verified.identity.device_base_id
+                    )
+                    if (
+                        bound is None
+                        or bound.owner_domain_id != str(requested)
+                        or bound.operational_key_id != operational_key_id
+                        or bound.hardware_identity_ref != identity_ref
+                    ):
+                        raise AdmissionProblem(
+                            "UNAUTHENTICATED",
+                            "base identity continuation has no matching issued binding",
+                            status=401,
+                            category="auth",
+                        )
+                    if await self.store.requires_fresh_presence(
+                        session,
+                        owner_domain_id=str(requested),
+                        hardware_identity_ref=identity_ref,
+                    ):
+                        raise AdmissionProblem(
+                            "FORBIDDEN",
+                            "this Body was rejected or removed and needs a new commissioning",
+                            status=403,
+                            category="policy",
+                        )
                 self.store.add_proposal(
                     session,
                     enrollment_id=enrollment_id,
