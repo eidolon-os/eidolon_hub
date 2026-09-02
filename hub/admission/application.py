@@ -1284,22 +1284,22 @@ class AdmissionAuthority:
                 )
         return result
 
-    async def describe_base_identity(
-        self, *, device_base_id: str, operational_key_id: str, context: ActorContext
+    async def base_identity_for_key(
+        self, *, operational_key_id: str, context: ActorContext
     ) -> dict:
-        """Answer whether this Owner Domain issued this base identity to this key.
+        """Which base identity this Owner Domain issued to this operational key.
 
         The Host asks before it signs a voucher, because only the Hub knows.
-        Without this answer the Host would have to take the device's word for
-        what it is called, and a base identity a device chose for itself would
-        become permanent history the moment the Host signed it — the exact
-        failure the issued identity exists to prevent.
+        It asks by key and not by the identity a device claims: the key is the
+        one thing a device can prove, so nothing it says about its own name has
+        to be believed or checked — it is never asked. A Body that was removed
+        comes back on the identity that answer names, which is what keeps its
+        Claim generation fence attached to it.
         """
 
         context.require_scope("device.read")
         async with self.store.transaction() as session:
-            row = await self.store.base_identity(session, device_base_id)
-            held = await self.store.base_identity_for_key(session, operational_key_id)
+            row = await self.store.base_identity_for_key(session, operational_key_id)
             requires_presence = (
                 await self.store.requires_fresh_presence(
                     session,
@@ -1312,12 +1312,8 @@ class AdmissionAuthority:
         known = row is not None and row.owner_domain_id == str(context.owner_domain_id)
         return {
             "contract_version": "1",
-            "device_base_id": device_base_id,
-            "known": known,
-            "bound_to_this_key": bool(known and row.operational_key_id == operational_key_id),
-            "key_holds_another_identity": bool(
-                held is not None and held.device_base_id != device_base_id
-            ),
+            "operational_key_id": operational_key_id,
+            "device_base_id": row.device_base_id if known else None,
             "requires_fresh_presence": requires_presence,
         }
 

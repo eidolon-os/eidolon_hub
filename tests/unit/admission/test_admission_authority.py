@@ -816,24 +816,21 @@ async def test_a_second_key_may_not_present_an_already_bound_base_identity(harne
     assert refused.value.status == 401
 
 
-async def test_host_can_ask_whether_this_owner_domain_issued_a_base_identity(harness):
-    """Before signing a voucher the Host asks; it never takes the device's word.
+async def test_the_host_asks_by_key_because_that_is_what_a_device_can_prove(harness):
+    """Before signing a voucher the Host asks, and it asks about the key.
 
-    A device presents whatever it has stored. If the Host signed that value
-    unchecked, a self-chosen base identity would become permanent history the
-    moment the signature landed — so the one process that knows what it issued
-    is the one that answers.
+    A device presents an operational key it holds and nothing else it could be
+    asked to prove. Resolving its identity from that key is what leaves the
+    device with no say in what it is called: there is no value it can send that
+    would have to be disbelieved.
     """
 
     _database, authority, _clock, voucher_signing_key = harness
     operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
-    unknown = await authority.describe_base_identity(
-        device_base_id=base_id_for(operational),
-        operational_key_id=key_id(spki(operational)),
-        context=actor(),
+    unknown = await authority.base_identity_for_key(
+        operational_key_id=key_id(spki(operational)), context=actor()
     )
-    assert unknown["known"] is False
-    assert unknown["bound_to_this_key"] is False
+    assert unknown["device_base_id"] is None
 
     await authority.create_enrollment(
         command_id="create_01",
@@ -844,23 +841,18 @@ async def test_host_can_ask_whether_this_owner_domain_issued_a_base_identity(har
             voucher_signing_key,
         ),
     )
-    described = await authority.describe_base_identity(
-        device_base_id=base_id_for(operational),
-        operational_key_id=key_id(spki(operational)),
-        context=actor(),
+    answered = await authority.base_identity_for_key(
+        operational_key_id=key_id(spki(operational)), context=actor()
     )
-    assert described["known"] is True
-    assert described["bound_to_this_key"] is True
-    assert described["requires_fresh_presence"] is False
+    assert answered["device_base_id"] == base_id_for(operational)
+    assert answered["requires_fresh_presence"] is False
 
+    # Another key gets its own answer, never this one's.
     impostor = ec.derive_private_key(0x456789123, ec.SECP256R1())
-    for_impostor = await authority.describe_base_identity(
-        device_base_id=base_id_for(operational),
-        operational_key_id=key_id(spki(impostor)),
-        context=actor(),
+    for_impostor = await authority.base_identity_for_key(
+        operational_key_id=key_id(spki(impostor)), context=actor()
     )
-    assert for_impostor["known"] is True
-    assert for_impostor["bound_to_this_key"] is False
+    assert for_impostor["device_base_id"] is None
 
 
 async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_ref(

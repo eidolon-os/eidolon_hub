@@ -345,18 +345,16 @@ def create_admission_router(
         except (KeyError, TypeError, ValueError) as exc:
             return problem_response(_invalid(exc), command_id=command_id)
 
-    @router.get("/base-identities/{device_base_id}")
-    async def describe_base_identity(
-        device_base_id: str, request: Request, operational_key_id: str
+    @router.get("/base-identities")
+    async def base_identity_for_key(
+        request: Request, operational_key_id: str
     ) -> JSONResponse:
         try:
             context = await actor_provider(request)
-            described = await current().describe_base_identity(
-                device_base_id=device_base_id,
-                operational_key_id=operational_key_id,
-                context=context,
+            answered = await current().base_identity_for_key(
+                operational_key_id=operational_key_id, context=context
             )
-            return JSONResponse(status_code=200, content=described)
+            return JSONResponse(status_code=200, content=answered)
         except AdmissionProblem as exc:
             return problem_response(exc)
         except PermissionError as exc:
