@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from eidolon_sdk.device_foundation.v1 import DeviceLocalEraseAck, DeviceRef, canonical_bytes
+from eidolon_sdk.device_foundation.v1.lifecycle import SPKI_SCHEME
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.adapters.persistence.database import HubDatabase
@@ -52,6 +53,19 @@ def _spki(key: ec.EllipticCurvePrivateKey) -> str:
             serialization.PublicFormat.SubjectPublicKeyInfo,
         )
     )
+
+
+def _as_admission_records(key: ec.EllipticCurvePrivateKey) -> str:
+    """The spelling a Claim actually carries, which is not the device's.
+
+    A device hands up the bare base64url SPKI; admission records the same key
+    as `p256-spki:<base64url>`, and the erase operation is bound to what
+    admission recorded. Seeding these rows with the bare form is why every
+    test here passed while every real ACK was refused 403: the fixture wrote a
+    spelling no Authority writes.
+    """
+
+    return SPKI_SCHEME + _spki(key)
 
 
 def _sign(key: ec.EllipticCurvePrivateKey, document: dict[str, object]) -> str:
@@ -106,7 +120,7 @@ async def _seed_revoke(database, key, *, occurred_at=NOW) -> None:
                     {"manifest_id": "manifest_01", "revision": 1, "digest": MANIFEST}
                 ),
                 approval_decision_id="decision_7",
-                operational_public_key_spki=_spki(key),
+                operational_public_key_spki=_as_admission_records(key),
                 state="revoked",
                 revision=8,
                 activated_at=occurred_at - timedelta(minutes=1),
