@@ -1794,6 +1794,67 @@ async def test_owner_scoped_proposal_claim_recovery_and_target_composition(harne
     assert claims.items == ()
 
 
+async def test_a_removed_body_is_refused_in_words_the_contract_can_carry(harness):
+    """The refusal a Body meets when it asks again has to survive the wire.
+
+    It did not. The guard fired, and then the response could not be built: the
+    problem carried a category the frozen contract has no name for, so a Body
+    that had been removed was told 500 by a Hub that had in fact decided 403.
+    Found on hardware, where the difference is the whole message — one says
+    "ask a person", the other says "the Host is broken".
+    """
+
+    _database, authority, _clock, voucher_signing_key = harness
+    handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    created = await authority.create_enrollment(
+        command_id="create_01",
+        correlation_id="intent_01",
+        payload=create_payload(handoff, operational, voucher_signing_key),
+    )
+    await authority.decide_enrollment(
+        command_id="decide_01",
+        correlation_id="intent_01",
+        enrollment_id=created["enrollment_id"],
+        payload={
+            "expected_proposal_revision": 1,
+            "decision": "reject",
+            "target_owner_domain_id": "owner-domain_01",
+            "target_business_owner_id": "owner_01",
+            "target_space_id": None,
+            "reviewed_manifest_ref": created["reviewed_manifest_ref"],
+            "initial_assignment_intent": None,
+            "initial_capability_policy_refs": [],
+        },
+        context=actor(),
+    )
+
+    async def actor_provider(_request):
+        return actor()
+
+    app = create_admission_target_app(authority=authority, actor_provider=actor_provider)
+    transport = httpx.ASGITransport(app=app)
+    payload = create_payload(
+        handoff,
+        operational,
+        voucher_signing_key,
+        voucher=continuation_proof(operational),
+        proof_scheme="enrolled-base-key-v1",
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/admission/v1/enrollments",
+            json={"command_id": "create_again", "correlation_id": "intent_again", **payload},
+        )
+
+    assert response.status_code == 403
+    assert response.headers["content-type"].startswith("application/problem+json")
+    assert response.json()["code"] == "FORBIDDEN"
+    assert "new commissioning" in response.json()["detail"]
+    assert set(response.json()) == set(DeviceProblem.model_fields)
+    DeviceProblem.model_validate(response.json())
+
+
 async def test_canonical_http_mutations_return_generated_closed_results(harness):
     _database, authority, _clock, secret = harness
     handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())

@@ -333,7 +333,7 @@ class AdmissionAuthority:
                             "FORBIDDEN",
                             "this Body was rejected or removed and needs a new commissioning",
                             status=403,
-                            category="policy",
+                            category="forbidden",
                         )
                 self.store.add_proposal(
                     session,
