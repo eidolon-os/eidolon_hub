@@ -752,6 +752,107 @@ async def test_unknown_base_identity_cannot_self_enroll_with_continuation(harnes
         assert proposals == []
 
 
+async def test_a_voucher_is_spent_once_by_the_key_it_names_and_never_again(harness):
+    """F-018. The four ways to try to reuse a witnessed commissioning.
+
+    A voucher is the whole of what a Controller's presence produces, so every
+    one of these would otherwise convert one moment of presence into standing
+    that keeps working: replaying it, handing it to another board, waiting for
+    a restart to forget it, or asking for a second lineage on one key.
+
+    The restart is the one worth spelling out. The spent-jti ledger has to be
+    durable or the refusal is only as good as this process's uptime — and a
+    Hub restart is not an event a device can be prevented from waiting for.
+    """
+
+    database, authority, _clock, voucher_signing_key = harness
+    handoff = ec.derive_private_key(0x1AB2C3D4E, ec.SECP256R1())
+    operational = ec.derive_private_key(0x2BC3D4E5F, ec.SECP256R1())
+    base_id = base_id_for(operational)
+    proof = voucher_for(operational, device_base_id=base_id, signing_key=voucher_signing_key)
+
+    accepted = await authority.create_enrollment(
+        command_id="spend_once",
+        correlation_id="f018",
+        payload=create_payload(handoff, operational, voucher=proof),
+    )
+    assert accepted["enrollment_id"]
+
+    # 1. The same voucher again, by the same Body. A different command id, so
+    #    nothing can be mistaken for idempotent replay of the first request.
+    with pytest.raises(AdmissionProblem) as replayed:
+        await authority.create_enrollment(
+            command_id="spend_twice",
+            correlation_id="f018-replay",
+            payload=create_payload(handoff, operational, voucher=proof),
+        )
+    assert replayed.value.status == 401
+
+    # 2. Another board redeeming a voucher issued for someone else's key. The
+    #    signature is ours and still valid; the key it names is not this one.
+    stranger = ec.derive_private_key(0x3CD4E5F60, ec.SECP256R1())
+    with pytest.raises(AdmissionProblem) as borrowed:
+        await authority.create_enrollment(
+            command_id="spend_borrowed",
+            correlation_id="f018-borrowed",
+            payload=create_payload(
+                handoff,
+                stranger,
+                device_base_id=base_id,
+                voucher=voucher_for(
+                    operational, device_base_id=base_id, signing_key=voucher_signing_key
+                ),
+            ),
+        )
+    assert borrowed.value.status == 401
+
+    # 3. The same voucher after this Hub is restarted. A fresh Authority over
+    #    the same database is what a restart leaves behind: no in-process
+    #    memory of the request, the ledger row still there.
+    restarted = AdmissionAuthority(
+        store=SqlAdmissionStore(database),
+        clock=FixedClock(),
+        ids=SequenceIds(),
+        owner_domain_id="owner-domain_01",
+        owner_domain_generation=3,
+        commissioning_proofs=IssuedBaseIdentityVerifier(voucher_signing_key),
+    )
+    with pytest.raises(AdmissionProblem) as after_restart:
+        await restarted.create_enrollment(
+            command_id="spend_after_restart",
+            correlation_id="f018-restart",
+            payload=create_payload(handoff, operational, voucher=proof),
+        )
+    assert after_restart.value.status == 401
+
+    # 4. A second lineage for one key. Even with a Controller present and a
+    #    correctly signed voucher, the binding is one to one: this key already
+    #    has an identity, and a Body that could hold two could be two.
+    second_base_id = base_id_for(ec.derive_private_key(0x4DE5F6071, ec.SECP256R1()))
+    with pytest.raises(AdmissionProblem) as second_lineage:
+        await authority.create_enrollment(
+            command_id="spend_second_lineage",
+            correlation_id="f018-second-lineage",
+            payload=create_payload(
+                handoff,
+                operational,
+                device_base_id=second_base_id,
+                voucher=voucher_for(
+                    operational,
+                    device_base_id=second_base_id,
+                    signing_key=voucher_signing_key,
+                ),
+            ),
+        )
+    assert second_lineage.value.status == 401
+
+    async with database.sessions() as session:
+        bound = list((await session.scalars(select(AdmissionBaseIdentityRow))).all())
+        assert [row.device_base_id for row in bound] == [base_id]
+        proposals = list((await session.scalars(select(AdmissionProposalRow))).all())
+        assert len(proposals) == 1
+
+
 async def test_erased_body_arrives_as_a_new_base_identity_and_inherits_nothing(harness):
     """Erasing local storage ends the lineage instead of continuing it.
 
