@@ -7,6 +7,7 @@ import pytest
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 
 from hub.application.queries.get_device import GetDevice
+from hub.contracts.bindings.device import ForeignDeviceManifest
 from hub.contracts.mappers import directory_entry_to_wire
 from hub.domain.devices.entities import (
     DeviceDirectoryEntry,
@@ -106,3 +107,40 @@ async def test_get_device_is_owner_scoped_and_exact() -> None:
     ).device_id == "device-a"
     with pytest.raises(KeyError):
         await query.execute(owner_scope="other-owner", device_id="device-a")
+
+
+def test_a_document_older_than_this_vocabulary_projects_instead_of_raising() -> None:
+    """The other direction: history the entry would refuse today.
+
+    `test_the_directory_reads_every_document_the_entry_admits` covers documents
+    a device could still assert. This covers the ones already in the table. The
+    entry has widened over time, so a document the Authority accepted need not
+    match today's vocabulary at all — the first device ever claimed canonically
+    sent `{"endpoints": []}` — and reading one used to raise, which the Owner
+    met as a bare 500 on a device Hub itself had admitted.
+
+    So it projects as the foreign document it is: the row still names the
+    device, its lifecycle and the digest of what the Authority holds, and says
+    plainly that the capability declaration is not one this vocabulary reads.
+    Not `null`, which cannot be told apart from a device that declares nothing,
+    and not a partial parse, which would report an empty capability set for a
+    device that has one.
+    """
+
+    entry = replace(
+        _entry(_10_51_DB_7E_24_44),
+        manifest=DeviceManifestDocument.from_declaration(
+            document={"endpoints": []}, declared_revision=1
+        ),
+    )
+
+    wire = directory_entry_to_wire(entry)
+
+    assert isinstance(wire.manifest, ForeignDeviceManifest)
+    assert wire.manifest.manifest_kind == "foreign"
+    assert "endpoints" in wire.manifest.detail and "title" in wire.manifest.detail
+    # The parts an Owner acts on survive: which device, whether it is approved,
+    # and exactly which document the Authority is holding.
+    assert wire.device_id == _10_51_DB_7E_24_44
+    assert wire.lifecycle_state == "approved"
+    assert wire.manifest_revision == entry.manifest.digest

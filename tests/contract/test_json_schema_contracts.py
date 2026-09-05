@@ -19,6 +19,7 @@ from hub.contracts.bindings.device import (
     DeviceLifecycleStatus,
     DeviceManagementEvent,
     DeviceManifest,
+    ForeignDeviceManifest,
 )
 from hub.contracts.bindings.device import (
     DeviceRef as HubDeviceRef,
@@ -78,6 +79,23 @@ def test_public_status_bindings_conform_to_schema_sources() -> None:
                 display_name="Device",
                 device_kind="generic",
                 manifest=DeviceManifest(title="Device"),
+                manifest_revision="sha256:revision",
+                lifecycle_state="approved",
+                enrolled_at=NOW,
+                updated_at=NOW,
+            ),
+        ),
+        (
+            # The same entry holding a document this vocabulary cannot read.
+            # Both members have to satisfy the one `oneOf`, or the schema and
+            # the binding disagree about a row the directory can actually emit.
+            "device/directory.schema.json",
+            DeviceDirectoryEntry(
+                device_id="device-1",
+                owner_scope="owner-1",
+                display_name="Device",
+                device_kind="generic",
+                manifest=ForeignDeviceManifest(detail="endpoints: Extra inputs are not permitted"),
                 manifest_revision="sha256:revision",
                 lifecycle_state="approved",
                 enrolled_at=NOW,

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://eidolon.dev/contracts/device/foreign-manifest.schema.json",
+  "title": "ForeignDeviceManifest",
+  "description": "A Manifest the Authority accepted and this vocabulary cannot read. The entry's manifest_revision still names the document; `detail` is diagnostic prose and is not to be parsed.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["manifest_kind", "detail"],
+  "properties": {
+    "manifest_kind": { "const": "foreign" },
+    "detail": { "type": "string", "minLength": 1, "maxLength": 512 }
+  }
+}

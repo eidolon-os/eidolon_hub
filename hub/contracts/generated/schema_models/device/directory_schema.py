@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
 from ..common import device_lifecycle_state_schema
-from . import claim_revocation_result_schema, manifest_schema
+from . import claim_revocation_result_schema, foreign_manifest_schema, manifest_schema
 
 
 class DeviceDirectoryEntry(BaseModel):
@@ -21,7 +21,7 @@ class DeviceDirectoryEntry(BaseModel):
     owner_scope: Annotated[str, Field(max_length=64, min_length=1)]
     display_name: Annotated[str, Field(max_length=128)]
     device_kind: Annotated[str, Field(max_length=96, min_length=1)]
-    manifest: manifest_schema.DeviceManifest
+    manifest: manifest_schema.DeviceManifest | foreign_manifest_schema.ForeignDeviceManifest
     manifest_revision: Annotated[str, Field(max_length=128, min_length=1)]
     lifecycle_state: device_lifecycle_state_schema.DeviceLifecycleState
     enrolled_at: AwareDatetime

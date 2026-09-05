@@ -110,6 +110,34 @@ class DeviceManifest(ContractModel):
         return tuple(value) if isinstance(value, list) else value
 
 
+class ForeignDeviceManifest(ContractModel):
+    """The Authority holds a Manifest, and this vocabulary cannot read it.
+
+    Not an error, and not a device that declares nothing. A Manifest is an
+    opaque document to the Authority, and the entry that admits one has widened
+    over time, so the directory necessarily reads documents authored against
+    vocabularies other than its own — the first device ever claimed canonically
+    sent `{"endpoints": []}`, and the Authority accepted it.
+
+    Saying so is the only honest projection of that state. Raising takes the
+    Owner's device page down for a device Hub itself admitted, which is the
+    boot-loop incident wearing different clothes. `null` cannot be told apart
+    from a device with nothing to declare. Projecting the fields that happen to
+    parse reports an empty capability set for a device that has one, and has to
+    invent a `title` to do it.
+
+    The entry's `manifest_revision` still names exactly which document this is,
+    so the row stays actionable: the Owner sees their device, and an operator
+    can find the document `detail` describes.
+    """
+
+    manifest_kind: Literal["foreign"] = "foreign"
+    #: Why this vocabulary could not read the document, for a person to read.
+    #: Field paths and messages are diagnostic and may change; nothing should
+    #: branch on the text. What is stable is that this member is present at all.
+    detail: str = Field(min_length=1, max_length=512)
+
+
 class DeviceRenameRequest(ContractModel):
     """What an Owner calls a device, as the only part of it they decide."""
 
@@ -133,7 +161,7 @@ class DeviceDirectoryEntry(ContractModel):
     owner_scope: str = Field(min_length=1, max_length=64)
     display_name: str = Field(default="", max_length=128)
     device_kind: str = Field(min_length=1, max_length=96)
-    manifest: DeviceManifest
+    manifest: DeviceManifest | ForeignDeviceManifest
     manifest_revision: str = Field(min_length=1, max_length=128)
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime
