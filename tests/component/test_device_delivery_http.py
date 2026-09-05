@@ -74,7 +74,7 @@ def _directory_device():
     return ManagedDevice(
         identity=DeviceIdentity(REF.device_instance_id),
         display_name="Box",
-        device_kind="esp-box-3",
+        manifest_id="esp-box-3",
         manifest=DeviceManifestDocument.from_declaration(
             document={"schema_version": 1, "media": [{"kind": "audio"}]},
             declared_revision=4,
@@ -570,9 +570,18 @@ def test_ack_rejects_wrong_delivery_attempt_before_applying_evidence() -> None:
 def _manifest_document(*, camera: bool) -> dict[str, object]:
     from eidolon_sdk.device_foundation.v1 import ManifestDocument, manifest_digest
 
+    media: list[dict[str, object]] = [
+        {"codecs": ["opus"], "direction": "bidirectional", "kind": "audio"}
+    ]
+    if camera:
+        media.append({"codecs": ["h264"], "direction": "publish", "kind": "video"})
     document = {
+        "actions": [],
+        "events": [],
+        "media": media,
+        "properties": [],
         "schema_version": 1,
-        "media": [{"kind": "audio"}] + ([{"kind": "video"}] if camera else []),
+        "title": "eidolon-box3",
     }
     return ManifestDocument(
         manifest_id="esp-box-3",

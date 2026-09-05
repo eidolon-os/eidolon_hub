@@ -22,7 +22,7 @@ class ChannelBindingProvider(Protocol):
         device_ref: DeviceRef,
         owner_id: str,
         display_name: str,
-        device_kind: str,
+        manifest_id: str,
         manifest: Mapping[str, object],
         manifest_revision: str,
     ) -> tuple[ChannelBinding, ...]: ...
@@ -34,7 +34,7 @@ class ChannelBindingProvider(Protocol):
         device_ref: DeviceRef,
         owner_id: str,
         display_name: str,
-        device_kind: str,
+        manifest_id: str,
         manifest: Mapping[str, object],
         manifest_revision: str,
     ) -> tuple[ChannelBinding, ...]: ...

@@ -51,7 +51,7 @@ def _entry(document: dict) -> DeviceDirectoryEntry:
         owner_scope="business_owner_account_1",
         owner_domain_id="owner-domain_01",
         display_name="Kitchen display",
-        device_kind="display",
+        manifest_id="display",
         manifest=DeviceManifestDocument.from_declaration(
             document=document, declared_revision=1
         ),

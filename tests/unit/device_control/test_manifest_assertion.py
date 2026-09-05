@@ -9,6 +9,7 @@ Authority went on provisioning against a document the device had outgrown.
 from __future__ import annotations
 
 import base64
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -50,8 +51,27 @@ def _b64url(value: bytes) -> str:
 
 
 def _document(*, camera: bool) -> dict[str, object]:
-    media = [{"kind": "audio"}] + ([{"kind": "video"}] if camera else [])
-    return {"schema_version": 1, "media": media}
+    """A whole document, in the shape a real board sends.
+
+    These fixtures declared `[{"kind": "audio"}]` and no title, which the
+    entry now refuses and no consumer of a Manifest would ever have carried:
+    while the document was typed `{"type": "object"}` a test could assert on a
+    shape that could not reach a channel.
+    """
+
+    media: list[dict[str, object]] = [
+        {"codecs": ["opus"], "direction": "bidirectional", "kind": "audio"}
+    ]
+    if camera:
+        media.append({"codecs": ["h264"], "direction": "publish", "kind": "video"})
+    return {
+        "actions": [],
+        "events": [],
+        "media": media,
+        "properties": [],
+        "schema_version": 1,
+        "title": "eidolon-box3",
+    }
 
 
 def _manifest(*, revision: int, camera: bool) -> ManifestDocument:
@@ -123,7 +143,7 @@ def _device(manifest: ManifestDocument) -> ManagedDevice:
     return ManagedDevice(
         identity=DeviceIdentity(REF.device_instance_id),
         display_name="Box",
-        device_kind=manifest.manifest_id,
+        manifest_id=manifest.manifest_id,
         manifest=DeviceManifestDocument.from_declaration(
             document=manifest.document, declared_revision=manifest.revision
         ),
@@ -197,7 +217,7 @@ async def test_a_later_revision_replaces_what_the_authority_had_accepted() -> No
     assert acceptance.accepted == upgraded.ref
     assert devices.device.manifest.declared_revision == 2
     assert devices.device.manifest.digest == upgraded.digest
-    assert devices.device.manifest.declares_capability("video")
+    assert json.loads(devices.device.manifest.canonical_json) == upgraded.document
     # The Channel binding is keyed on the digest, so a changed Manifest must
     # change it: that is the whole reason a device is allowed to re-assert.
     assert devices.device.manifest.digest != _manifest(revision=1, camera=False).digest

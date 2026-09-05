@@ -245,7 +245,7 @@ class SqlAdmissionStore:
         row = await session.get(DeviceRow, device_ref.device_instance_id)
         values = {
             "display_name": row.display_name if row is not None else display_name,
-            "device_kind": manifest_id,
+            "manifest_id": manifest_id,
             "manifest_json": manifest_json,
             "manifest_revision": manifest_digest,
             "manifest_declared_revision": manifest_declared_revision,

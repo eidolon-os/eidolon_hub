@@ -29,7 +29,7 @@ def _device(device_id="device-1"):
     return ManagedDevice(
         identity=DeviceIdentity(device_id),
         display_name="Generic Sensor",
-        device_kind="environment-sensor",
+        manifest_id="environment-sensor",
         manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": "Generic Sensor"}
         , declared_revision=1),

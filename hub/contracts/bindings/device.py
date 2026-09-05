@@ -97,6 +97,22 @@ class MediaCapability(ContractModel):
 
 
 class DeviceManifest(ContractModel):
+    """How the owner-facing directory *reads* a Manifest it already stored.
+
+    Not a second definition of the Manifest contract. The definition lives in
+    `eidolon_sdk`'s `DeviceCapabilityManifest`, which both entry points check a
+    proposed document against, and this must accept everything that admits —
+    `test_the_directory_reads_every_document_the_entry_admits` is the gate.
+
+    It is deliberately the looser of the two, and must stay looser. This parses
+    a document the Authority accepted at some point in the past, possibly under
+    an entry that checked less than today's does, and tightening a *reader of
+    stored history* is how a projection row became able to kill the Authority:
+    a document Hub had already admitted made the directory raise on every boot.
+    Requiredness therefore belongs at the entry, where a device is still asking
+    and can be answered, and never here.
+    """
+
     schema_version: Literal[1] = 1
     title: str = Field(min_length=1, max_length=128)
     properties: tuple[PropertyAffordance, ...] = Field(default=(), max_length=64)

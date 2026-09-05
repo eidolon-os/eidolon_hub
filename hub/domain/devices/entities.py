@@ -27,7 +27,7 @@ class ManagedDevice:
 
     identity: DeviceIdentity
     display_name: str
-    device_kind: str
+    manifest_id: str
     manifest: DeviceManifestDocument
     enrolled_at: datetime
     updated_at: datetime
@@ -42,8 +42,8 @@ class ManagedDevice:
     last_management_fingerprint: str = ""
 
     def __post_init__(self) -> None:
-        if not self.device_kind.strip():
-            raise ValueError("device_kind is required")
+        if not self.manifest_id.strip():
+            raise ValueError("manifest_id is required")
         if any(value.tzinfo is None for value in (self.enrolled_at, self.updated_at)):
             raise ValueError("device timestamps must be timezone-aware")
         if self.owner_id is not None and not self.owner_id.strip():
@@ -93,7 +93,7 @@ class DeviceDirectoryEntry:
     device_id: str
     owner_scope: str
     display_name: str
-    device_kind: str
+    manifest_id: str
     manifest: DeviceManifestDocument
     lifecycle_state: DeviceLifecycleState
     enrolled_at: datetime

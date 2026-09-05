@@ -20,7 +20,7 @@ def _device() -> ManagedDevice:
     return ManagedDevice(
         identity=DeviceIdentity("device-1"),
         display_name="Device",
-        device_kind="generic",
+        manifest_id="generic",
         manifest=_manifest(),
         enrolled_at=NOW,
         updated_at=NOW,
@@ -45,7 +45,6 @@ def test_identity_and_manifest_values() -> None:
     # to kill Hub at startup — for a Manifest it had already admitted.
     canonical = DeviceManifestDocument.from_declaration(document={"endpoints": []}, declared_revision=1)
     assert canonical.canonical_json == '{"endpoints":[]}'
-    assert not canonical.declares_capability("anything")
     with pytest.raises(ValueError, match="digest"):
         DeviceManifestDocument(manifest.canonical_json, "sha256:bad", 1)
     # The device's own count of its capability changes is not a digest, and a
@@ -59,8 +58,8 @@ def test_identity_and_manifest_values() -> None:
 def test_managed_device_policy_invariants() -> None:
     device = _device()
     assert device.manifest_json == device.manifest.canonical_json
-    with pytest.raises(ValueError, match="device_kind"):
-        replace(device, device_kind="")
+    with pytest.raises(ValueError, match="manifest_id"):
+        replace(device, manifest_id="")
     with pytest.raises(ValueError, match="timezone-aware"):
         replace(device, updated_at=NOW.replace(tzinfo=None))
     with pytest.raises(ValueError, match="requires an owner"):

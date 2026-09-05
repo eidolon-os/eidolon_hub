@@ -30,7 +30,12 @@ class DeviceRow(Base):
 
     device_id: Mapped[str] = mapped_column(String(255), primary_key=True)
     display_name: Mapped[str] = mapped_column(String(512))
-    device_kind: Mapped[str] = mapped_column(String(255), index=True)
+    # The physical column is still named `device_kind`, and stays that way:
+    # renaming it is not the additive kind of migration this schema does at
+    # boot, and no behaviour depends on the name. What it holds has never
+    # been a kind — the Authority copies the Manifest id into it — so the
+    # attribute every reader here goes through says what it is.
+    manifest_id: Mapped[str] = mapped_column("device_kind", String(255), index=True)
     manifest_json: Mapped[str] = mapped_column(Text)
     # The content digest, which identifies which document this is. Named for
     # the wire field the Channel Provider keys its binding cache on.

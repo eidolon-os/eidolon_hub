@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -83,7 +84,7 @@ def _device() -> ManagedDevice:
     return ManagedDevice(
         identity=DeviceIdentity(REF.device_instance_id),
         display_name="BOX-3",
-        device_kind="esp-box-3",
+        manifest_id="esp-box-3",
         manifest=_manifest(),
         enrolled_at=NOW,
         updated_at=NOW,
@@ -301,7 +302,7 @@ async def test_http_adapter_preserves_provider_problem_and_exact_generation() ->
             device_ref=REF,
             owner_id="owner_01",
             display_name=device.display_name,
-            device_kind=device.device_kind,
+            manifest_id=device.manifest_id,
             # Verbatim, as the Provider's contract says the Hub forwards it.
             manifest=json.loads(device.manifest_json),
             manifest_revision=device.manifest_digest,
@@ -454,3 +455,94 @@ async def test_a_manifest_in_the_device_s_own_vocabulary_still_binds() -> None:
 
     assert [binding.channel_id for binding in channels] == ["channel_01"]
     assert forwarded == [{"endpoints": []}]
+
+
+@pytest.mark.asyncio
+async def test_a_contract_refusal_is_not_recorded_as_a_pending_convergence(caplog) -> None:
+    """The defect: "pending" named something that would never happen.
+
+    A Manifest the Provider cannot read against its own contract is refused
+    with a non-retryable verdict, and the identical request will be refused
+    for as long as the device asserts that document. That went into the same
+    branch as a Provider that was briefly down, so the only record said
+    "pending" — and the only action pending admits is to wait. Meanwhile the
+    Claim, the mount and the Companion binding all read healthy, and the
+    owner's one irrevocable approval had already been spent.
+    """
+
+    class _Refusing:
+        async def current(self, *, device_ref):
+            return None
+
+        async def provision(self, **_values):
+            raise ChannelProviderError(
+                "INVALID_ARGUMENT",
+                retryable=False,
+                detail="device.manifest.media[0] is missing fields: codecs",
+            )
+
+        async def refresh(self, **_values):
+            raise AssertionError("a refused provision must not be advanced")
+
+    reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=_Refusing(), clock=Clock())
+
+    with caplog.at_level(logging.WARNING, logger="hub.channel_reconciliation.application"):
+        assert await reconcile.execute(device_ref=REF) == ()
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    message = caplog.records[0].getMessage()
+    assert "pending" not in message
+    assert "INVALID_ARGUMENT" in message
+    assert REF.device_instance_id in message
+
+
+@pytest.mark.asyncio
+async def test_a_provider_outage_is_still_recorded_as_pending(caplog) -> None:
+    """The other side of the same branch: waiting really is the action here."""
+
+    provider = RecordingProvider()
+    provider.offline = True
+    reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=provider, clock=Clock())
+
+    with caplog.at_level(logging.WARNING, logger="hub.channel_reconciliation.application"):
+        assert await reconcile.execute(device_ref=REF) == ()
+
+    assert [record.levelno for record in caplog.records] == [logging.WARNING]
+    assert "pending" in caplog.records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_a_stored_manifest_that_is_not_an_object_is_refused_not_pending(caplog) -> None:
+    """Waiting cannot turn a stored non-object into a document."""
+
+    class _StoredNonObject:
+        """A projection row read without going through the document type.
+
+        ``DeviceManifestDocument`` refuses a non-object, so this state can only
+        arrive from a reader that bypasses it — which is the only reason the
+        guard exists, and the only way to exercise it.
+        """
+
+        device_ref = REF
+        lifecycle_state = DeviceLifecycleState.APPROVED
+        owner_id = "owner_01"
+        display_name = "BOX-3"
+        manifest_id = "esp-box-3"
+        manifest_json = "[]"
+        manifest_digest = "sha256:00"
+
+    class _Devices:
+        async def get(self, _device_id):
+            return _StoredNonObject()
+
+    class _Provider:
+        async def current(self, *, device_ref):
+            raise AssertionError("the Provider must not be asked about an unreadable Manifest")
+
+    reconcile = ReconcileChannelBinding(devices=_Devices(), provider=_Provider(), clock=Clock())
+
+    with caplog.at_level(logging.WARNING, logger="hub.channel_reconciliation.application"):
+        assert await reconcile.execute(device_ref=REF) == ()
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "pending" not in caplog.records[0].getMessage()

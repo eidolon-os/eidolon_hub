@@ -65,7 +65,7 @@ def directory_entry_to_wire(entry: DeviceDirectoryEntry) -> DeviceDirectoryEntry
         device_id=entry.device_id,
         owner_scope=entry.owner_scope,
         display_name=entry.display_name,
-        device_kind=entry.device_kind,
+        device_kind=entry.manifest_id,
         manifest=manifest_to_wire(entry.manifest),
         manifest_revision=entry.manifest_digest,
         lifecycle_state=entry.lifecycle_state.value,

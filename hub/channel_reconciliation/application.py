@@ -62,8 +62,11 @@ class ReconcileChannelBinding:
         except json.JSONDecodeError:
             manifest = None
         if not isinstance(manifest, dict):
-            _LOG.warning(
-                "Channel binding pending: accepted Manifest is not an object device=%s",
+            # Not pending. A stored document that is not an object does not
+            # become one by waiting, and the only thing that can change it is
+            # the device asserting a new Manifest.
+            _LOG.error(
+                "Channel binding refused: accepted Manifest is not an object device=%s",
                 device_ref.device_instance_id,
             )
             return ()
@@ -76,7 +79,7 @@ class ReconcileChannelBinding:
             "device_ref": device_ref,
             "owner_id": device.owner_id,
             "display_name": device.display_name,
-            "device_kind": device.device_kind,
+            "manifest_id": device.manifest_id,
             "manifest": manifest,
             # The Provider keys its binding on this; a re-asserted Manifest
             # therefore invalidates the binding by changing the digest.
@@ -111,9 +114,48 @@ class ReconcileChannelBinding:
             return _unexpired(
                 await self._provider.refresh(operation_id=refresh_id, **values), now_ms
             )
-        except (ChannelProviderError, ValueError, IndexError, KeyError):
-            _LOG.warning(
-                "Channel binding pending device=%s generation=%s/%s/%s",
+        # "Pending" is a claim about the future: keep asking and this
+        # converges. A Provider that refused the request against its own
+        # contract will refuse the identical request forever, and there is
+        # nothing left for the device to wait for. Both used to be recorded as
+        # pending, so a Manifest the Provider cannot read was indistinguishable
+        # from a Provider that was briefly down — for a device whose Claim,
+        # mount and Companion binding all read healthy, and whose owner had
+        # already spent the one irrevocable approval.
+        #
+        # What the device is answered does not change: this Authority does not
+        # fail a configuration pull because the Channel is not ready. Answering
+        # 500 there is the other half of the same incident, and it is why the
+        # guard exists at all. Only the record of why it is empty changes.
+        except ChannelProviderError as exc:
+            if exc.retryable:
+                _LOG.warning(
+                    "Channel binding pending device=%s generation=%s/%s/%s code=%s",
+                    device_ref.device_instance_id,
+                    device_ref.owner_domain_generation,
+                    device_ref.claim_generation,
+                    device_ref.trust_epoch,
+                    exc.code,
+                    exc_info=True,
+                )
+            else:
+                _LOG.error(
+                    "Channel binding refused, and waiting will not change it: "
+                    "device=%s generation=%s/%s/%s code=%s",
+                    device_ref.device_instance_id,
+                    device_ref.owner_domain_generation,
+                    device_ref.claim_generation,
+                    device_ref.trust_epoch,
+                    exc.code,
+                    exc_info=True,
+                )
+            return ()
+        except (ValueError, IndexError, KeyError):
+            # Not a Provider verdict but a shape neither side declared. It is
+            # deterministic, so it is not pending either.
+            _LOG.error(
+                "Channel binding refused: unreadable Provider exchange "
+                "device=%s generation=%s/%s/%s",
                 device_ref.device_instance_id,
                 device_ref.owner_domain_generation,
                 device_ref.claim_generation,

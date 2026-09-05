@@ -15,7 +15,7 @@ def _entry(device_id="device-1", owner_scope="owner-1"):
         device_id=device_id,
         owner_scope=owner_scope,
         display_name="Device",
-        device_kind="generic",
+        manifest_id="generic",
         manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": "Device"}
         , declared_revision=1),

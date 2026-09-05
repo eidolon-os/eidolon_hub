@@ -24,7 +24,7 @@ class ProjectDeviceDirectory:
             device_id=device_id,
             owner_scope=device.owner_id or "unclaimed",
             display_name=device.display_name,
-            device_kind=device.device_kind,
+            manifest_id=device.manifest_id,
             manifest=device.manifest,
             lifecycle_state=device.lifecycle_state,
             enrolled_at=device.enrolled_at,

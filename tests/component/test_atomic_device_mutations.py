@@ -30,7 +30,7 @@ def _device(*, display_name: str = "Device") -> ManagedDevice:
     return ManagedDevice(
         identity=DeviceIdentity("device-1"),
         display_name=display_name,
-        device_kind="generic",
+        manifest_id="generic",
         manifest=DeviceManifestDocument.from_declaration(document=
             {"schema_version": 1, "title": display_name}
         , declared_revision=1),

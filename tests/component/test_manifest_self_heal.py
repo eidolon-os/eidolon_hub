@@ -186,7 +186,7 @@ async def test_a_device_that_declared_nothing_repairs_itself_and_gets_a_binding(
         device=ManagedDevice(
             identity=DeviceIdentity(REF.device_instance_id),
             display_name="Box",
-            device_kind="esp32-s3-touch-amoled-2.06",
+            manifest_id="esp32-s3-touch-amoled-2.06",
             manifest=DeviceManifestDocument.from_declaration(
                 document=PLACEHOLDER, declared_revision=1
             ),
@@ -271,7 +271,7 @@ async def test_a_device_that_declared_nothing_repairs_itself_and_gets_a_binding(
 
     stored = await repositories.devices.get(REF.device_instance_id)
     assert stored.manifest.declared_revision == 2
-    assert stored.manifest.declares_capability("audio")
+    assert stored.manifest.digest == manifest_digest(REAL)
 
     projected = await directory.execute(REF.device_instance_id)
     assert projected.manifest_digest == manifest_digest(REAL)

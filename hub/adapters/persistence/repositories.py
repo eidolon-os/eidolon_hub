@@ -55,7 +55,7 @@ class SqlDeviceRepository:
         return {
             "device_id": device.identity.device_id,
             "display_name": device.display_name,
-            "device_kind": device.device_kind,
+            "manifest_id": device.manifest_id,
             "manifest_json": device.manifest_json,
             "manifest_revision": device.manifest_digest,
             "manifest_declared_revision": device.manifest_declared_revision,
@@ -86,7 +86,7 @@ class SqlDeviceRepository:
         return ManagedDevice(
             identity=DeviceIdentity(row.device_id),
             display_name=row.display_name,
-            device_kind=row.device_kind,
+            manifest_id=row.manifest_id,
             manifest=DeviceManifestDocument(
                 canonical_json=row.manifest_json,
                 digest=row.manifest_revision,

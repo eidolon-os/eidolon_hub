@@ -119,7 +119,7 @@ class PullDeviceConfiguration:
             None
             if device is None or device.device_ref != device_ref
             else ManifestRef(
-                manifest_id=device.device_kind,
+                manifest_id=device.manifest_id,
                 revision=device.manifest_declared_revision,
                 digest=device.manifest_digest,
             )
@@ -223,7 +223,7 @@ class AcceptDeviceManifest:
         return replace(
             device,
             manifest=manifest,
-            device_kind=manifest_id,
+            manifest_id=manifest_id,
             updated_at=now,
             aggregate_revision=device.aggregate_revision + 1,
         )

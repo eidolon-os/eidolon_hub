@@ -31,7 +31,7 @@ def _entry(
         device_id=device_id,
         owner_scope="owner-1",
         display_name=f"Display {device_id}",
-        device_kind="display",
+        manifest_id="display",
         manifest=DeviceManifestDocument.from_declaration(document=
             {
                 "schema_version": 1,
@@ -66,7 +66,7 @@ class _Directory:
     def __init__(self) -> None:
         self.entries = (
             _entry("device-a"),
-            replace(_entry("device-b"), device_kind="sensor"),
+            replace(_entry("device-b"), manifest_id="sensor"),
             _entry("device-c"),
         )
 
@@ -144,3 +144,51 @@ def test_a_document_older_than_this_vocabulary_projects_instead_of_raising() -> 
     assert wire.device_id == _10_51_DB_7E_24_44
     assert wire.lifecycle_state == "approved"
     assert wire.manifest_revision == entry.manifest.digest
+
+
+def test_the_directory_reads_every_document_the_entry_admits() -> None:
+    """One definition upstream, and a reader here that cannot be narrower.
+
+    The Manifest had five definitions and no agreement between them: this
+    binding made `codecs` optional while the Channel Provider required it, so
+    one document could pass the Authority and be refused at provisioning —
+    an approved Claim whose channel never arrived. The definition now lives
+    once, in `eidolon_sdk`'s `DeviceCapabilityManifest`, and both entry points
+    check a proposed document against it.
+
+    What must hold here is the direction: every document the entry admits must
+    project, or the Owner cannot see a device the Authority accepted. Driven
+    from the golden vectors, so renaming a field or changing an enum in the
+    canonical vocabulary turns this red rather than being discovered on a
+    device page.
+    """
+
+    import json
+    from pathlib import Path
+
+    import eidolon_sdk
+
+    from hub.contracts.bindings.device import DeviceManifest
+
+    # Located from the installed SDK rather than by walking up from here, so
+    # this reads the same corpus the entry gate is checked against wherever
+    # that package comes from.
+    vectors = (
+        Path(eidolon_sdk.__file__).resolve().parents[1]
+        / "contracts/device_foundation/v1/examples/valid/common.json"
+    )
+    assert vectors.exists(), f"the canonical contract corpus is not at {vectors}"
+    cases = [
+        case
+        for case in json.loads(vectors.read_text(encoding="utf-8"))["cases"]
+        if case["definition"] == "DeviceCapabilityManifest"
+    ]
+    assert len(cases) >= 5, "the canonical Manifest vectors are missing"
+
+    for case in cases:
+        try:
+            DeviceManifest.model_validate(case["value"])
+        except Exception as exc:  # noqa: BLE001 - the message is the point
+            raise AssertionError(
+                f"{case['case_id']} is admissible at the entry but does not project: {exc}"
+            ) from exc

@@ -405,3 +405,24 @@ async def test_product_consumed_bootstrap_marker_survives_an_established_hub(
     finally:
         await restarted.close()
     assert json.loads(bootstrap.read_text(encoding="utf-8")) == spent
+
+
+def test_the_directory_column_is_still_named_device_kind() -> None:
+    """The attribute was renamed; the column deliberately was not.
+
+    `device_kind` never held a kind — the Authority copies the Manifest id into
+    it — so every reader in this process now goes through `manifest_id`. The
+    physical column keeps the old name on purpose: this schema migrates at boot
+    and has only ever done so additively, and a rename is not additive. An
+    Authority that cannot open its own database admits nothing and answers
+    nothing, which is too high a price for a name no behaviour depends on.
+
+    So the mapping is the load-bearing part, and this is what stops someone
+    "finishing" the rename by changing the column and finding out on a Pi5.
+    """
+
+    from hub.adapters.persistence.models import DeviceRow
+
+    column = DeviceRow.__table__.c["device_kind"]
+    assert DeviceRow.manifest_id.property.columns[0] is column
+    assert "manifest_id" not in DeviceRow.__table__.c

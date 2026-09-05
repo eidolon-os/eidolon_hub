@@ -22,7 +22,6 @@ class DeviceManifestDocument:
     canonical_json: str = field(repr=False)
     digest: str
     declared_revision: int
-    _capability_names: frozenset[str] = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         try:
@@ -49,18 +48,6 @@ class DeviceManifestDocument:
         expected = "sha256:" + hashlib.sha256(self.canonical_json.encode()).hexdigest()
         if self.digest != expected:
             raise ValueError("device manifest digest does not match canonical content")
-        names = {
-            item["name"]
-            for collection in ("properties", "actions", "events")
-            for item in value.get(collection, ())
-            if isinstance(item, dict) and isinstance(item.get("name"), str) and item["name"]
-        }
-        names.update(
-            item["kind"]
-            for item in value.get("media", ())
-            if isinstance(item, dict) and isinstance(item.get("kind"), str) and item["kind"]
-        )
-        object.__setattr__(self, "_capability_names", frozenset(names))
 
     @classmethod
     def from_declaration(
@@ -81,8 +68,3 @@ class DeviceManifestDocument:
             digest="sha256:" + hashlib.sha256(canonical.encode()).hexdigest(),
             declared_revision=declared_revision,
         )
-
-    def declares_capability(self, name: str) -> bool:
-        """Match a declared property, action, event or media kind by exact name."""
-
-        return name in self._capability_names
