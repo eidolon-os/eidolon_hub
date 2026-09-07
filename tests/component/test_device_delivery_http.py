@@ -17,6 +17,7 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceLocalEraseCommand,
     DeviceRef,
     canonical_bytes,
+    device_control_configuration_proof_document,
     issue_admission_credential,
 )
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
@@ -157,11 +158,10 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
     key = ec.generate_private_key(ec.SECP256R1())
     public_key_spki = _spki(key)
     nonce = "fresh_nonce_000001"
-    document = {
-        "device_ref": REF.model_dump(mode="json"),
-        "nonce": nonce,
-        "operation_type": "device-control.configuration",
-    }
+    document = device_control_configuration_proof_document(
+        device_ref=REF,
+        nonce=nonce,
+    )
     binding = _ChannelBinding(
         (
             ChannelBinding(
@@ -299,11 +299,10 @@ def test_the_key_a_device_presents_is_the_key_its_claim_recorded() -> None:
     key = ec.generate_private_key(ec.SECP256R1())
     presented = _spki(key)
     nonce = "fresh_nonce_000003"
-    document = {
-        "device_ref": REF.model_dump(mode="json"),
-        "nonce": nonce,
-        "operation_type": "device-control.configuration",
-    }
+    document = device_control_configuration_proof_document(
+        device_ref=REF,
+        nonce=nonce,
+    )
     app = FastAPI()
     app.include_router(
         create_device_erase_router(

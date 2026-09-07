@@ -16,6 +16,7 @@ from hub.contracts.bindings.device import (
     DeviceRef,
     ManifestRef,
     canonical_bytes,
+    device_control_configuration_proof_document,
     verify_device_erase_ack,
     verify_p256_signature,
 )
@@ -107,11 +108,9 @@ class PullDeviceConfiguration:
             raise PermissionError("configuration key differs from the Claim")
         verify_p256_signature(
             public_key_spki=public_key_spki,
-            signing_document={
-                "device_ref": device_ref.model_dump(mode="json"),
-                "nonce": nonce,
-                "operation_type": "device-control.configuration",
-            },
+            signing_document=device_control_configuration_proof_document(
+                device_ref=device_ref, nonce=nonce
+            ),
             signature=signature,
         )
         device = await self._devices.get(device_ref.device_instance_id)

@@ -25,6 +25,7 @@ from eidolon_sdk.device_foundation.v1 import (
     DeviceRef,
     ManifestDocument,
     canonical_bytes,
+    device_control_configuration_proof_document,
     manifest_digest,
 )
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
@@ -278,11 +279,10 @@ async def test_a_device_that_declared_nothing_repairs_itself_and_gets_a_binding(
 
 
 def _configuration(client, key, *, nonce: str) -> dict:
-    document = {
-        "device_ref": REF.model_dump(mode="json"),
-        "nonce": nonce,
-        "operation_type": "device-control.configuration",
-    }
+    document = device_control_configuration_proof_document(
+        device_ref=REF,
+        nonce=nonce,
+    )
     response = client.post(
         "/api/device-control/v1/configuration:pull",
         json={

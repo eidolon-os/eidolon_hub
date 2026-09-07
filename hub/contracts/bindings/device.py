@@ -20,6 +20,7 @@ from eidolon_sdk.device_foundation.v1 import (
     ManifestRef,
     OwnerDomainId,
     canonical_bytes,
+    device_control_configuration_proof_document,
     operation_fingerprint,
     operation_key_id,
     revoke_claim_fingerprint,
@@ -41,6 +42,7 @@ DeviceLifecycleState = Literal["approved", "revoked"]
 
 __all__ = [
     "AssertDeviceManifest",
+    "device_control_configuration_proof_document",
     "ClaimRevocationResult",
     "DeviceManifestAcceptance",
     "ManifestRef",
