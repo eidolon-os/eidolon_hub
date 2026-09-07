@@ -39,6 +39,7 @@ from eidolon_sdk.device_foundation.v1 import (
 )
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from fastapi import FastAPI
+from golden import golden_vector
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
@@ -111,6 +112,16 @@ DEVICE_BASE_ID = "device-base-" + "b0" * 32
 
 def encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+
+def hardware_evidence_digest(evidence: str) -> str:
+    """How a Proposal names the hardware evidence it carried.
+
+    One derivation, two readers: the payload a Body sends and the test that
+    asks what the Authority should have sealed into the ClaimGrant AAD.
+    """
+
+    return "sha256:" + hashlib.sha256(evidence.encode()).hexdigest()
 
 
 def base_id_for(operational_key) -> str:
@@ -339,7 +350,7 @@ def create_payload(
         "hardware_identity_evidence": {
             "scheme": "hub-issued-base-p256",
             "evidence": evidence,
-            "evidence_digest": "sha256:" + hashlib.sha256(evidence.encode()).hexdigest(),
+            "evidence_digest": hardware_evidence_digest(evidence),
         },
         "commissioning_proof": {
             "scheme": proof_scheme,
@@ -364,13 +375,21 @@ def create_payload(
 
 
 async def create_and_approve(harness, manifest_document=None):
+    """Create and approve one enrollment, and hand back what was sent.
+
+    The payload is returned because the evidence inside it is signed with a
+    randomised ECDSA nonce: a test that wants the digest the Proposal carried
+    cannot rebuild the evidence, only be handed the bytes that were sent.
+    """
+
     _database, authority, _clock, secret = harness
     handoff_key = ec.derive_private_key(0x123456789, ec.SECP256R1())
     operational_key = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    payload = create_payload(handoff_key, operational_key, secret, manifest_document)
     created = await authority.create_enrollment(
         command_id="create_01",
         correlation_id="intent_01",
-        payload=create_payload(handoff_key, operational_key, secret, manifest_document),
+        payload=payload,
     )
     decision = await authority.decide_enrollment(
         command_id="decide_01",
@@ -388,12 +407,14 @@ async def create_and_approve(harness, manifest_document=None):
         },
         context=actor(),
     )
-    return created, decision, handoff_key, operational_key
+    return created, decision, handoff_key, operational_key, payload
 
 
 async def collect_and_ack(harness, manifest_document=None):
     database, authority, _clock, _secret = harness
-    created, decision, handoff, operational = await create_and_approve(harness, manifest_document)
+    created, decision, handoff, operational, _payload = await create_and_approve(
+        harness, manifest_document
+    )
     collection_document = claim_grant_collection_proof_document(
         enrollment_id=created["enrollment_id"],
         proposal_revision=1,
@@ -446,7 +467,7 @@ async def test_characterization_network_or_provider_success_cannot_imply_decisio
 
 async def test_decision_collection_ack_activate_once_and_restart_replays_first_result(harness):
     database, authority, _clock, _secret = harness
-    created, decision, handoff, operational = await create_and_approve(harness)
+    created, decision, handoff, operational, _payload = await create_and_approve(harness)
     assert decision["decision"]["target_owner_domain_id"] == "owner-domain_01"
     assert decision["decision"]["target_business_owner_id"] == "owner_01"
     proof_doc = claim_grant_collection_proof_document(
@@ -1173,7 +1194,7 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
         return await projector.execute(device_id)
 
     authority.claim_directory_projector = flaky_project
-    created, _decision, handoff, operational = await create_and_approve(harness)
+    created, _decision, handoff, operational, _payload = await create_and_approve(harness)
     collection_document = claim_grant_collection_proof_document(
         enrollment_id=created["enrollment_id"],
         proposal_revision=1,
@@ -1228,7 +1249,7 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
 
 async def test_same_command_different_payload_conflicts_and_invalid_proof_rolls_back(harness):
     database, authority, _clock, _secret = harness
-    created, _decision, _handoff, _operational = await create_and_approve(harness)
+    created, _decision, _handoff, _operational, _payload = await create_and_approve(harness)
     with pytest.raises(AdmissionProblem) as invalid:
         await authority.collect_claim_grant(
             command_id="collect_01",
@@ -1264,7 +1285,7 @@ async def test_same_command_different_payload_conflicts_and_invalid_proof_rolls_
 
 async def test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted(harness):
     database, authority, clock, _secret = harness
-    created, _decision, handoff, _operational = await create_and_approve(harness)
+    created, _decision, handoff, _operational, _payload = await create_and_approve(harness)
     proof_doc = claim_grant_collection_proof_document(
         enrollment_id=created["enrollment_id"],
         proposal_revision=1,
@@ -1351,7 +1372,7 @@ async def test_manifest_precondition_and_controller_scope_fail_closed(harness):
 
 async def test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack(harness):
     database, authority, _clock, _secret = harness
-    created, decision, handoff, _operational = await create_and_approve(harness)
+    created, decision, handoff, _operational, _payload = await create_and_approve(harness)
     async with database.sessions() as session:
         grant = await session.get(AdmissionGrantRow, decision["grant_id"])
         device_ref = DeviceRef.model_validate_json(grant.device_ref_json)
@@ -1382,7 +1403,7 @@ async def test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack(harness
 
 async def test_owner_scoped_query_does_not_leak_cross_owner_and_outbox_failure_recovers(harness):
     database, authority, clock, _secret = harness
-    created, decision, _handoff, _operational = await create_and_approve(harness)
+    created, decision, _handoff, _operational, _payload = await create_and_approve(harness)
     async with database.sessions() as session:
         grant = await session.get(AdmissionGrantRow, decision["grant_id"])
         ref = DeviceRef.model_validate_json(grant.device_ref_json)
@@ -1703,7 +1724,7 @@ async def test_http_problem_mapping_preserves_owner_mismatch_and_actor_is_not_bo
 
 async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness):
     _database, authority, _clock, _secret = harness
-    created, _decision, handoff, _operational = await create_and_approve(harness)
+    created, _decision, handoff, _operational, payload = await create_and_approve(harness)
     proof_doc = claim_grant_collection_proof_document(
         enrollment_id=created["enrollment_id"],
         proposal_revision=1,
@@ -1735,13 +1756,24 @@ async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness
     assert envelope["kdf"] == "HKDF-SHA256"
     assert envelope["aead"] == "AES-128-GCM"
     assert envelope["recipient_handoff_key_id"] == key_id(spki(handoff))
+    # Which members exist is the contract's statement, not this test's: the
+    # vector every implementation canonicalises is what says the set is whole.
+    assert set(envelope["aad"]) == set(golden_vector("claim-grant-aad.json")["aad"])
     assert envelope["aad"] == {
         "contract": "eidolon.device-foundation.claim-grant-aad",
         "profile_id": "eidolon-trust-p256-hpke-v1",
         "enrollment_id": created["enrollment_id"],
         "proposal_revision": 1,
         "device_instance_id": instance_id(_operational),
-        "hardware_evidence_digest": envelope["aad"]["hardware_evidence_digest"],
+        # The member nothing else reaches. `ClaimGrantAAD.assert_matches_grant`
+        # compares the AAD against the opened ClaimGrant, and the ClaimGrant
+        # carries no hardware evidence — so this is the only place the seal is
+        # held to the evidence the Proposal was created with. Named from that
+        # evidence rather than from the digest sent beside it, so a stale, empty
+        # or another device's digest is a failure here and not a passing echo.
+        "hardware_evidence_digest": hardware_evidence_digest(
+            payload["hardware_identity_evidence"]["evidence"]
+        ),
         "manifest_ref": created["reviewed_manifest_ref"],
         "owner_domain_id": "owner-domain_01",
         "owner_domain_generation": 3,

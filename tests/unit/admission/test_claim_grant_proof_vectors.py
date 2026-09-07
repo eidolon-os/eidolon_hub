@@ -16,10 +16,7 @@ vectors exist at all.
 from __future__ import annotations
 
 import copy
-import json
-from pathlib import Path
 
-import eidolon_sdk
 import pytest
 import rfc8785
 from eidolon_sdk.device_foundation.v1 import (
@@ -27,18 +24,9 @@ from eidolon_sdk.device_foundation.v1 import (
     claim_grant_ack_proof_document,
     claim_grant_collection_proof_document,
 )
+from golden import golden_vector
 
 from hub.admission.crypto import verify_p256_proof
-
-
-def _vector(name: str) -> dict:
-    path = (
-        Path(eidolon_sdk.__file__).resolve().parents[1]
-        / "contracts/device_foundation/v1/golden"
-        / name
-    )
-    assert path.exists(), f"the canonical proof vector is not at {path}"
-    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _rebuilt(vector: dict) -> dict:
@@ -68,7 +56,7 @@ VECTORS = ("claim-grant-collection-proof.json", "claim-grant-ack-proof.json")
 
 @pytest.mark.parametrize("name", VECTORS)
 def test_the_authority_verifies_the_proof_the_vector_publishes(name: str) -> None:
-    vector = _vector(name)
+    vector = golden_vector(name)
     rebuilt = _rebuilt(vector)
 
     assert rfc8785.dumps(rebuilt).decode("utf-8") == vector["canonical_utf8"]
@@ -82,7 +70,7 @@ def test_the_authority_verifies_the_proof_the_vector_publishes(name: str) -> Non
 
 @pytest.mark.parametrize("name", VECTORS)
 def test_a_proof_over_any_other_document_is_refused(name: str) -> None:
-    vector = _vector(name)
+    vector = golden_vector(name)
     members = vector["mutate_each_field_must_fail"]
     assert members, "a vector with no negative matrix asserts nothing about what is refused"
 
@@ -109,7 +97,7 @@ def test_the_acknowledgement_is_signed_by_the_device_it_names() -> None:
 
     from eidolon_sdk.device_foundation.v1 import derive_device_instance_id
 
-    vector = _vector("claim-grant-ack-proof.json")
+    vector = golden_vector("claim-grant-ack-proof.json")
     assert vector["document"]["device_ref"]["device_instance_id"] == derive_device_instance_id(
         vector["public_key_spki"]
     )
