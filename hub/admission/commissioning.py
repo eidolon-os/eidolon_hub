@@ -36,17 +36,32 @@ import rfc8785
 from hub.admission.crypto import key_id, verify_p256_proof
 from hub.admission.hardware_identity import VerifiedBaseIdentity
 
-# The derivation and the purpose claim are eidolon_sdk's, not this module's.
-# Admin derives the same key to sign what this verifies, so a second spelling
-# here would surface only as a device refused at first commissioning — never as
-# a disagreement about a derivation. `derive_voucher_signing_key` is re-exported
-# rather than merely imported: this Hub's composition and the tests that sign
-# for it reach it through this module.
+# Everything a voucher's signed bytes consist of is eidolon_sdk's, not this
+# module's: the derivation, the claim set, the header and the accepted
+# provenance values. Admin assembles and signs those bytes and this Hub takes
+# them apart, without either side ever comparing an intermediate value — so a
+# second spelling of any of the four would surface only as a device refused at
+# the first commissioning it cannot retry past, with the refusal naming a
+# signature or nothing at all. `derive_voucher_signing_key`,
+# `commissioning_voucher_claims` and `sign_commissioning_voucher` are
+# re-exported rather than merely imported: this Hub's composition and the tests
+# that sign for it reach them through this module.
+from hub.contracts.bindings.admission import (  # noqa: F401
+    COMMISSIONING_VOUCHER_CLAIM_NAMES as _VOUCHER_CLAIMS,
+)
+from hub.contracts.bindings.admission import (  # noqa: F401
+    COMMISSIONING_VOUCHER_HEADER as _VOUCHER_HEADER,
+)
+from hub.contracts.bindings.admission import (  # noqa: F401
+    COMMISSIONING_VOUCHER_PROVENANCE as _PROVENANCE,
+)
 from hub.contracts.bindings.admission import (  # noqa: F401
     COMMISSIONING_VOUCHER_PURPOSE as VOUCHER_PURPOSE,
 )
 from hub.contracts.bindings.admission import (  # noqa: F401
+    commissioning_voucher_claims,
     derive_voucher_signing_key,
+    sign_commissioning_voucher,
 )
 
 VOUCHER_SCHEME = "hub-issued-commissioning-voucher-v1"
@@ -63,18 +78,6 @@ _EVIDENCE_FIELDS = frozenset(
     }
 )
 _PROFILE_ID = "eidolon-trust-p256-hpke-v1"
-_VOUCHER_CLAIMS = frozenset(
-    {
-        "base_identity_provenance",
-        "device_base_id",
-        "exp",
-        "jti",
-        "operational_spki_sha256",
-        "owner_domain_id",
-        "purpose",
-    }
-)
-_PROVENANCE = frozenset({"minted", "derived-from-controller"})
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -233,7 +236,7 @@ class IssuedBaseIdentityVerifier:
             claims = json.loads(_b64url_decode(parts[1]))
         except (TypeError, ValueError, json.JSONDecodeError):
             return None
-        if header != {"alg": "HS256", "typ": "JWT"}:
+        if header != _VOUCHER_HEADER:
             return None
         if not isinstance(claims, dict) or set(claims) != _VOUCHER_CLAIMS:
             return None

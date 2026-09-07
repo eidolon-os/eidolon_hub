@@ -35,8 +35,8 @@ def _evidence(vector: dict) -> dict:
     }
 
 
-def _verify(vector: dict, signing_key: bytes):
-    voucher = vector["voucher"]
+def _verify(vector: dict, signing_key: bytes, *, key: str = "voucher"):
+    voucher = vector[key]
     return IssuedBaseIdentityVerifier(signing_key).verify(
         device_instance_id=vector["device_instance_id"],
         owner_domain_id=vector["owner_domain_id"],
@@ -44,7 +44,7 @@ def _verify(vector: dict, signing_key: bytes):
         proof=voucher["compact"],
         hardware_identity_evidence=_evidence(vector),
         operational_public_key=vector["operational_public_key"],
-        now_unix=voucher["expires_at_unix"] - 1,
+        now_unix=vector["voucher"]["expires_at_unix"] - 1,
     )
 
 
@@ -96,3 +96,28 @@ def test_a_key_from_another_secret_refuses_the_same_voucher() -> None:
     vector = golden_vector(VECTOR)
     other = derive_voucher_signing_key(b"a-different-owner-domain-management-secret")
     assert _verify(vector, other) is None
+
+
+def test_accepts_the_other_provenance_the_contract_publishes() -> None:
+    """`derived-from-controller`, which nothing else in this suite exercises.
+
+    This is the standing a Body returns with: the Hub re-signs a base identity
+    it already issued to this very key, which is what lets a removed Body come
+    back as itself rather than as a stranger. Every other voucher in these
+    tests is `minted`, so without this the accepted set could quietly shrink to
+    one value and every suite would stay green while no return was possible.
+    """
+
+    vector = golden_vector(VECTOR)
+    signing_key = derive_voucher_signing_key(
+        bytes.fromhex(vector["voucher"]["host_management_secret_hex"])
+    )
+    continuation = vector["voucher_derived_from_controller"]
+    assert continuation["claims"]["base_identity_provenance"] == "derived-from-controller"
+
+    verified = _verify(vector, signing_key, key="voucher_derived_from_controller")
+    assert verified is not None
+    assert verified.jti == continuation["jti"]
+    assert verified.identity.device_base_id == vector["device_base_id"]
+    # A one-shot token: the two vouchers must not be interchangeable.
+    assert continuation["jti"] != vector["voucher"]["jti"]

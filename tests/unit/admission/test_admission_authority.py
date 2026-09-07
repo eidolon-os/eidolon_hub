@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import hmac
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -62,7 +61,9 @@ from hub.admission import crypto as admission_crypto
 from hub.admission.application import AdmissionAuthority
 from hub.admission.commissioning import (
     IssuedBaseIdentityVerifier,
+    commissioning_voucher_claims,
     derive_voucher_signing_key,
+    sign_commissioning_voucher,
 )
 from hub.admission.crypto import key_id
 from hub.admission.domain import ActorContext, AdmissionProblem
@@ -153,25 +154,18 @@ def voucher_for(
 ) -> tuple[str, str]:
     """Mint the one-shot voucher a Host signs during a witnessed commissioning."""
 
-    claims = {
-        "base_identity_provenance": "minted",
-        "device_base_id": device_base_id,
-        "exp": expires_at,
-        "jti": jti or f"jti-{next(_JTI_SEQUENCE):032d}",
-        "operational_spki_sha256": key_id(spki(operational_key)),
-        "owner_domain_id": owner_domain_id,
-        "purpose": "eidolon-commissioning-voucher-v1",
-    }
-    header = {"alg": "HS256", "typ": "JWT"}
-    signing_input = (
-        f"{encode(rfc8785.dumps(header))}.{encode(rfc8785.dumps(claims))}"
+    claims = commissioning_voucher_claims(
+        device_base_id=device_base_id,
+        owner_domain_id=owner_domain_id,
+        operational_spki_sha256=key_id(spki(operational_key)),
+        jti=jti or f"jti-{next(_JTI_SEQUENCE):032d}",
+        expires_at_unix=expires_at,
     )
-    signature = hmac.new(
-        signing_key or derive_voucher_signing_key(MANAGEMENT_SECRET),
-        signing_input.encode(),
-        hashlib.sha256,
-    ).digest()
-    return f"{signing_input}.{encode(signature)}", str(claims["jti"])
+    voucher = sign_commissioning_voucher(
+        claims=claims,
+        signing_key=signing_key or derive_voucher_signing_key(MANAGEMENT_SECRET),
+    )
+    return voucher, str(claims["jti"])
 
 
 def continuation_proof(

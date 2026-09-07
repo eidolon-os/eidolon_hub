@@ -3,7 +3,10 @@
 from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     CLAIM_GRANT_ACK_PROOF_CONTRACT,
     CLAIM_GRANT_COLLECTION_PROOF_CONTRACT,
+    COMMISSIONING_VOUCHER_CLAIM_NAMES,
+    COMMISSIONING_VOUCHER_HEADER,
     COMMISSIONING_VOUCHER_KEY_INFO,
+    COMMISSIONING_VOUCHER_PROVENANCE,
     COMMISSIONING_VOUCHER_PURPOSE,
     AckClaimGrant,
     AckClaimGrantResult,
@@ -50,10 +53,12 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     RevokeClaimResult,
     claim_grant_ack_proof_document,
     claim_grant_collection_proof_document,
+    commissioning_voucher_claims,
     derive_device_instance_id,
     derive_voucher_signing_key,
     issue_admission_credential,
     read_admission_credential,
+    sign_commissioning_voucher,
 )
 
 __all__ = [name for name in globals() if not name.startswith("_")]

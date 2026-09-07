@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import hashlib
-import hmac
 
 import jwt
 import pytest
@@ -15,7 +14,11 @@ from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from starlette.requests import Request
 
 from hub.admission.auth import JwtAdmissionActorProvider
-from hub.admission.commissioning import derive_voucher_signing_key
+from hub.admission.commissioning import (
+    commissioning_voucher_claims,
+    derive_voucher_signing_key,
+    sign_commissioning_voucher,
+)
 from hub.admission.domain import AdmissionProblem
 from hub.composition.resources import RuntimeSecrets, load_commissioning_proof_verifier
 from hub.config import CommissioningProofConfig, HubConfig
@@ -146,27 +149,27 @@ def test_configured_hub_verifies_its_own_voucher_and_refuses_another_key() -> No
         + "."
         + _signature(operational, evidence_document)
     )
-    claims = {
-        "base_identity_provenance": "minted",
-        "device_base_id": device_base_id,
-        "exp": 4_102_444_800,
-        "jti": "jti-" + "0" * 32,
-        "operational_spki_sha256": "sha256:" + hashlib.sha256(der).hexdigest(),
-        "owner_domain_id": "owner-domain_01",
-        "purpose": "eidolon-commissioning-voucher-v1",
-    }
+    claims = commissioning_voucher_claims(
+        device_base_id=device_base_id,
+        owner_domain_id="owner-domain_01",
+        operational_spki_sha256="sha256:" + hashlib.sha256(der).hexdigest(),
+        jti="jti-" + "0" * 32,
+        expires_at_unix=4_102_444_800,
+    )
 
     def voucher_for(payload: dict) -> str:
-        signing_input = (
-            f"{encode(rfc8785.dumps({'alg': 'HS256', 'typ': 'JWT'}))}."
-            f"{encode(rfc8785.dumps(payload))}"
+        """Sign whatever claims a case wants, through the canonical framing.
+
+        Takes a payload rather than building one, because the refusals below
+        are well-formed vouchers with one value changed — a different
+        operational key, an expiry in the past — and must be framed exactly as
+        a real one is, or they would be refused for the wrong reason.
+        """
+
+        return sign_commissioning_voucher(
+            claims=payload,
+            signing_key=derive_voucher_signing_key(secrets.management_jwt),
         )
-        signature = hmac.new(
-            derive_voucher_signing_key(secrets.management_jwt),
-            signing_input.encode(),
-            hashlib.sha256,
-        ).digest()
-        return f"{signing_input}.{encode(signature)}"
 
     verified = verifier.verify(
         device_instance_id=device_instance_id,
