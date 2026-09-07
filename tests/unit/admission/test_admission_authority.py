@@ -1324,6 +1324,56 @@ async def test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted(harn
         )
 
 
+async def test_hardware_evidence_its_own_digest_does_not_name_is_refused_and_costs_nothing(
+    harness,
+):
+    """The digest is checked here or nowhere, and refusing it must not burn the voucher.
+
+    Nothing downstream recomputes it: `collect_claim_grant` seals whatever digest
+    the Proposal stored, and `ClaimGrantAAD.assert_matches_grant` compares the AAD
+    against the opened ClaimGrant, which carries no hardware evidence at all. A
+    digest admitted here is one a device is later asked to trust as the name of
+    the evidence it sent.
+
+    The refusal is also the one a Body can act on. It happens before the
+    transaction, so the one-shot commissioning voucher is still unspent and the
+    same Body may retry — which is checked by retrying, not by reading the guard.
+    """
+
+    database, authority, _clock, secret = harness
+    handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    payload = create_payload(handoff, operational, secret)
+    # A well-formed digest of other bytes, which is what a stale or swapped one
+    # looks like. A malformed string would be refused by its shape alone.
+    payload["hardware_identity_evidence"]["evidence_digest"] = hardware_evidence_digest(
+        payload["hardware_identity_evidence"]["evidence"] + " "
+    )
+    with pytest.raises(AdmissionProblem) as mismatched:
+        await authority.create_enrollment(
+            command_id="create_bad_evidence_digest",
+            correlation_id="intent_bad_evidence_digest",
+            payload=payload,
+        )
+    assert mismatched.value.code == "INVALID_ARGUMENT"
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(AdmissionProposalRow)) == 0
+
+    payload["hardware_identity_evidence"]["evidence_digest"] = hardware_evidence_digest(
+        payload["hardware_identity_evidence"]["evidence"]
+    )
+    created = await authority.create_enrollment(
+        command_id="create_after_bad_evidence_digest",
+        correlation_id="intent_bad_evidence_digest",
+        payload=payload,
+    )
+    async with database.sessions() as session:
+        proposal = await session.get(AdmissionProposalRow, created["enrollment_id"])
+    assert proposal.hardware_evidence_digest == hardware_evidence_digest(
+        payload["hardware_identity_evidence"]["evidence"]
+    )
+
+
 async def test_manifest_precondition_and_controller_scope_fail_closed(harness):
     _database, authority, _clock, secret = harness
     handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())
