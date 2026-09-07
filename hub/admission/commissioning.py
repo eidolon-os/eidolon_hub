@@ -47,6 +47,18 @@ from hub.admission.hardware_identity import VerifiedBaseIdentity
 # re-exported rather than merely imported: this Hub's composition and the tests
 # that sign for it reach them through this module.
 from hub.contracts.bindings.admission import (  # noqa: F401
+    BASE_IDENTITY_EVIDENCE_FIELDS as _EVIDENCE_FIELDS,
+)
+from hub.contracts.bindings.admission import (  # noqa: F401  # noqa: F401  # noqa: F401
+    BASE_IDENTITY_EVIDENCE_SCHEME,
+    TRUST_PROFILE_ID,
+    base_identity_evidence_document,
+    base_identity_evidence_wire,
+    commissioning_voucher_claims,
+    derive_voucher_signing_key,
+    sign_commissioning_voucher,
+)
+from hub.contracts.bindings.admission import (  # noqa: F401
     COMMISSIONING_VOUCHER_CLAIM_NAMES as _VOUCHER_CLAIMS,
 )
 from hub.contracts.bindings.admission import (  # noqa: F401
@@ -58,26 +70,11 @@ from hub.contracts.bindings.admission import (  # noqa: F401
 from hub.contracts.bindings.admission import (  # noqa: F401
     COMMISSIONING_VOUCHER_PURPOSE as VOUCHER_PURPOSE,
 )
-from hub.contracts.bindings.admission import (  # noqa: F401
-    commissioning_voucher_claims,
-    derive_voucher_signing_key,
-    sign_commissioning_voucher,
-)
 
 VOUCHER_SCHEME = "hub-issued-commissioning-voucher-v1"
 ENROLLED_BASE_KEY_SCHEME = "enrolled-base-key-v1"
-BASE_IDENTITY_EVIDENCE_SCHEME = "hub-issued-base-p256"
 ENROLLED_BASE_KEY_CONTRACT = "eidolon.device-foundation.enrolled-base-key-v1"
 
-_EVIDENCE_FIELDS = frozenset(
-    {
-        "device_base_id",
-        "device_instance_id",
-        "operational_public_key",
-        "profile_id",
-    }
-)
-_PROFILE_ID = "eidolon-trust-p256-hpke-v1"
 
 
 def _b64url_decode(value: str) -> bytes:
@@ -176,7 +173,7 @@ class IssuedBaseIdentityVerifier:
         if (
             document["device_instance_id"] != device_instance_id
             or document["operational_public_key"] != operational_public_key
-            or document["profile_id"] != _PROFILE_ID
+            or document["profile_id"] != TRUST_PROFILE_ID
             or not verify_p256_proof(operational_public_key, document, signature)
         ):
             return None

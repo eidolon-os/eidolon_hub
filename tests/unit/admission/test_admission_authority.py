@@ -60,7 +60,10 @@ from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.admission import crypto as admission_crypto
 from hub.admission.application import AdmissionAuthority
 from hub.admission.commissioning import (
+    TRUST_PROFILE_ID,
     IssuedBaseIdentityVerifier,
+    base_identity_evidence_document,
+    base_identity_evidence_wire,
     commissioning_voucher_claims,
     derive_voucher_signing_key,
     sign_commissioning_voucher,
@@ -314,14 +317,13 @@ def create_payload(
     device_base_id = device_base_id or base_id_for(operational_key)
     candidate_id = instance_id(operational_key)
     operational_public_key = spki(operational_key)
-    evidence_document = {
-        "device_base_id": device_base_id,
-        "device_instance_id": candidate_id,
-        "operational_public_key": operational_public_key,
-        "profile_id": "eidolon-trust-p256-hpke-v1",
-    }
-    evidence = (
-        rfc8785.dumps(evidence_document).decode() + "." + sign(operational_key, evidence_document)
+    evidence_document = base_identity_evidence_document(
+        device_base_id=device_base_id,
+        device_instance_id=candidate_id,
+        operational_public_key=operational_public_key,
+    )
+    evidence = base_identity_evidence_wire(
+        document=evidence_document, signature=sign(operational_key, evidence_document)
     )
     # The Authority does not author this; a device does, in whatever vocabulary
     # its firmware uses. The default here is this repository's own shape, and a
@@ -338,7 +340,7 @@ def create_payload(
         operational_key, device_base_id=device_base_id, signing_key=signing_key
     )
     return {
-        "profile_id": "eidolon-trust-p256-hpke-v1",
+        "profile_id": TRUST_PROFILE_ID,
         "device_instance_candidate_id": candidate_id,
         "requested_owner_domain_id": "owner-domain_01",
         "hardware_identity_evidence": {

@@ -1,6 +1,8 @@
 """Canonical Admission bindings owned by eidolon_sdk."""
 
 from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
+    BASE_IDENTITY_EVIDENCE_FIELDS,
+    BASE_IDENTITY_EVIDENCE_SCHEME,
     CLAIM_GRANT_ACK_PROOF_CONTRACT,
     CLAIM_GRANT_COLLECTION_PROOF_CONTRACT,
     COMMISSIONING_VOUCHER_CLAIM_NAMES,
@@ -8,6 +10,7 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     COMMISSIONING_VOUCHER_KEY_INFO,
     COMMISSIONING_VOUCHER_PROVENANCE,
     COMMISSIONING_VOUCHER_PURPOSE,
+    TRUST_PROFILE_ID,
     AckClaimGrant,
     AckClaimGrantResult,
     AdmissionCredential,
@@ -51,12 +54,16 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     OwnerDomainId,
     RevokeClaim,
     RevokeClaimResult,
+    base_identity_evidence_digest,
+    base_identity_evidence_document,
+    base_identity_evidence_wire,
     claim_grant_ack_proof_document,
     claim_grant_collection_proof_document,
     commissioning_voucher_claims,
     derive_device_instance_id,
     derive_voucher_signing_key,
     issue_admission_credential,
+    operational_key_id,
     read_admission_credential,
     sign_commissioning_voucher,
 )

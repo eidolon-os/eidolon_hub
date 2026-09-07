@@ -15,6 +15,8 @@ from starlette.requests import Request
 
 from hub.admission.auth import JwtAdmissionActorProvider
 from hub.admission.commissioning import (
+    base_identity_evidence_document,
+    base_identity_evidence_wire,
     commissioning_voucher_claims,
     derive_voucher_signing_key,
     sign_commissioning_voucher,
@@ -138,16 +140,13 @@ def test_configured_hub_verifies_its_own_voucher_and_refuses_another_key() -> No
     public_key, der = _spki(operational)
     device_instance_id = derive_device_instance_id(public_key)
     device_base_id = "device-base-" + "c3" * 32
-    evidence_document = {
-        "device_base_id": device_base_id,
-        "device_instance_id": device_instance_id,
-        "operational_public_key": public_key,
-        "profile_id": "eidolon-trust-p256-hpke-v1",
-    }
-    evidence = (
-        rfc8785.dumps(evidence_document).decode()
-        + "."
-        + _signature(operational, evidence_document)
+    evidence_document = base_identity_evidence_document(
+        device_base_id=device_base_id,
+        device_instance_id=device_instance_id,
+        operational_public_key=public_key,
+    )
+    evidence = base_identity_evidence_wire(
+        document=evidence_document, signature=_signature(operational, evidence_document)
     )
     claims = commissioning_voucher_claims(
         device_base_id=device_base_id,

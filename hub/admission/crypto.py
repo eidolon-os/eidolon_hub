@@ -15,7 +15,11 @@ from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
-from hub.contracts.bindings.admission import ClaimGrantAAD, ClaimGrantWireEnvelope
+from hub.contracts.bindings.admission import (
+    ClaimGrantAAD,
+    ClaimGrantWireEnvelope,
+    operational_key_id,
+)
 
 
 def _b64(value: bytes) -> str:
@@ -35,7 +39,20 @@ def load_p256_spki(value: str) -> ec.EllipticCurvePublicKey:
 
 
 def key_id(value: str) -> str:
-    return "sha256:" + hashlib.sha256(_decode(value)).hexdigest()
+    """The fingerprint this Authority compares a device's key against.
+
+    eidolon_sdk's, not this module's. The same value names the key a voucher is
+    bound to, the key a `device_instance_id` is derived from, and the key the
+    erase ledger records — all of them compared for equality against a value
+    some other process computed, so a second spelling here is a second identity
+    for one key, and the mismatch surfaces as a device nobody has a record of.
+
+    Stricter than the local decode it replaces, deliberately: that one hashed
+    whatever base64url arrived, so a raw uncompressed point produced a
+    well-formed fingerprint for an identity no Authority holds. This refuses it.
+    """
+
+    return operational_key_id(value)
 
 
 def verify_p256_proof(public_spki: str, document: Any, signature: str) -> bool:
