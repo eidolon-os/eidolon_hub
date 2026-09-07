@@ -32,18 +32,22 @@ from dataclasses import dataclass
 from typing import Protocol
 
 import rfc8785
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
 from hub.admission.crypto import key_id, verify_p256_proof
 from hub.admission.hardware_identity import VerifiedBaseIdentity
 
-#: Domain separation for the voucher signing key. The Host signs vouchers with a
-#: key derived from the management secret it already holds rather than a second
-#: file nobody would remember to rotate; the derivation is what stops a
-#: management token from being replayed as a commissioning proof.
-VOUCHER_KEY_INFO = b"eidolon-commissioning-voucher-v1"
-VOUCHER_PURPOSE = "eidolon-commissioning-voucher-v1"
+# The derivation and the purpose claim are eidolon_sdk's, not this module's.
+# Admin derives the same key to sign what this verifies, so a second spelling
+# here would surface only as a device refused at first commissioning — never as
+# a disagreement about a derivation. `derive_voucher_signing_key` is re-exported
+# rather than merely imported: this Hub's composition and the tests that sign
+# for it reach it through this module.
+from hub.contracts.bindings.admission import (  # noqa: F401
+    COMMISSIONING_VOUCHER_PURPOSE as VOUCHER_PURPOSE,
+)
+from hub.contracts.bindings.admission import (  # noqa: F401
+    derive_voucher_signing_key,
+)
 
 VOUCHER_SCHEME = "hub-issued-commissioning-voucher-v1"
 ENROLLED_BASE_KEY_SCHEME = "enrolled-base-key-v1"
@@ -71,12 +75,6 @@ _VOUCHER_CLAIMS = frozenset(
     }
 )
 _PROVENANCE = frozenset({"minted", "derived-from-controller"})
-
-
-def derive_voucher_signing_key(management_secret: bytes) -> bytes:
-    return HKDF(
-        algorithm=hashes.SHA256(), length=32, salt=None, info=VOUCHER_KEY_INFO
-    ).derive(management_secret)
 
 
 def _b64url_decode(value: str) -> bytes:
