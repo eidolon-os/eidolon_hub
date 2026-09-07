@@ -48,6 +48,8 @@ from hub.contracts.bindings.admission import (
     GrantDeliveryRecord,
     ManifestRef,
     OwnerDomainId,
+    claim_grant_ack_proof_document,
+    claim_grant_collection_proof_document,
     derive_device_instance_id,
 )
 from hub.ports.identity import Clock, IdGenerator
@@ -812,12 +814,11 @@ class AdmissionAuthority:
                         status=403,
                         category="forbidden",
                     )
-                proof_doc = {
-                    "contract": "eidolon.device-foundation.claim-grant-collection",
-                    "enrollment_id": enrollment_id,
-                    "proposal_revision": proposal_revision,
-                    "collection_challenge": collection_challenge,
-                }
+                proof_doc = claim_grant_collection_proof_document(
+                    enrollment_id=enrollment_id,
+                    proposal_revision=proposal_revision,
+                    collection_challenge=collection_challenge,
+                )
                 if not verify_p256_proof(
                     proposal.handoff_public_key_spki, proof_doc, handoff_key_proof
                 ):
@@ -972,12 +973,11 @@ class AdmissionAuthority:
                     raise AdmissionProblem(
                         "GENERATION_CONFLICT", "stored Claim generation or trust epoch is stale"
                     )
-                proof_doc = {
-                    "contract": "eidolon.device-foundation.claim-grant-ack",
-                    "enrollment_id": enrollment_id,
-                    "grant_id": grant_id,
-                    "device_ref": device_ref.model_dump(mode="json"),
-                }
+                proof_doc = claim_grant_ack_proof_document(
+                    enrollment_id=enrollment_id,
+                    grant_id=grant_id,
+                    device_ref=device_ref,
+                )
                 if not verify_p256_proof(
                     proposal.operational_public_key_spki, proof_doc, operational_key_proof
                 ):

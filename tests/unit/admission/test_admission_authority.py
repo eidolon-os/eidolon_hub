@@ -33,6 +33,8 @@ from eidolon_sdk.device_foundation.v1 import (
     EnrollmentProposalState,
     OwnerDomainId,
     RevokeClaimResult,
+    claim_grant_ack_proof_document,
+    claim_grant_collection_proof_document,
     derive_device_instance_id,
 )
 from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
@@ -392,12 +394,11 @@ async def create_and_approve(harness, manifest_document=None):
 async def collect_and_ack(harness, manifest_document=None):
     database, authority, _clock, _secret = harness
     created, decision, handoff, operational = await create_and_approve(harness, manifest_document)
-    collection_document = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    collection_document = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     collected = await authority.collect_claim_grant(
         command_id="collect_01",
         correlation_id="intent_01",
@@ -409,12 +410,11 @@ async def collect_and_ack(harness, manifest_document=None):
     async with database.sessions() as session:
         grant = await session.get(AdmissionGrantRow, collected["grant_id"])
         device_ref = DeviceRef.model_validate_json(grant.device_ref_json)
-    ack_document = {
-        "contract": "eidolon.device-foundation.claim-grant-ack",
-        "enrollment_id": created["enrollment_id"],
-        "grant_id": collected["grant_id"],
-        "device_ref": device_ref.model_dump(mode="json"),
-    }
+    ack_document = claim_grant_ack_proof_document(
+        enrollment_id=created["enrollment_id"],
+        grant_id=collected["grant_id"],
+        device_ref=device_ref,
+    )
     ack_proof = sign(operational, ack_document)
     active = await authority.ack_claim_grant(
         command_id="ack_01",
@@ -449,12 +449,11 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
     created, decision, handoff, operational = await create_and_approve(harness)
     assert decision["decision"]["target_owner_domain_id"] == "owner-domain_01"
     assert decision["decision"]["target_business_owner_id"] == "owner_01"
-    proof_doc = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    proof_doc = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     collection_proof = sign(handoff, proof_doc)
     collected = await authority.collect_claim_grant(
         command_id="collect_01",
@@ -477,12 +476,11 @@ async def test_decision_collection_ack_activate_once_and_restart_replays_first_r
     async with database.sessions() as session:
         grant = await session.get(AdmissionGrantRow, collected["grant_id"])
         device_ref = DeviceRef.model_validate_json(grant.device_ref_json)
-    ack_doc = {
-        "contract": "eidolon.device-foundation.claim-grant-ack",
-        "enrollment_id": created["enrollment_id"],
-        "grant_id": collected["grant_id"],
-        "device_ref": device_ref.model_dump(mode="json"),
-    }
+    ack_doc = claim_grant_ack_proof_document(
+        enrollment_id=created["enrollment_id"],
+        grant_id=collected["grant_id"],
+        device_ref=device_ref,
+    )
     ack_proof = sign(operational, ack_doc)
     active = await authority.ack_claim_grant(
         command_id="ack_01",
@@ -668,12 +666,11 @@ async def test_revoked_body_rejoins_on_its_base_identity_at_generation_two(harne
         },
         context=actor(),
     )
-    collection_document = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": second_created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": second_created["collection_challenge"],
-    }
+    collection_document = claim_grant_collection_proof_document(
+        enrollment_id=second_created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=second_created["collection_challenge"],
+    )
     second_collected = await authority.collect_claim_grant(
         command_id="collect_second",
         correlation_id="rejoin_second",
@@ -685,12 +682,11 @@ async def test_revoked_body_rejoins_on_its_base_identity_at_generation_two(harne
     async with database.sessions() as session:
         second_grant = await session.get(AdmissionGrantRow, second_collected["grant_id"])
         second_ref = DeviceRef.model_validate_json(second_grant.device_ref_json)
-    ack_document = {
-        "contract": "eidolon.device-foundation.claim-grant-ack",
-        "enrollment_id": second_created["enrollment_id"],
-        "grant_id": second_collected["grant_id"],
-        "device_ref": second_ref.model_dump(mode="json"),
-    }
+    ack_document = claim_grant_ack_proof_document(
+        enrollment_id=second_created["enrollment_id"],
+        grant_id=second_collected["grant_id"],
+        device_ref=second_ref,
+    )
     await authority.ack_claim_grant(
         command_id="ack_second",
         correlation_id="rejoin_second",
@@ -997,12 +993,11 @@ async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_re
             },
             context=actor(),
         )
-        collection_document = {
-            "contract": "eidolon.device-foundation.claim-grant-collection",
-            "enrollment_id": created["enrollment_id"],
-            "proposal_revision": 1,
-            "collection_challenge": created["collection_challenge"],
-        }
+        collection_document = claim_grant_collection_proof_document(
+            enrollment_id=created["enrollment_id"],
+            proposal_revision=1,
+            collection_challenge=created["collection_challenge"],
+        )
         collected = await authority.collect_claim_grant(
             command_id=f"collect_{command}",
             correlation_id=command,
@@ -1014,12 +1009,11 @@ async def test_two_complete_lifecycles_keep_idempotency_scoped_to_each_device_re
         async with database.sessions() as session:
             grant = await session.get(AdmissionGrantRow, decided["grant_id"])
             ref = DeviceRef.model_validate_json(grant.device_ref_json)
-        ack_document = {
-            "contract": "eidolon.device-foundation.claim-grant-ack",
-            "enrollment_id": created["enrollment_id"],
-            "grant_id": collected["grant_id"],
-            "device_ref": ref.model_dump(mode="json"),
-        }
+        ack_document = claim_grant_ack_proof_document(
+            enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"],
+            device_ref=ref,
+        )
         ack_proof = sign(operational, ack_document)
         acked = await authority.ack_claim_grant(
             command_id=f"ack_{command}",
@@ -1180,12 +1174,11 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
 
     authority.claim_directory_projector = flaky_project
     created, _decision, handoff, operational = await create_and_approve(harness)
-    collection_document = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    collection_document = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     collected = await authority.collect_claim_grant(
         command_id="collect_01",
         correlation_id="intent_01",
@@ -1197,12 +1190,11 @@ async def test_projection_failure_replays_committed_claim_and_converges(harness)
     async with database.sessions() as session:
         grant = await session.get(AdmissionGrantRow, collected["grant_id"])
         device_ref = DeviceRef.model_validate_json(grant.device_ref_json)
-    ack_document = {
-        "contract": "eidolon.device-foundation.claim-grant-ack",
-        "enrollment_id": created["enrollment_id"],
-        "grant_id": collected["grant_id"],
-        "device_ref": device_ref.model_dump(mode="json"),
-    }
+    ack_document = claim_grant_ack_proof_document(
+        enrollment_id=created["enrollment_id"],
+        grant_id=collected["grant_id"],
+        device_ref=device_ref,
+    )
     ack_proof = sign(operational, ack_document)
     with pytest.raises(AdmissionProblem) as unavailable:
         await authority.ack_claim_grant(
@@ -1273,12 +1265,11 @@ async def test_same_command_different_payload_conflicts_and_invalid_proof_rolls_
 async def test_pre_b0_opaque_grant_is_not_domain_replayed_or_double_emitted(harness):
     database, authority, clock, _secret = harness
     created, _decision, handoff, _operational = await create_and_approve(harness)
-    proof_doc = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    proof_doc = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     async with database.sessions.begin() as session:
         proposal = await session.get(AdmissionProposalRow, created["enrollment_id"])
         grant = await session.get(AdmissionGrantRow, _decision["grant_id"])
@@ -1372,12 +1363,11 @@ async def test_revoke_approved_awaiting_handoff_fences_old_grant_and_ack(harness
         context=actor(),
     )
     assert revoked["claim_state"] == "revoked"
-    proof_doc = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    proof_doc = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     with pytest.raises(AdmissionProblem) as stale:
         await authority.collect_claim_grant(
             command_id="collect_after_revoke",
@@ -1714,12 +1704,11 @@ async def test_http_problem_mapping_preserves_owner_mismatch_and_actor_is_not_bo
 async def test_claim_wire_envelope_is_preopen_complete_and_replay_stable(harness):
     _database, authority, _clock, _secret = harness
     created, _decision, handoff, _operational = await create_and_approve(harness)
-    proof_doc = {
-        "contract": "eidolon.device-foundation.claim-grant-collection",
-        "enrollment_id": created["enrollment_id"],
-        "proposal_revision": 1,
-        "collection_challenge": created["collection_challenge"],
-    }
+    proof_doc = claim_grant_collection_proof_document(
+        enrollment_id=created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=created["collection_challenge"],
+    )
     collection_proof = sign(handoff, proof_doc)
     collected = await authority.collect_claim_grant(
         command_id="collect_wire_01",
@@ -1993,12 +1982,11 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
         assert set(decision_response.json()) == set(DecideEnrollmentResult.model_fields)
         DecideEnrollmentResult.model_validate(decision_response.json())
 
-        collection_doc = {
-            "contract": "eidolon.device-foundation.claim-grant-collection",
-            "enrollment_id": created.enrollment_id,
-            "proposal_revision": 1,
-            "collection_challenge": created.collection_challenge,
-        }
+        collection_doc = claim_grant_collection_proof_document(
+            enrollment_id=created.enrollment_id,
+            proposal_revision=1,
+            collection_challenge=created.collection_challenge,
+        )
         collect_response = await client.post(
             f"/api/admission/v1/enrollments/{created.enrollment_id}/claim-grants:collect",
             json={
@@ -2019,12 +2007,11 @@ async def test_canonical_http_mutations_return_generated_closed_results(harness)
             collected.wire_envelope.aad.model_dump(mode="json"),
         )
 
-        ack_doc = {
-            "contract": "eidolon.device-foundation.claim-grant-ack",
-            "enrollment_id": created.enrollment_id,
-            "grant_id": collected.grant_id,
-            "device_ref": grant["device_ref"],
-        }
+        ack_doc = claim_grant_ack_proof_document(
+            enrollment_id=created.enrollment_id,
+            grant_id=collected.grant_id,
+            device_ref=DeviceRef.model_validate(grant["device_ref"]),
+        )
         ack_response = await client.post(
             f"/api/admission/v1/enrollments/{created.enrollment_id}/claim-grants/{collected.grant_id}:ack",
             json={
@@ -2157,12 +2144,11 @@ async def test_collecting_before_a_decision_says_a_decision_is_required(harness)
             collection_challenge=created["collection_challenge"],
             handoff_key_proof=sign(
                 handoff_key,
-                {
-                    "contract": "eidolon.device-foundation.claim-grant-collection",
-                    "enrollment_id": created["enrollment_id"],
-                    "proposal_revision": created["proposal_revision"],
-                    "collection_challenge": created["collection_challenge"],
-                },
+                claim_grant_collection_proof_document(
+                    enrollment_id=created["enrollment_id"],
+                    proposal_revision=created["proposal_revision"],
+                    collection_challenge=created["collection_challenge"],
+                ),
             ),
         )
 

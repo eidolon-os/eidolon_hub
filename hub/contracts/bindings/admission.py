@@ -1,6 +1,8 @@
 """Canonical Admission bindings owned by eidolon_sdk."""
 
 from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
+    CLAIM_GRANT_ACK_PROOF_CONTRACT,
+    CLAIM_GRANT_COLLECTION_PROOF_CONTRACT,
     AckClaimGrant,
     AckClaimGrantResult,
     AdmissionCredential,
@@ -44,6 +46,8 @@ from eidolon_sdk.device_foundation.v1 import (  # noqa: F401
     OwnerDomainId,
     RevokeClaim,
     RevokeClaimResult,
+    claim_grant_ack_proof_document,
+    claim_grant_collection_proof_document,
     derive_device_instance_id,
     issue_admission_credential,
     read_admission_credential,
