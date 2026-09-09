@@ -34,6 +34,7 @@ from hub.device_control.ports import DeviceClaimProjection
 # Tests name the device they mean; the name becomes a real device
 # instance id, which is a digest of a key and never a chosen string.
 _DEVICE_01 = named_device_instance_id("device_01")
+_DEVICE_02 = named_device_instance_id("device_02")
 
 NOW = datetime(2026, 8, 24, tzinfo=UTC)
 REF = DeviceRef(
@@ -151,8 +152,14 @@ class _ClaimReader:
     def __init__(self, projection: DeviceClaimProjection) -> None:
         self.projection = projection
 
-    async def get_exact(self, *, device_ref):
-        return self.projection if device_ref == self.projection.device_ref else None
+    async def get_claim(self, *, device_instance_id, owner_domain_id):
+        held = self.projection.device_ref
+        if (device_instance_id, owner_domain_id) != (
+            held.device_instance_id,
+            str(held.owner_domain_id),
+        ):
+            return None
+        return self.projection
 
 
 def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> None:
@@ -796,6 +803,14 @@ def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_ac
     So this pins the difference the operator needs first, in the Host's own
     record: not that a reason was written, but that the two refusals name
     different parties, and that each names the right one.
+
+    The refusing input is a device identity Admission holds no Claim for. A ref
+    that is merely a generation behind is deliberately not one: this read finds
+    the Claim by identity and answers it with the ref the Authority holds, so
+    that case converges on its own and leaves no refusal to record. The other
+    input that still refuses here, a ref naming another Owner Domain, is
+    covered on the wire in `test_stale_device_ref_recovery.py` and is not
+    repeated. This test is about the record.
     """
 
     key = ec.generate_private_key(ec.SECP256R1())
@@ -812,11 +827,14 @@ def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_ac
         "device_signature": signature,
     }
 
-    # A Claim recorded at another generation is no Claim at this DeviceRef.
-    elsewhere = REF.model_copy(update={"claim_generation": REF.claim_generation + 1})
-    stale_app = _configuration_app(
+    # No Claim at this device identity. The Authority holds one for a different
+    # Body, and this read finds Claims by identity, so it finds nothing for the
+    # device asking. That is the refusal the operator still has to tell apart
+    # from a suspended Claim.
+    another_body = REF.model_copy(update={"device_instance_id": _DEVICE_02})
+    unknown_app = _configuration_app(
         DeviceClaimProjection(
-            device_ref=elsewhere,
+            device_ref=another_body,
             state="active",
             operational_public_key_spki=presented,
         )
@@ -830,11 +848,13 @@ def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_ac
     )
 
     with caplog.at_level(logging.ERROR, logger="hub.device_control.http"):
-        stale = TestClient(stale_app).post("/api/device-control/v1/configuration:pull", json=body)
+        unknown = TestClient(unknown_app).post(
+            "/api/device-control/v1/configuration:pull", json=body
+        )
         # One refusal, one record. Not zero, which is the whole complaint, and
         # not two, which is a second surface re-deriving what this one decided.
         assert len(caplog.records) == 1, caplog.records
-        stale_record = caplog.records[0]
+        unknown_record = caplog.records[0]
         caplog.clear()
         suspended = TestClient(suspended_app).post(
             "/api/device-control/v1/configuration:pull", json=body
@@ -842,28 +862,30 @@ def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_ac
         assert len(caplog.records) == 1, caplog.records
         suspended_record = caplog.records[0]
 
-    # The wire is untouched: same statuses, same detail tokens as before.
-    assert (stale.status_code, stale.json()["detail"]) == (409, "STALE_GENERATION")
+    # The wire is untouched: same statuses, same detail tokens as before. The
+    # token still reads STALE_GENERATION for a device no Claim records, because
+    # clients depend on it; what changed is only what the Host writes down.
+    assert (unknown.status_code, unknown.json()["detail"]) == (409, "STALE_GENERATION")
     assert (suspended.status_code, suspended.json()["detail"]) == (409, "CLAIM_NOT_ACTIVE")
 
     # Both refusals are recorded, and each carries the code the device was given.
-    assert "code=STALE_GENERATION" in stale_record.getMessage()
+    assert "code=STALE_GENERATION" in unknown_record.getMessage()
     assert "code=CLAIM_NOT_ACTIVE" in suspended_record.getMessage()
 
     # The thing the operator needs first: two refusals, two different parties.
-    assert _who_can(stale_record) != _who_can(suspended_record)
-    assert _who_can(stale_record).startswith("the device")
+    assert _who_can(unknown_record) != _who_can(suspended_record)
+    assert _who_can(unknown_record).startswith("the device")
     assert _who_can(suspended_record).startswith("the Owner")
     # Which state held the Claim open is what tells the Owner what is left to do.
     assert "'suspended'" in suspended_record.getMessage()
 
     # The device this is about, so the record is actionable at all.
-    for record in (stale_record, suspended_record):
+    for record in (unknown_record, suspended_record):
         assert REF.device_instance_id in record.getMessage()
 
     # Same discipline as the 422 handler: no proof input reaches a log
     # collector, not the nonce, not the operational key, not the signature.
-    for record in (stale_record, suspended_record):
+    for record in (unknown_record, suspended_record):
         assert nonce not in record.getMessage()
         assert presented not in record.getMessage()
         assert signature not in record.getMessage()

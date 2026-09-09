@@ -82,7 +82,24 @@ class DeviceConfiguration:
 
 
 class PullDeviceConfiguration:
-    """Return one exact Claim projection without provisioning a business Channel."""
+    """Tell a device what it is, including when it disagrees about that.
+
+    This is the one read whose subject is the device's own identity, so it is
+    the one place a device that fell behind can be corrected rather than
+    refused. A ref that named a generation the Authority no longer holds used
+    to find no Claim at all and answer 409 forever: every later call carried
+    the same stale ref, so nothing the device could do on its own ended it, and
+    the only remedy left was a removal that also drops the Owner's Companion
+    binding. The Claim is found by identity instead, and the answer carries the
+    ref the Authority holds.
+
+    What still authorizes the read is unchanged and is the whole of it:
+    possession of the operational key the *current* Claim records. The
+    generations were never a second secret — they are small consecutive
+    integers, on an unthrottled route, signed over by the caller — so refusing
+    a stale one cost an attacker holding that key a handful of guesses and cost
+    an honest device its Claim.
+    """
 
     def __init__(
         self,
@@ -101,11 +118,17 @@ class PullDeviceConfiguration:
         nonce: str,
         signature: str,
     ) -> DeviceConfiguration:
-        claim = await self._claims.get_exact(device_ref=device_ref)
+        claim = await self._claims.get_claim(
+            device_instance_id=device_ref.device_instance_id,
+            owner_domain_id=str(device_ref.owner_domain_id),
+        )
         if claim is None:
             raise KeyError(device_ref.device_instance_id)
         if not _same_operational_key(claim.operational_public_key_spki, public_key_spki):
             raise PermissionError("configuration key differs from the Claim")
+        # Verified over the ref the device sent, because that is what it signed.
+        # The signature proves who is asking; it is not the device's evidence
+        # for which generation it is at, and it was never read as that.
         verify_p256_signature(
             public_key_spki=public_key_spki,
             signing_document=device_control_configuration_proof_document(
@@ -113,10 +136,10 @@ class PullDeviceConfiguration:
             ),
             signature=signature,
         )
-        device = await self._devices.get(device_ref.device_instance_id)
+        device = await self._devices.get(claim.device_ref.device_instance_id)
         manifest = (
             None
-            if device is None or device.device_ref != device_ref
+            if device is None or device.device_ref != claim.device_ref
             else ManifestRef(
                 manifest_id=device.manifest_id,
                 revision=device.manifest_declared_revision,
@@ -161,7 +184,10 @@ class AcceptDeviceManifest:
 
     async def execute(self, *, assertion: AssertDeviceManifest) -> DeviceManifestAcceptance:
         device_ref = assertion.device_ref
-        claim = await self._claims.get_exact(device_ref=device_ref)
+        claim = await self._claims.get_claim(
+            device_instance_id=device_ref.device_instance_id,
+            owner_domain_id=str(device_ref.owner_domain_id),
+        )
         if claim is None or claim.state != "active":
             raise KeyError(device_ref.device_instance_id)
         if not _same_operational_key(claim.operational_public_key_spki, assertion.public_key_spki):
@@ -172,6 +198,14 @@ class AcceptDeviceManifest:
             signature=assertion.device_signature,
         )
 
+        # The exact generation, and the one place it is required on this write.
+        # `configuration:pull` next door deliberately corrects a stale ref
+        # instead of refusing it; a Manifest assertion is not corrected, because
+        # this surface remembers no nonces and a signed assertion therefore
+        # stays replayable for as long as its ref matches — the generation
+        # moving is the only thing that ever ends one. A device that is behind
+        # learns its ref from the read and signs again, so refusing here strands
+        # nobody; it costs one extra call.
         current = await self._devices.get(device_ref.device_instance_id)
         if current is None or current.device_ref != device_ref:
             raise KeyError(device_ref.device_instance_id)

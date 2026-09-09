@@ -109,8 +109,11 @@ class _ClaimReader:
     def __init__(self, spki: str) -> None:
         self._spki = spki
 
-    async def get_exact(self, *, device_ref):
-        if device_ref != REF:
+    async def get_claim(self, *, device_instance_id, owner_domain_id):
+        if (device_instance_id, owner_domain_id) != (
+            REF.device_instance_id,
+            str(REF.owner_domain_id),
+        ):
             return None
         # Stored the way Admission spells it, which is not how the device sends it.
         return DeviceClaimProjection(

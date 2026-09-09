@@ -65,8 +65,8 @@ def _refused(
 
     What the operator needs first is not the code but who has to change
     something before this converges, and the codes differ in exactly that: a
-    stale DeviceRef is the device's to fix by re-enrolling, a suspended Claim
-    is the Owner's and no one else's. That sentence is written here, at the
+    DeviceRef no Claim records is the device's to fix by enrolling, a suspended
+    Claim is the Owner's and no one else's. That sentence is written here, at the
     decision, not recovered later from a status line that never carried it.
 
     ``code`` is the same value the response carries, passed once, so the
@@ -190,13 +190,29 @@ def create_device_erase_router(
             raise _refused(
                 "STALE_GENERATION",
                 surface="Configuration pull",
+                # A stale generation no longer reaches this branch: the read
+                # finds the Claim by identity and answers it with the ref the
+                # Authority holds, so a Body behind by a generation is corrected
+                # rather than refused. Two conditions are left — no Claim for
+                # this device, and a ref naming an Owner Domain other than the
+                # one whose Claim was found — and they arrive here as the same
+                # absent row. So this names the disjunction rather than
+                # inventing a distinction it was not handed, the same way the
+                # `manifest:assert` line below does.
                 because=(
-                    "no Claim stands at the exact DeviceRef presented — owner domain, "
-                    "device, or one of the three generations is not what Admission recorded"
+                    "no Claim stands at this device identity within the Owner Domain "
+                    "named — either Admission records none for this device, or the Claim "
+                    "it records belongs to another Owner Domain"
                 ),
+                # Which of the two it is decides whether anyone here can act at
+                # all, so both are named. Re-enrolling ends the first; nothing
+                # at this Host ends the second, because the Claim being asked
+                # about was never this Authority's to hold.
                 who_can_end_it=(
-                    "the device, by re-enrolling and presenting the DeviceRef it is "
-                    "actually granted"
+                    "the device, by enrolling here and presenting the DeviceRef this "
+                    "Host grants it, if this Host is the one that should hold its Claim; "
+                    "nobody here, if the DeviceRef names another Owner Domain — read "
+                    "admission_claims_v1 for this device to tell which"
                 ),
                 device_ref=payload.device_ref,
             ) from exc
