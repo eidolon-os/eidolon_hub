@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import logging
 from datetime import UTC, datetime, timedelta
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -394,9 +395,7 @@ def _removal_credential(**overrides) -> str:
         "target_device_ref": REF,
     }
     values.update(overrides)
-    return issue_admission_credential(
-        AdmissionCredential(**values), secret=_SECRET, ttl_seconds=60
-    )
+    return issue_admission_credential(AdmissionCredential(**values), secret=_SECRET, ttl_seconds=60)
 
 
 def test_status_lookup_binds_source_event_and_full_device_generation() -> None:
@@ -708,7 +707,7 @@ def test_a_credential_for_another_generation_cannot_read_this_one() -> None:
 
 
 def test_a_credential_that_names_no_device_authorizes_none() -> None:
-    """"Not fenced" is not "fenced to whatever arrived"."""
+    """ "Not fenced" is not "fenced to whatever arrived"."""
 
     refused = _erase_status(_removal_credential(target_device_ref=None))
 
@@ -723,9 +722,7 @@ def test_a_credential_without_the_revoke_scope_cannot_read_the_erase_state() -> 
         authentication_strength="software",
     )
 
-    refused = _erase_status(
-        _removal_credential(actor=reading_only, scopes=("device.read",))
-    )
+    refused = _erase_status(_removal_credential(actor=reading_only, scopes=("device.read",)))
 
     assert refused.status_code == 403
 
@@ -752,3 +749,121 @@ def test_the_other_surface_s_vocabulary_is_refused_here_too() -> None:
     )
 
     assert _erase_status(f"Bearer {token}").status_code == 403
+
+
+def _who_can(record) -> str:
+    """The clause an operator reads first, lifted out of the recorded sentence."""
+
+    message = record.getMessage()
+    assert "Who can: " in message, message
+    return message.split("Who can: ", 1)[1].split(". device=", 1)[0]
+
+
+def _configuration_app(projection: DeviceClaimProjection) -> FastAPI:
+    app = FastAPI()
+    app.include_router(
+        create_device_erase_router(
+            DeviceEraseHttpServices(
+                manifest=_Manifest(),
+                configuration=PullDeviceConfiguration(
+                    claims=_ClaimReader(projection),
+                    devices=_Devices(_directory_device()),
+                ),
+                channel_binding=_ChannelBinding(),
+                pull=_Pull(),
+                acknowledge=_Ack(),
+                reconcile=_Reconcile(),
+                ledger=_Ledger(),
+                secret=b"m" * 32,
+            )
+        )
+    )
+    return app
+
+
+def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_act(
+    caplog,
+) -> None:
+    """A 409 is all the access log kept, and both refusals are 409.
+
+    An operator standing at the Host saw one line — `409 Conflict` — for a
+    device that pulls every thirty seconds and is refused every time, and could
+    not tell a DeviceRef no Claim records, which the device fixes by
+    re-enrolling, from a Claim the Owner suspended, which the device can do
+    nothing about at all. The reason existed at the refusal; it went only to
+    the device, which in the second case is the party that cannot act on it.
+
+    So this pins the difference the operator needs first, in the Host's own
+    record: not that a reason was written, but that the two refusals name
+    different parties, and that each names the right one.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    presented = _spki(key)
+    nonce = "fresh_nonce_000004"
+    signature = _sign(
+        key,
+        device_control_configuration_proof_document(device_ref=REF, nonce=nonce),
+    )
+    body = {
+        "device_ref": REF.model_dump(mode="json"),
+        "nonce": nonce,
+        "public_key_spki": presented,
+        "device_signature": signature,
+    }
+
+    # A Claim recorded at another generation is no Claim at this DeviceRef.
+    elsewhere = REF.model_copy(update={"claim_generation": REF.claim_generation + 1})
+    stale_app = _configuration_app(
+        DeviceClaimProjection(
+            device_ref=elsewhere,
+            state="active",
+            operational_public_key_spki=presented,
+        )
+    )
+    suspended_app = _configuration_app(
+        DeviceClaimProjection(
+            device_ref=REF,
+            state="suspended",
+            operational_public_key_spki=presented,
+        )
+    )
+
+    with caplog.at_level(logging.ERROR, logger="hub.device_control.http"):
+        stale = TestClient(stale_app).post("/api/device-control/v1/configuration:pull", json=body)
+        # One refusal, one record. Not zero, which is the whole complaint, and
+        # not two, which is a second surface re-deriving what this one decided.
+        assert len(caplog.records) == 1, caplog.records
+        stale_record = caplog.records[0]
+        caplog.clear()
+        suspended = TestClient(suspended_app).post(
+            "/api/device-control/v1/configuration:pull", json=body
+        )
+        assert len(caplog.records) == 1, caplog.records
+        suspended_record = caplog.records[0]
+
+    # The wire is untouched: same statuses, same detail tokens as before.
+    assert (stale.status_code, stale.json()["detail"]) == (409, "STALE_GENERATION")
+    assert (suspended.status_code, suspended.json()["detail"]) == (409, "CLAIM_NOT_ACTIVE")
+
+    # Both refusals are recorded, and each carries the code the device was given.
+    assert "code=STALE_GENERATION" in stale_record.getMessage()
+    assert "code=CLAIM_NOT_ACTIVE" in suspended_record.getMessage()
+
+    # The thing the operator needs first: two refusals, two different parties.
+    assert _who_can(stale_record) != _who_can(suspended_record)
+    assert _who_can(stale_record).startswith("the device")
+    assert _who_can(suspended_record).startswith("the Owner")
+    # Which state held the Claim open is what tells the Owner what is left to do.
+    assert "'suspended'" in suspended_record.getMessage()
+
+    # The device this is about, so the record is actionable at all.
+    for record in (stale_record, suspended_record):
+        assert REF.device_instance_id in record.getMessage()
+
+    # Same discipline as the 422 handler: no proof input reaches a log
+    # collector, not the nonce, not the operational key, not the signature.
+    for record in (stale_record, suspended_record):
+        assert nonce not in record.getMessage()
+        assert presented not in record.getMessage()
+        assert signature not in record.getMessage()
