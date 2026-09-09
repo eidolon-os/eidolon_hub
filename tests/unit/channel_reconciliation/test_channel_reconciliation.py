@@ -152,6 +152,9 @@ class RecordingProvider:
         self.provisions.append(values)
         if self.offline:
             raise ChannelProviderUnavailable()
+        if self._binding is not None:
+            raise ChannelProviderError("INVALID_TRANSITION", retryable=False,
+                detail="the DeviceRef generation already has a provision lifecycle")
         if values["operation_id"] in self._fenced:
             raise ChannelProviderError(
                 "INVALID_TRANSITION",
@@ -170,6 +173,8 @@ class RecordingProvider:
         return self._establish(values, NOW + timedelta(minutes=30))
 
     def _establish(self, values: dict, expiry) -> tuple[ChannelBinding, ...]:
+        if self._binding is not None and self._binding.operation_id != values["operation_id"]:
+            self._fenced.add(self._binding.operation_id)
         channels = _channel(int(expiry.timestamp() * 1000))
         self._binding = CurrentChannelBinding(
             operation_id=values["operation_id"],
@@ -546,3 +551,79 @@ async def test_a_stored_manifest_that_is_not_an_object_is_refused_not_pending(ca
 
     assert [record.levelno for record in caplog.records] == [logging.ERROR]
     assert "pending" not in caplog.records[0].getMessage()
+
+
+@pytest.mark.asyncio
+async def test_manifest_a_b_a_uses_new_assertion_but_retries_keep_same_operation() -> None:
+    class ChangingDeviceReader:
+        device = _device()
+
+        async def get(self, device_id: str):
+            return self.device
+
+    devices = ChangingDeviceReader()
+    provider = RecordingProvider()
+    reconcile = ReconcileChannelBinding(devices=devices, provider=provider, clock=Clock())
+    original = json.loads(devices.device.manifest_json)
+    for revision, title in enumerate(["BOX-3", "Changed", "BOX-3"], start=1):
+        devices.device = replace(devices.device, manifest=DeviceManifestDocument.from_declaration(
+            document={**original, "title": title}, declared_revision=revision,
+        ))
+        assert len(await reconcile.execute(device_ref=REF)) == 1
+        # Simulate losing the successful response. A read reuses the live binding.
+        assert len(await reconcile.execute(device_ref=REF)) == 1
+    operations = provider.provisions + provider.refreshes
+    assert len(provider.provisions) == 1
+    assert len(provider.refreshes) == 2
+    assert len({p["operation_id"] for p in operations}) == 3
+    assert operations[0]["manifest_revision"] == operations[2]["manifest_revision"]
+    assert provider.provisions[0]["operation_id"] in provider._fenced
+
+
+@pytest.mark.asyncio
+async def test_manifest_changes_against_real_provider_lifecycle(tmp_path) -> None:
+    contracts = pytest.importorskip("eidolon.channel_provider.contracts")
+    from eidolon.channel_provider.selection import AdapterRegistry
+    from eidolon.channel_provider.service import ChannelProviderService
+    from eidolon.channel_provider.store import ChannelProviderStore
+    from eidolon.channel_provider.tests.helpers import FakeAdapter
+
+    store = ChannelProviderStore(tmp_path / "provider.sqlite3")
+    backend = FakeAdapter(name="livekit", ttl_seconds=1800)
+    service = ChannelProviderService(store=store,
+        registry=AdapterRegistry([backend], preference=("livekit",)), agent_name="eidolon",
+        now_ms=lambda: int(NOW.timestamp() * 1000))
+    service.initialize()
+
+    async def transport(request):
+        payload = request.content.decode()
+        if request.url.path.endswith("/current"):
+            response = await service.current(contracts.CurrentRequest.parse(payload))
+        else:
+            response = await service.provision(contracts.ProvisionRequest.parse(payload))
+        return httpx.Response(200, content=response)
+
+    class ChangingDeviceReader:
+        device = _device()
+        async def get(self, device_id):
+            return self.device
+
+    devices = ChangingDeviceReader()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        provider = ChannelProviderHttpClient(contract_url="http://provider.test/v1", token="x" * 32, client=client)
+        reconcile = ReconcileChannelBinding(devices=devices, provider=provider, clock=Clock())
+        channel_ids = []
+        for revision, mode in enumerate(["full_duplex", "ptt", "half_duplex", "full_duplex"], start=1):
+            document = json.loads(_device().manifest_json)
+            document["properties"] = [{"name": "interaction_mode", "observable": False,
+                "writable": False, "schema": {"type": "string", "const": mode}}]
+            devices.device = replace(devices.device, manifest=DeviceManifestDocument.from_declaration(
+                document=document, declared_revision=revision))
+            channels = await reconcile.execute(device_ref=REF)
+            assert len(channels) == 1
+            assert await reconcile.execute(device_ref=REF) == channels
+            channel_ids.append(channels[0].channel_id)
+            assert len(store.active_provisions()) == 1
+        assert len(set(channel_ids)) == 1
+        assert len(backend.opened) == 4
+        assert backend.closed == []

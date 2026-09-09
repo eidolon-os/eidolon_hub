@@ -97,19 +97,19 @@ class ReconcileChannelBinding:
         try:
             now_ms = int(self._clock.now().timestamp() * 1000)
             current = await self._provider.current(device_ref=device_ref)
-            if current is None or current.manifest_revision != device.manifest_digest:
-                # No binding, or one established for a Manifest this device no
-                # longer asserts. Either way this begins a generation, and the
-                # Manifest digest in the id keeps a re-asserted Manifest from
-                # reusing the previous one's key.
+            if current is None:
+                # Only a new DeviceRef lifecycle begins with provision.
+                # A changed Manifest advances the existing Channel below.
                 return _unexpired(
                     await self._provider.provision(operation_id=provision_id, **values),
                     now_ms,
                 )
-            if current.expires_at_ms > now_ms:
+            if (current.expires_at_ms > now_ms
+                    and current.manifest_revision == device.manifest_digest):
                 return current.channels
             refresh_id = _operation_id(
-                "channel-refresh", current.operation_id, current.expires_at_ms
+                "channel-refresh", current.operation_id, current.expires_at_ms,
+                device.manifest_digest, device.manifest_declared_revision,
             )
             return _unexpired(
                 await self._provider.refresh(operation_id=refresh_id, **values), now_ms
