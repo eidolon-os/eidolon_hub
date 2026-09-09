@@ -150,8 +150,14 @@ class _ClaimReader:
     def __init__(self, projection: DeviceClaimProjection) -> None:
         self.projection = projection
 
-    async def get_exact(self, *, device_ref):
-        return self.projection if device_ref == self.projection.device_ref else None
+    async def get_claim(self, *, device_instance_id, owner_domain_id):
+        held = self.projection.device_ref
+        if (device_instance_id, owner_domain_id) != (
+            held.device_instance_id,
+            str(held.owner_domain_id),
+        ):
+            return None
+        return self.projection
 
 
 def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> None:

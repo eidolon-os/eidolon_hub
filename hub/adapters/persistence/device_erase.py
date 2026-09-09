@@ -221,23 +221,30 @@ class SqlDeviceEraseLedger:
             row = await session.get(DeviceEraseOperationRow, operation_id)
         return None if row is None else self._decode(row)
 
-    async def get_exact(self, *, device_ref: DeviceRef) -> DeviceClaimProjection | None:
+    async def get_claim(
+        self, *, device_instance_id: str, owner_domain_id: str
+    ) -> DeviceClaimProjection | None:
+        """The one Claim this Owner Domain holds for this device instance.
+
+        Looked up by identity, and answered at the generation the row records.
+        A device instance id is a digest of an operational key and a Claim row
+        is keyed on it, so there is exactly one Claim to find or none — the
+        generations were never part of finding it, only of agreeing with it,
+        and callers that need that agreement state it themselves.
+        """
+
         async with self._database.sessions() as session:
-            row = await session.get(AdmissionClaimRow, device_ref.device_instance_id)
-        if row is None or (
-            row.owner_domain_id,
-            row.owner_domain_generation,
-            row.claim_generation,
-            row.trust_epoch,
-        ) != (
-            str(device_ref.owner_domain_id),
-            device_ref.owner_domain_generation,
-            device_ref.claim_generation,
-            device_ref.trust_epoch,
-        ):
+            row = await session.get(AdmissionClaimRow, device_instance_id)
+        if row is None or row.owner_domain_id != owner_domain_id:
             return None
         return DeviceClaimProjection(
-            device_ref=device_ref,
+            device_ref=DeviceRef(
+                device_instance_id=row.device_instance_id,
+                owner_domain_id=row.owner_domain_id,
+                owner_domain_generation=row.owner_domain_generation,
+                claim_generation=row.claim_generation,
+                trust_epoch=row.trust_epoch,
+            ),
             state=row.state,
             operational_public_key_spki=row.operational_public_key_spki,
         )

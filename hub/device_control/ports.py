@@ -16,13 +16,24 @@ from .domain import DeviceEraseOperation
 
 @dataclass(frozen=True, slots=True)
 class DeviceClaimProjection:
+    """The Claim Admission holds, at the generation Admission holds it.
+
+    ``device_ref`` is the Authority's answer, never the caller's question. It
+    used to be whatever ref was looked up, which meant it could not disagree
+    with the request and therefore could not inform anybody of anything — while
+    the one case where it had something to say, a device a generation behind,
+    was the case that never reached it.
+    """
+
     device_ref: DeviceRef
     state: str
     operational_public_key_spki: str
 
 
 class DeviceClaimProjectionReader(Protocol):
-    async def get_exact(self, *, device_ref: DeviceRef) -> DeviceClaimProjection | None: ...
+    async def get_claim(
+        self, *, device_instance_id: str, owner_domain_id: str
+    ) -> DeviceClaimProjection | None: ...
 
 
 class DeviceEraseLedger(Protocol):

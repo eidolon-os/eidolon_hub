@@ -102,8 +102,14 @@ class _ClaimReader:
     def __init__(self, projection: DeviceClaimProjection | None) -> None:
         self._projection = projection
 
-    async def get_exact(self, *, device_ref):
-        if self._projection is None or device_ref != self._projection.device_ref:
+    async def get_claim(self, *, device_instance_id, owner_domain_id):
+        if self._projection is None:
+            return None
+        held = self._projection.device_ref
+        if (device_instance_id, owner_domain_id) != (
+            held.device_instance_id,
+            str(held.owner_domain_id),
+        ):
             return None
         return self._projection
 
