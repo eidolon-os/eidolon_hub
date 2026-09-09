@@ -733,6 +733,101 @@ async def test_revoked_body_rejoins_on_its_base_identity_at_generation_two(harne
         assert claim.hardware_identity_ref == identity_ref_for(operational)
 
 
+async def test_a_claimed_body_may_still_propose_itself_at_the_next_generation(harness):
+    """Holding a Claim is not, by itself, a refusal to hear a Body again.
+
+    The mobile client tells people the opposite — that a Host will not register
+    a device it already holds, so removal is the precondition for re-adding one
+    — and no rule here says that. `requires_fresh_presence` fences a Body the
+    Owner has already told no, a *rejected* Proposal or a *revoked* Claim; an
+    active Claim is not either of those, so a continuation on the same base
+    identity is heard, queued for the Owner, and on approval upserts the Claim
+    in place at the next generation.
+
+    That matters because it is the whole difference between a device whose ref
+    fell behind needing a removal — which drops the Companion binding an Owner
+    chose — and needing a re-enrollment the Owner simply approves. The
+    `device_instance_id` is a digest of the operational key and does not move,
+    so nothing keyed on the device survives less for having gone around again.
+    """
+
+    database, authority, _clock, voucher_signing_key = harness
+    _created, _decision, _collected, first_ref, _proof, _active = await collect_and_ack(harness)
+
+    handoff = ec.derive_private_key(0x123456789, ec.SECP256R1())
+    operational = ec.derive_private_key(0x234567891, ec.SECP256R1())
+    second_created = await authority.create_enrollment(
+        command_id="create_again",
+        correlation_id="rejoin_while_claimed",
+        payload=create_payload(
+            handoff,
+            operational,
+            voucher_signing_key,
+            voucher=continuation_proof(operational),
+            proof_scheme="enrolled-base-key-v1",
+        ),
+    )
+    await authority.decide_enrollment(
+        command_id="decide_again",
+        correlation_id="rejoin_while_claimed",
+        enrollment_id=second_created["enrollment_id"],
+        payload={
+            "expected_proposal_revision": 1,
+            "decision": "approve",
+            "target_owner_domain_id": "owner-domain_01",
+            "target_business_owner_id": "owner_01",
+            "target_space_id": None,
+            "reviewed_manifest_ref": second_created["reviewed_manifest_ref"],
+            "initial_assignment_intent": None,
+            "initial_capability_policy_refs": [],
+        },
+        context=actor(),
+    )
+    collection_document = claim_grant_collection_proof_document(
+        enrollment_id=second_created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=second_created["collection_challenge"],
+    )
+    second_collected = await authority.collect_claim_grant(
+        command_id="collect_again",
+        correlation_id="rejoin_while_claimed",
+        enrollment_id=second_created["enrollment_id"],
+        proposal_revision=1,
+        collection_challenge=second_created["collection_challenge"],
+        handoff_key_proof=sign(handoff, collection_document),
+    )
+    async with database.sessions() as session:
+        grant = await session.get(AdmissionGrantRow, second_collected["grant_id"])
+        second_ref = DeviceRef.model_validate_json(grant.device_ref_json)
+    ack_document = claim_grant_ack_proof_document(
+        enrollment_id=second_created["enrollment_id"],
+        grant_id=second_collected["grant_id"],
+        device_ref=second_ref,
+    )
+    await authority.ack_claim_grant(
+        command_id="ack_again",
+        correlation_id="rejoin_while_claimed",
+        enrollment_id=second_created["enrollment_id"],
+        grant_id=second_collected["grant_id"],
+        operational_key_proof=sign(operational, ack_document),
+        stored_claim_generation=second_ref.claim_generation,
+        stored_trust_epoch=second_ref.trust_epoch,
+    )
+
+    # Same Body, same instance id, one Claim row, next generation.
+    assert second_ref.device_instance_id == first_ref.device_instance_id
+    assert second_ref.claim_generation == first_ref.claim_generation + 1
+    async with database.sessions() as session:
+        assert await session.scalar(select(func.count()).select_from(AdmissionClaimRow)) == 1
+        claim = await session.get(AdmissionClaimRow, first_ref.device_instance_id)
+    assert (claim.state, claim.claim_generation) == ("active", second_ref.claim_generation)
+    # And the ref the Body was carrying a moment ago now names nothing. This is
+    # the state the Host answered 409 to forever; Device Control corrects it on
+    # the next configuration pull rather than requiring the Owner to remove the
+    # device to get out of it.
+    assert first_ref.claim_generation != claim.claim_generation
+
+
 async def test_unknown_base_identity_cannot_self_enroll_with_continuation(harness):
     """A self-signed continuation is possession evidence, not standing.
 
