@@ -627,3 +627,29 @@ async def test_manifest_changes_against_real_provider_lifecycle(tmp_path) -> Non
         assert len(set(channel_ids)) == 1
         assert len(backend.opened) == 4
         assert backend.closed == []
+        # Runtime input invalidation crosses the real Provider HTTP contract,
+        # while the existing binding's token is still within its lifetime.
+        backend.binding_current = lambda _handle: False
+        refreshed = await reconcile.execute(device_ref=REF)
+        assert refreshed[0].channel_id == channel_ids[-1]
+        assert len(backend.opened) == 5
+        assert backend.closed == []
+        backend.binding_current = lambda _handle: True
+        assert await reconcile.execute(device_ref=REF) == refreshed
+        assert len(backend.opened) == 5
+
+
+
+@pytest.mark.asyncio
+async def test_changed_runtime_routes_refresh_before_credential_expiry() -> None:
+    provider = RecordingProvider()
+    reconcile = ReconcileChannelBinding(devices=DeviceReader(), provider=provider, clock=Clock())
+    await reconcile.execute(device_ref=REF)
+    first_operation = provider._binding.operation_id
+    provider._binding = provider._binding.model_copy(update={"refresh_required": True})
+    await reconcile.execute(device_ref=REF)
+    assert len(provider.provisions) == 1
+    assert len(provider.refreshes) == 1
+    assert provider._binding.operation_id != first_operation
+    await reconcile.execute(device_ref=REF)
+    assert len(provider.refreshes) == 1

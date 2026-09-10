@@ -104,7 +104,7 @@ class ReconcileChannelBinding:
                     await self._provider.provision(operation_id=provision_id, **values),
                     now_ms,
                 )
-            if (current.expires_at_ms > now_ms
+            if (not current.refresh_required and current.expires_at_ms > now_ms
                     and current.manifest_revision == device.manifest_digest):
                 return current.channels
             refresh_id = _operation_id(

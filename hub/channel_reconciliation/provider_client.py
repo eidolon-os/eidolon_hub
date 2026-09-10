@@ -34,6 +34,7 @@ class _ProvisionResponse(_WireModel):
 class _CurrentResponse(_WireModel):
     operation: Literal["channel.current-device"]
     binding: _ProvisionResponse | None
+    refresh_required: bool = False
 
 
 class _RevokeResponse(_WireModel):
@@ -94,6 +95,7 @@ class ChannelProviderHttpClient:
             operation_id=binding.operation_id,
             manifest_revision=binding.manifest_revision,
             channels=binding.channels,
+            refresh_required=response.refresh_required,
         )
 
     async def provision(self, **values) -> tuple[ChannelBinding, ...]:

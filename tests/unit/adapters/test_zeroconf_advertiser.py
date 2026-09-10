@@ -141,3 +141,85 @@ def test_a_routable_address_is_still_advertised_when_it_is_the_only_one() -> Non
         module.ifaddr, "get_adapters", return_value=[_Adapter([_IP("10.0.0.4")])]
     ):
         assert module.interface_addresses() == ("10.0.0.4",)
+
+
+async def test_network_transport_replaced_on_address_or_interface_change() -> None:
+    from hub.adapters.discovery import zeroconf as m
+    instances = []
+    def construct(**_kwargs):
+        instance = MagicMock()
+        for method in ("async_register_service", "async_unregister_service", "async_close"):
+            setattr(instance, method, AsyncMock())
+        instances.append(instance)
+        return instance
+    with patch.object(m, "AsyncZeroconf", side_effect=construct), patch.object(
+        m, "interface_snapshot", return_value=(("wlan0", 3, "192.168.1.37", 24),)
+    ) as snapshot:
+        a = _dynamic_advertiser()
+        await a.start()
+        await a.refresh_interfaces()
+        assert len(instances) == 1
+        snapshot.return_value = (("wlan0", 3, "10.183.24.39", 24),)
+        await a.refresh_interfaces()
+        assert len(instances) == 2
+        instances[0].async_close.assert_awaited_once()
+        assert a._info.parsed_addresses() == ["10.183.24.39"]
+        snapshot.return_value = (("wlan1", 4, "10.183.24.39", 24),)
+        await a.refresh_interfaces()
+        assert len(instances) == 3
+        await a.stop()
+
+
+def _dynamic_advertiser():
+    return ZeroconfAuthorityCandidateAdvertiser(
+        advertisement_id="test", service_type="_eidolon-owner._tcp.local.",
+        service_name="test._eidolon-owner._tcp.local.", hostname="test",
+        port=9443, owner_domain_id="test",
+        owner_domain_descriptor_uri="https://test.local:9443/descriptor", refresh_seconds=0,
+    )
+
+
+async def test_no_network_and_registration_failure_recover_without_hub_restart() -> None:
+    from hub.adapters.discovery import zeroconf as m
+    with patch.object(m, "AsyncZeroconf") as constructor, patch.object(
+        m, "interface_snapshot", return_value=()
+    ) as snapshot:
+        broken, healthy = MagicMock(), MagicMock()
+        for instance in (broken, healthy):
+            instance.async_register_service = AsyncMock()
+            instance.async_unregister_service = AsyncMock()
+            instance.async_close = AsyncMock()
+        broken.async_register_service.side_effect = OSError("interface lost")
+        constructor.side_effect = [broken, healthy]
+        a = _dynamic_advertiser()
+        await a.start()
+        constructor.assert_not_called()
+        snapshot.return_value = (("wlan0", 3, "10.0.0.2", 24),)
+        import pytest
+        with pytest.raises(OSError):
+            await a.refresh_interfaces()
+        broken.async_close.assert_awaited_once()
+        assert a._aiozc is None
+        await a.refresh_interfaces()
+        assert a._aiozc is healthy
+        snapshot.return_value = ()
+        await a.refresh_interfaces()
+        healthy.async_close.assert_awaited_once()
+        assert a._info is None
+        await a.stop()
+
+
+async def test_change_during_registration_is_not_adopted() -> None:
+    from hub.adapters.discovery import zeroconf as m
+    instance = MagicMock()
+    instance.async_register_service = AsyncMock()
+    instance.async_unregister_service = AsyncMock()
+    instance.async_close = AsyncMock()
+    with patch.object(m, "AsyncZeroconf", return_value=instance), patch.object(
+        m, "interface_snapshot", side_effect=[(("wlan0", 3, "10.0.0.2", 24),), ()]
+    ):
+        a = _dynamic_advertiser()
+        await a.start()
+        assert a._aiozc is None
+        instance.async_close.assert_awaited_once()
+        await a.stop()

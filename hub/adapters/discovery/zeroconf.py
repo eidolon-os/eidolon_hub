@@ -14,9 +14,9 @@ from zeroconf.asyncio import AsyncZeroconf
 logger = logging.getLogger(__name__)
 
 
-def interface_addresses() -> tuple[str, ...]:
-    """Return usable IPv4/IPv6 addresses from every active interface."""
-    values: set[str] = set()
+def interface_snapshot() -> tuple[tuple[str, int, str, int], ...]:
+    """Addresses and their interface identities from one OS observation."""
+    values = set()
     for adapter in ifaddr.get_adapters():
         for item in adapter.ips:
             raw = item.ip[0] if isinstance(item.ip, tuple) else item.ip
@@ -24,19 +24,17 @@ def interface_addresses() -> tuple[str, ...]:
                 address = ipaddress.ip_address(raw.split("%", 1)[0])
             except ValueError:
                 continue
-            if address.is_loopback or address.is_unspecified or address.is_multicast:
+            if (address.is_loopback or address.is_unspecified or
+                    address.is_multicast or address.is_link_local):
                 continue
-            # A link-local address describes one cable, not a network a phone
-            # can be sent to. This held for IPv6 from the start; the IPv4 half
-            # was missing, so a Host with a second NIC — an operator's direct
-            # wire, or simply Ethernet beside Wi-Fi — advertised 169.254/16.
-            # Sorted as text that address even precedes the real one, so the
-            # Hub told every device on the LAN to reach it somewhere they
-            # cannot route to.
-            if address.is_link_local:
-                continue
-            values.add(str(address))
-    return tuple(sorted(values, key=lambda value: (ipaddress.ip_address(value).version, value)))
+            values.add((getattr(adapter, "name", ""), getattr(adapter, "index", 0),
+                        str(address), getattr(item, "network_prefix", 0)))
+    return tuple(sorted(values))
+
+
+def interface_addresses() -> tuple[str, ...]:
+    return tuple(sorted({entry[2] for entry in interface_snapshot()},
+                        key=lambda value: (ipaddress.ip_address(value).version, value)))
 
 
 class ZeroconfAuthorityCandidateAdvertiser:
@@ -67,6 +65,9 @@ class ZeroconfAuthorityCandidateAdvertiser:
         self._aiozc: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
         self._refresh_task: asyncio.Task[None] | None = None
+        self._running = False
+        self._lock = asyncio.Lock()
+        self._observation: object = None
 
     def _build_info(self, addresses: tuple[str, ...]) -> ServiceInfo:
         if not addresses:
@@ -85,22 +86,15 @@ class ZeroconfAuthorityCandidateAdvertiser:
         )
 
     async def start(self) -> None:
-        if self._aiozc is not None:
+        if self._running:
             return
-        addresses = self._addresses or interface_addresses()
-        aiozc = AsyncZeroconf(
-            interfaces=InterfaceChoice.All,
-            ip_version=IPVersion.All,
-        )
-        info = self._build_info(addresses)
+        self._running = True
         try:
-            await aiozc.async_register_service(info, allow_name_change=False)
-        except Exception:
-            await aiozc.async_close()
-            raise
-        self._aiozc = aiozc
-        self._info = info
-        if self._addresses is None and self._refresh_seconds > 0:
+            await self.refresh_interfaces()
+        except Exception as exc:
+            # Hub's local APIs must survive startup without an available LAN.
+            logger.warning("mDNS startup deferred reason=%s", type(exc).__name__)
+        if self._refresh_seconds > 0:
             self._refresh_task = asyncio.create_task(
                 self._refresh_loop(), name=f"zeroconf-refresh:{self._advertisement_id}"
             )
@@ -109,38 +103,57 @@ class ZeroconfAuthorityCandidateAdvertiser:
         while True:
             try:
                 await asyncio.sleep(self._refresh_seconds)
-                addresses = interface_addresses()
-                if self._info is not None and set(self._info.parsed_addresses()) != set(addresses):
-                    await self.refresh_interfaces()
+                await self.refresh_interfaces()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                # Interface churn must not silently kill the long-lived
-                # advertiser. Payloads and descriptor URIs are intentionally
-                # omitted from this operational log.
                 logger.warning("mDNS interface refresh failed reason=%s", type(exc).__name__)
 
+    async def _close_network(self) -> None:
+        aiozc, info = self._aiozc, self._info
+        self._aiozc = self._info = None
+        self._observation = None
+        if aiozc is not None:
+            try:
+                if info is not None:
+                    await aiozc.async_unregister_service(info)
+            finally:
+                await aiozc.async_close()
+
     async def refresh_interfaces(self) -> None:
-        if self._aiozc is None:
-            raise RuntimeError("zeroconf advertiser is not started")
-        addresses = self._addresses or interface_addresses()
-        updated = self._build_info(addresses)
-        await self._aiozc.async_update_service(updated)
-        self._info = updated
+        async with self._lock:
+            if not self._running:
+                return
+            snapshot = interface_snapshot() if self._addresses is None else self._addresses
+            addresses = (tuple(sorted({entry[2] for entry in snapshot}))
+                         if self._addresses is None else self._addresses)
+            if self._aiozc is not None and snapshot == self._observation:
+                return
+            # Updating ServiceInfo leaves the old per-interface sockets and
+            # multicast memberships alive. Their owner must be replaced too.
+            await self._close_network()
+            if not addresses:
+                return
+            info = self._build_info(addresses)
+            aiozc = AsyncZeroconf(interfaces=InterfaceChoice.All, ip_version=IPVersion.All)
+            try:
+                await aiozc.async_register_service(info, allow_name_change=False)
+                # Do not adopt a transport created across another network change.
+                if self._addresses is None and interface_snapshot() != snapshot:
+                    await aiozc.async_unregister_service(info)
+                    await aiozc.async_close()
+                    return
+            except BaseException:
+                await aiozc.async_close()
+                raise
+            self._aiozc, self._info, self._observation = aiozc, info, snapshot
 
     async def stop(self) -> None:
+        self._running = False
         task, self._refresh_task = self._refresh_task, None
         if task is not None:
             task.cancel()
             with suppress(asyncio.CancelledError):
                 await task
-        aiozc, info = self._aiozc, self._info
-        self._aiozc = None
-        self._info = None
-        if aiozc is None:
-            return
-        try:
-            if info is not None:
-                await aiozc.async_unregister_service(info)
-        finally:
-            await aiozc.async_close()
+        async with self._lock:
+            await self._close_network()

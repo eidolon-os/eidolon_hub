@@ -39,6 +39,8 @@ class CurrentChannelBinding(BaseModel):
     manifest_revision: str = Field(min_length=1, max_length=128)
     channels: tuple[ChannelBinding, ...] = Field(min_length=1, max_length=1)
 
+    refresh_required: bool = False
+
     @property
     def expires_at_ms(self) -> int:
         return self.channels[0].expires_at_ms
