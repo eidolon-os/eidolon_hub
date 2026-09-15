@@ -230,6 +230,10 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
             "revision": 4,
             "digest": _directory_device().manifest_digest,
         },
+        # And from the same answer, what it is allowed to present. No Owner has
+        # set one on this device, and saying so is not the same as leaving the
+        # device to guess: null is the Authority stating it holds no policy.
+        "output_policy": None,
         "channels": [
             {
                 "channel_id": "channel_01",

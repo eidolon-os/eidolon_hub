@@ -5,10 +5,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from pydantic import BaseModel, ConfigDict, Field
 
 from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 
 
 class ChannelBinding(BaseModel):

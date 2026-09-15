@@ -8,8 +8,6 @@ import logging
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
-
 from hub.contracts.bindings.device import (
     AssertDeviceManifest,
     DeviceLocalEraseAck,
@@ -22,6 +20,7 @@ from hub.contracts.bindings.device import (
     verify_device_erase_ack,
     verify_p256_signature,
 )
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 from hub.domain.devices.entities import ManagedDevice
 from hub.domain.devices.manifest import DeviceManifestDocument
 from hub.ports.identity import Clock, IdGenerator

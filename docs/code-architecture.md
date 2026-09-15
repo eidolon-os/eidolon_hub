@@ -108,6 +108,7 @@ Composition Root 是唯一具体实现选择位置。Router 不读取 `app.state
 | `contracts/bindings/common.py` | 严格 Pydantic base、JSON value 和 Wire Identity。 |
 | `contracts/bindings/device.py` | Manifest、Lifecycle、Directory/Page、Approval/Revocation、Event DTO。 |
 | `contracts/bindings/onboarding.py` | Descriptor、Enrollment/Receipt、Handoff Request/Outcome DTO。 |
+| `contracts/bindings/presentation.py` | Device Output Policy、Output Selection 与 Set 命令 DTO。 |
 | `contracts/bindings/channel.py` | Provider Provision/Revoke 与通用 Assignment DTO。 |
 | `contracts/mappers.py` | Wire DTO 与 Domain Entity 显式转换、Manifest revision 计算。 |
 

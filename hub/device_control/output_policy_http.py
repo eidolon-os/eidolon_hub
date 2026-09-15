@@ -2,11 +2,11 @@
 
 from collections.abc import Callable
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from fastapi import APIRouter, HTTPException, Request
 
 from hub.admission.domain import AdmissionProblem
 from hub.admission.http import ActorProvider, problem_response
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 from hub.ports.repositories import ConcurrentDeviceMutationError
 
 from .output_policy import OutputPolicyConflict, SetOutputPolicy, UpdateDeviceOutputPolicy

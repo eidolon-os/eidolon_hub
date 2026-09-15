@@ -5,11 +5,10 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
-from eidolon_sdk.biz.presentation.device import SetDeviceOutputPolicy as SetOutputPolicy
-
 from hub.admission.domain import ActorContext
 from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
+from hub.contracts.bindings.presentation import SetDeviceOutputPolicy as SetOutputPolicy
 from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.identity import Clock, IdGenerator
 from hub.ports.management_events import DeviceManagementEventRecord

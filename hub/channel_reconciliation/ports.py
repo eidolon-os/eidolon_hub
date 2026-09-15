@@ -6,9 +6,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
-
 from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 from hub.domain.devices.entities import ManagedDevice
 
 from .domain import ChannelBinding, ChannelRevocationDelivery, CurrentChannelBinding

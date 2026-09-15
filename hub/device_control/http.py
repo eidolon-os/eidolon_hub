@@ -6,7 +6,6 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -29,6 +28,7 @@ from hub.contracts.bindings.device import (
     DeviceRef,
     ManifestRef,
 )
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 
 from .application import (
     AcceptDeviceManifest,

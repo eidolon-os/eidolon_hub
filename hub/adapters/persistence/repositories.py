@@ -6,7 +6,6 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +16,7 @@ from hub.adapters.persistence.models import (
     DeviceManagementEventRow,
     DeviceRow,
 )
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 from hub.domain.devices.entities import DeviceLifecycleState, ManagedDevice
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument

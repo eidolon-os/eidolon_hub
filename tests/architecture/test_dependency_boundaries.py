@@ -44,6 +44,7 @@ def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
         Path("hub/contracts/bindings/admission.py"),
         Path("hub/contracts/bindings/onboarding.py"),
         Path("hub/contracts/bindings/device.py"),
+        Path("hub/contracts/bindings/presentation.py"),
         # The same rule one step out from the wire: a fact the Host publishes
         # about itself, read the one way it is defined. Which of this machine's
         # links are the operator's is declared once by Ops and read identically

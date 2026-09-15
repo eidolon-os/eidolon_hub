@@ -6,9 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
-
 from hub.contracts.bindings.device import DeviceRef, OwnerDomainId
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
 

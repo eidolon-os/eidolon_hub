@@ -7,10 +7,10 @@ from collections.abc import Mapping
 from typing import Literal
 
 import httpx
-from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.presentation import DeviceOutputPolicy
 
 from .domain import (
     ChannelBinding,
