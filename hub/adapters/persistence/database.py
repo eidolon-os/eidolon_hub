@@ -205,22 +205,58 @@ class HubDatabase:
             schema = inspect(connection)
             actual_tables = set(schema.get_table_names())
 
+        # What this compares for, and why the two directions are not the same
+        # thing. A database this Hub cannot use is one that is *missing*
+        # something it needs — a legacy or foreign lineage, which is what the
+        # RestoreAuthority and ResetAuthority workflows exist for. A database
+        # that has *more* than this Hub knows about is a different situation
+        # with a different right answer: a newer release ran here and added
+        # something, and then the release was rolled back.
+        #
+        # Treating those alike made a reversible cutover a promise the
+        # deployment could not keep. On 2026-09-15 a release whose Hub added
+        # one nullable column to hub_device_directory_v1 activated, migrated
+        # this file, and was rolled back when an unrelated readiness check
+        # timed out. The rollback restored the code, because that is a symlink,
+        # and could not restore the schema, because that is not. The Host came
+        # back on its previous release with a Hub that refused to start at all,
+        # and the restore that was supposed to protect it had already run.
+        #
+        # So the rule is what this code actually depends on: everything it
+        # reads must be there, and nothing it does not know about may refuse
+        # its writes. A column it never names costs it nothing — unless the
+        # column is mandatory and has no default, in which case every INSERT
+        # this Hub makes would fail on it. A unique index it never declared is
+        # the same hazard by another route: it can reject a row this Hub
+        # considers valid. Those two stay fatal. Anything else additive is
+        # invisible from here and is allowed to be.
         problems: list[str] = []
-        if actual_tables != expected_tables:
-            missing = sorted(expected_tables - actual_tables)
-            unexpected = sorted(actual_tables - expected_tables)
-            problems.append(f"tables missing={missing}, unexpected={unexpected}")
+        missing_expected_tables = sorted(expected_tables - actual_tables)
+        if missing_expected_tables:
+            problems.append(f"tables missing={missing_expected_tables}")
 
         for table_name in sorted(actual_tables & expected_tables):
             table = Base.metadata.tables[table_name]
             reflected_columns = schema.get_columns(table_name)
             actual_columns = {value["name"] for value in reflected_columns}
             expected_columns = set(table.columns.keys())
-            if actual_columns != expected_columns:
-                missing = sorted(expected_columns - actual_columns)
-                unexpected = sorted(actual_columns - expected_columns)
-                problems.append(f"{table_name} columns missing={missing}, unexpected={unexpected}")
+            missing_columns = sorted(expected_columns - actual_columns)
+            if missing_columns:
+                problems.append(f"{table_name} columns missing={missing_columns}")
                 continue
+
+            unwritable = sorted(
+                value["name"]
+                for value in reflected_columns
+                if value["name"] not in expected_columns
+                and not value["nullable"]
+                and value.get("default") is None
+            )
+            if unwritable:
+                problems.append(
+                    f"{table_name} has columns this release cannot write and cannot "
+                    f"leave empty: {unwritable}"
+                )
 
             actual_contract = {
                 value["name"]: (
@@ -229,6 +265,7 @@ class HubDatabase:
                     bool(value["primary_key"]),
                 )
                 for value in reflected_columns
+                if value["name"] in expected_columns
             }
             expected_contract = {
                 column.name: (
@@ -257,8 +294,21 @@ class HubDatabase:
                 )
                 for index in table.indexes
             }
-            if actual_indexes != expected_indexes:
-                problems.append(f"{table_name} indexes differ")
+            missing_indexes = sorted(
+                name for name, _columns, _unique in expected_indexes - actual_indexes
+            )
+            if missing_indexes:
+                problems.append(f"{table_name} indexes missing={missing_indexes}")
+            rejecting_indexes = sorted(
+                name
+                for name, _columns, unique in actual_indexes - expected_indexes
+                if unique
+            )
+            if rejecting_indexes:
+                problems.append(
+                    f"{table_name} has unique indexes this release did not declare and "
+                    f"could be refused by: {rejecting_indexes}"
+                )
 
         if problems:
             raise RuntimeError(

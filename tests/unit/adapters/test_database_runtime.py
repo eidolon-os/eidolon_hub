@@ -426,3 +426,151 @@ def test_the_directory_column_is_still_named_device_kind() -> None:
     column = DeviceRow.__table__.c["device_kind"]
     assert DeviceRow.manifest_id.property.columns[0] is column
     assert "manifest_id" not in DeviceRow.__table__.c
+
+
+async def _established(tmp_path, name: str = "established.sqlite3") -> HubDatabase:
+    """A database this Hub has already made its own, as a Host's would be."""
+
+    database = HubDatabase.sqlite(tmp_path / name)
+    await database.initialize_schema()
+    await database.close()
+    return HubDatabase.sqlite(tmp_path / name)
+
+
+async def test_a_column_a_newer_release_left_behind_does_not_stop_this_one(tmp_path) -> None:
+    """The exact shape of the 2026-09-15 outage, and it must start.
+
+    A release whose Hub added one nullable column to hub_device_directory_v1
+    activated on a Host, migrated this file, and was rolled back when an
+    unrelated readiness check timed out. Rolling back restored the code,
+    because that is a symlink, and could not restore the schema, because that
+    is not — so the Host came back on its previous release with a Hub that
+    would not start at all, and the health-gate restore meant to protect it
+    had already run. A reversible cutover is not reversible while any additive
+    migration is one-way.
+
+    The column that did it was `output_policy_json`, which this release now
+    declares itself, so the name used here is one no release declares. What is
+    pinned is the shape — a database holding one nullable column this ORM does
+    not know — and that is what every additive migration leaves behind for the
+    release it replaced. Nothing here reads it, so nothing here is harmed.
+    """
+
+    database = await _established(tmp_path)
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "ALTER TABLE hub_device_directory_v1 "
+                    "ADD COLUMN added_by_a_newer_release TEXT"
+                )
+            )
+
+        await database.initialize_schema()
+
+        async with database.engine.connect() as connection:
+            columns = {
+                row[1]
+                for row in await connection.execute(
+                    text("PRAGMA table_info(hub_device_directory_v1)")
+                )
+            }
+        # Left exactly as found: this release does not own that column and has
+        # no business dropping what a newer one is still using.
+        assert "added_by_a_newer_release" in columns
+    finally:
+        await database.close()
+
+
+async def test_a_column_this_release_can_neither_fill_nor_skip_is_refused(tmp_path) -> None:
+    """Tolerating the additive case must not tolerate an unwritable table.
+
+    A mandatory column with no default is one every INSERT this Hub makes
+    would fail on, one row at a time and long after startup — a worse way to
+    find out than refusing here.
+    """
+
+    declared = "mandated_by_a_newer_release TEXT NOT NULL DEFAULT 'x'"
+    unwritable = "mandated_by_a_newer_release TEXT NOT NULL"
+    database = await _established(tmp_path)
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text("ALTER TABLE hub_device_directory_v1 ADD COLUMN " + declared)
+            )
+            # SQLite will not add a NOT NULL column with no default at all, so
+            # the unwritable case is built rather than declared: keep the
+            # constraint and take the default away.
+            await connection.execute(text("PRAGMA writable_schema=ON"))
+            await connection.execute(
+                text(
+                    "UPDATE sqlite_master SET sql=replace(sql, :declared, :unwritable) "
+                    "WHERE type='table' AND name='hub_device_directory_v1'"
+                ),
+                {"declared": declared, "unwritable": unwritable},
+            )
+            await connection.execute(text("PRAGMA writable_schema=OFF"))
+        # SQLite parses a schema once per connection, so the rewritten
+        # definition is only visible to one that has not read it yet — which
+        # is also the situation on a Host, where the migration and the start
+        # that meets it are different processes.
+        await database.close()
+        database = HubDatabase.sqlite(tmp_path / "established.sqlite3")
+
+        with pytest.raises(RuntimeError, match="cannot write and cannot leave empty"):
+            await database.initialize_schema()
+    finally:
+        await database.close()
+
+
+async def test_a_unique_index_this_release_never_declared_is_refused(tmp_path) -> None:
+    """The same hazard by another route: it can refuse a row this Hub allows."""
+
+    database = await _established(tmp_path)
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX newer_release_uniqueness "
+                    "ON hub_device_directory_v1 (display_name)"
+                )
+            )
+
+        with pytest.raises(RuntimeError, match="unique indexes this release did not declare"):
+            await database.initialize_schema()
+    finally:
+        await database.close()
+
+
+async def test_an_index_a_newer_release_added_for_speed_is_not_a_problem(tmp_path) -> None:
+    """A non-unique index refuses nothing, so it is invisible from here."""
+
+    database = await _established(tmp_path)
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "CREATE INDEX newer_release_lookup "
+                    "ON hub_device_directory_v1 (display_name)"
+                )
+            )
+
+        await database.initialize_schema()
+    finally:
+        await database.close()
+
+
+async def test_a_column_this_release_needs_is_still_missing_and_still_fatal(tmp_path) -> None:
+    """The control. Tolerating addition must not become tolerating absence."""
+
+    database = await _established(tmp_path)
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text("ALTER TABLE hub_device_directory_v1 DROP COLUMN display_name")
+            )
+
+        with pytest.raises(RuntimeError, match="columns missing="):
+            await database.initialize_schema()
+    finally:
+        await database.close()
