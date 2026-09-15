@@ -43,6 +43,8 @@ from hub.device_control.http import (
     DeviceEraseHttpServices,
     create_device_erase_router,
 )
+from hub.device_control.output_policy import UpdateDeviceOutputPolicy
+from hub.device_control.output_policy_http import create_output_policy_router
 from hub.interfaces.http.routers.device_management import (
     DeviceManagementHttpServices,
     create_device_management_router,
@@ -62,6 +64,7 @@ class ComposedHttpRuntime:
     admission: AdmissionAuthority
     commissioning_ready: bool
     admission_actor: JwtAdmissionActorProvider
+    output_policy: UpdateDeviceOutputPolicy
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
@@ -178,6 +181,12 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 admission=admission,
                 commissioning_ready=resources.commissioning_ready,
                 admission_actor=JwtAdmissionActorProvider(secret=secrets.management_jwt),
+                output_policy=UpdateDeviceOutputPolicy(
+                    devices=resources.repositories.devices,
+                    mutations=resources.repositories.device_mutations,
+                    clock=resources.clock, ids=resources.ids,
+                    on_changed=lambda ref: device_erase.channel_binding.execute(device_ref=ref),
+                ),
             )
             yield
         finally:
@@ -239,6 +248,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
     app.include_router(
         create_device_management_router(services=lambda: require_runtime().management)
     )
+    app.include_router(create_output_policy_router(
+        service=lambda: require_runtime().output_policy, actor_provider=admission_actor,
+    ))
     app.include_router(create_device_erase_router(services=lambda: require_runtime().device_erase))
 
     @app.get("/health")

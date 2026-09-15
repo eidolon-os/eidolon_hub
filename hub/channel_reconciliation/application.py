@@ -74,6 +74,7 @@ class ReconcileChannelBinding:
             "channel-provision",
             device_ref.model_dump_json(),
             device.manifest_digest,
+            device.output_policy.revision if device.output_policy else 0,
         )
         values = {
             "device_ref": device_ref,
@@ -84,6 +85,7 @@ class ReconcileChannelBinding:
             # The Provider keys its binding on this; a re-asserted Manifest
             # therefore invalidates the binding by changing the digest.
             "manifest_revision": device.manifest_digest,
+            **({"output_policy": device.output_policy} if device.output_policy else {}),
         }
         # Read before deciding. ``provision`` begins a generation and
         # ``refresh`` advances one, and only the Provider knows which is
@@ -105,11 +107,13 @@ class ReconcileChannelBinding:
                     now_ms,
                 )
             if (not current.refresh_required and current.expires_at_ms > now_ms
-                    and current.manifest_revision == device.manifest_digest):
+                    and current.manifest_revision == device.manifest_digest
+                    and current.output_policy == device.output_policy):
                 return current.channels
             refresh_id = _operation_id(
                 "channel-refresh", current.operation_id, current.expires_at_ms,
                 device.manifest_digest, device.manifest_declared_revision,
+                device.output_policy.revision if device.output_policy else 0,
             )
             return _unexpired(
                 await self._provider.refresh(operation_id=refresh_id, **values), now_ms

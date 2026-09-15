@@ -6,6 +6,7 @@ import logging
 from dataclasses import dataclass
 from typing import Callable
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from fastapi import APIRouter, Header, HTTPException, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -118,6 +119,7 @@ class DeviceConfigurationResult(_AdapterModel):
     # Which of this device's own declarations the Authority currently holds, so
     # a device with something to correct knows what it is correcting.
     manifest: ManifestRef | None = None
+    output_policy: DeviceOutputPolicy | None = None
     channels: tuple[ChannelBinding, ...] = Field(default=(), max_length=1)
 
 
@@ -243,6 +245,7 @@ def create_device_erase_router(
             device_ref=claim.device_ref,
             lifecycle_state="approved" if claim.state == "active" else "revoked",
             manifest=configuration.manifest,
+            output_policy=configuration.output_policy,
             channels=channels,
         )
 

@@ -182,6 +182,11 @@ class HubDatabase:
         directory_table = "hub_device_directory_v1"
         if directory_table in actual_tables:
             directory_columns = {value["name"] for value in schema.get_columns(directory_table)}
+            if "output_policy_json" not in directory_columns:
+                connection.exec_driver_sql(
+                    "ALTER TABLE hub_device_directory_v1 ADD COLUMN output_policy_json TEXT"
+                )
+                schema = inspect(connection)
             if "manifest_declared_revision" not in directory_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE hub_device_directory_v1 "

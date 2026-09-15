@@ -37,6 +37,7 @@ class DeviceRow(Base):
     # attribute every reader here goes through says what it is.
     manifest_id: Mapped[str] = mapped_column("device_kind", String(255), index=True)
     manifest_json: Mapped[str] = mapped_column(Text)
+    output_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     # The content digest, which identifies which document this is. Named for
     # the wire field the Channel Provider keys its binding cache on.
     manifest_revision: Mapped[str] = mapped_column(String(80))
@@ -187,6 +188,7 @@ class AdmissionProposalRow(Base):
     manifest_revision: Mapped[int] = mapped_column(Integer)
     manifest_digest: Mapped[str] = mapped_column(String(71))
     manifest_json: Mapped[str] = mapped_column(Text)
+    output_policy_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     handoff_public_key_spki: Mapped[str] = mapped_column(Text)
     handoff_key_id: Mapped[str] = mapped_column(String(71))
     operational_public_key_spki: Mapped[str] = mapped_column(Text)

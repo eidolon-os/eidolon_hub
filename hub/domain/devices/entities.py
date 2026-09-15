@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
+
 from hub.contracts.bindings.device import DeviceRef, OwnerDomainId
 from hub.domain.devices.identity import DeviceIdentity
 from hub.domain.devices.manifest import DeviceManifestDocument
@@ -40,6 +42,7 @@ class ManagedDevice:
     lifecycle_state: DeviceLifecycleState = DeviceLifecycleState.APPROVED
     last_management_request_id: str = ""
     last_management_fingerprint: str = ""
+    output_policy: DeviceOutputPolicy | None = None
 
     def __post_init__(self) -> None:
         if not self.manifest_id.strip():

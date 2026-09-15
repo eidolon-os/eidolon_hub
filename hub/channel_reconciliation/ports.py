@@ -6,6 +6,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import Protocol
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
+
 from hub.contracts.bindings.device import DeviceRef
 from hub.domain.devices.entities import ManagedDevice
 
@@ -25,6 +27,7 @@ class ChannelBindingProvider(Protocol):
         manifest_id: str,
         manifest: Mapping[str, object],
         manifest_revision: str,
+        output_policy: DeviceOutputPolicy | None = None,
     ) -> tuple[ChannelBinding, ...]: ...
 
     async def refresh(
@@ -37,6 +40,7 @@ class ChannelBindingProvider(Protocol):
         manifest_id: str,
         manifest: Mapping[str, object],
         manifest_revision: str,
+        output_policy: DeviceOutputPolicy | None = None,
     ) -> tuple[ChannelBinding, ...]: ...
 
     async def revoke(

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from pydantic import BaseModel, ConfigDict, Field
 
 from hub.contracts.bindings.device import DeviceRef
@@ -40,6 +41,7 @@ class CurrentChannelBinding(BaseModel):
     channels: tuple[ChannelBinding, ...] = Field(min_length=1, max_length=1)
 
     refresh_required: bool = False
+    output_policy: DeviceOutputPolicy | None = None
 
     @property
     def expires_at_ms(self) -> int:

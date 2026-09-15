@@ -8,6 +8,8 @@ import logging
 from dataclasses import dataclass, replace
 from datetime import timedelta
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
+
 from hub.contracts.bindings.device import (
     AssertDeviceManifest,
     DeviceLocalEraseAck,
@@ -79,6 +81,7 @@ class DeviceConfiguration:
 
     claim: DeviceClaimProjection
     manifest: ManifestRef | None
+    output_policy: DeviceOutputPolicy | None = None
 
 
 class PullDeviceConfiguration:
@@ -146,7 +149,8 @@ class PullDeviceConfiguration:
                 digest=device.manifest_digest,
             )
         )
-        return DeviceConfiguration(claim=claim, manifest=manifest)
+        return DeviceConfiguration(claim=claim, manifest=manifest,
+                                   output_policy=device.output_policy if device is not None and device.device_ref == claim.device_ref else None)
 
 
 class AcceptDeviceManifest:

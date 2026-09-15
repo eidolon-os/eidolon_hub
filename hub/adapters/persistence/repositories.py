@@ -6,6 +6,7 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -57,6 +58,7 @@ class SqlDeviceRepository:
             "display_name": device.display_name,
             "manifest_id": device.manifest_id,
             "manifest_json": device.manifest_json,
+            "output_policy_json": device.output_policy.model_dump_json() if device.output_policy else None,
             "manifest_revision": device.manifest_digest,
             "manifest_declared_revision": device.manifest_declared_revision,
             "enrolled_at": device.enrolled_at,
@@ -87,6 +89,8 @@ class SqlDeviceRepository:
             identity=DeviceIdentity(row.device_id),
             display_name=row.display_name,
             manifest_id=row.manifest_id,
+            output_policy=(DeviceOutputPolicy.model_validate_json(row.output_policy_json)
+                           if row.output_policy_json is not None else None),
             manifest=DeviceManifestDocument(
                 canonical_json=row.manifest_json,
                 digest=row.manifest_revision,

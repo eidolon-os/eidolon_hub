@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Literal
 
 import httpx
+from eidolon_sdk.biz.presentation import DeviceOutputPolicy
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from hub.contracts.bindings.device import DeviceRef
@@ -28,6 +29,7 @@ class _ProvisionResponse(_WireModel):
     operation_id: str
     device_ref: DeviceRef
     manifest_revision: str
+    output_policy: DeviceOutputPolicy | None = None
     channels: tuple[ChannelBinding, ...] = Field(min_length=1, max_length=1)
 
 
@@ -94,6 +96,7 @@ class ChannelProviderHttpClient:
         return CurrentChannelBinding(
             operation_id=binding.operation_id,
             manifest_revision=binding.manifest_revision,
+            output_policy=binding.output_policy,
             channels=binding.channels,
             refresh_required=response.refresh_required,
         )
@@ -115,6 +118,7 @@ class ChannelProviderHttpClient:
         manifest_id: str,
         manifest: Mapping[str, object],
         manifest_revision: str,
+        output_policy: DeviceOutputPolicy | None = None,
     ) -> tuple[ChannelBinding, ...]:
         payload = {
             "operation": operation,
@@ -126,6 +130,7 @@ class ChannelProviderHttpClient:
                 "device_kind": manifest_id,
                 "manifest": dict(manifest),
                 "manifest_revision": manifest_revision,
+                **({"output_policy": output_policy.model_dump(mode="json")} if output_policy else {}),
             },
         }
         raw = await self._post("device-channels/provision", payload)
