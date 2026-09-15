@@ -44,6 +44,15 @@ def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
         Path("hub/contracts/bindings/admission.py"),
         Path("hub/contracts/bindings/onboarding.py"),
         Path("hub/contracts/bindings/device.py"),
+        # The same rule one step out from the wire: a fact the Host publishes
+        # about itself, read the one way it is defined. Which of this machine's
+        # links are the operator's is declared once by Ops and read identically
+        # by the Hub, the Channel provider and Admin — a second reading of it
+        # here is a second thing to keep true, and the day the two disagreed
+        # would be the day this Hub published the operator's cable to devices
+        # again.
+        Path("hub/adapters/discovery/zeroconf.py"),
+        Path("hub/composition/device_onboarding.py"),
     }
     violations = []
     for path in (ROOT / "hub").rglob("*.py"):

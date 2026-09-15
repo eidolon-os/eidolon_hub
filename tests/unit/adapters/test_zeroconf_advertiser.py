@@ -223,3 +223,110 @@ async def test_change_during_registration_is_not_adopted() -> None:
         assert a._aiozc is None
         instance.async_close.assert_awaited_once()
         await a.stop()
+
+
+def test_the_operators_cable_is_not_one_of_the_names_two_a_records() -> None:
+    """2026-09-15: one name, two A records, and the device took the wrong one.
+
+    Both addresses here are ordinary routable /24s — which is exactly why no
+    amount of looking at interfaces could have told them apart. 10.42.0.2 is a
+    point-to-point cable to a workstation; a device on Wi-Fi can never route to
+    it, and the Hub had no way to know that until Ops said so.
+    """
+
+    import ipaddress
+
+    from hub.adapters.discovery import zeroconf as module
+
+    class _Adapter:
+        def __init__(self, ips):
+            self.ips = ips
+
+    class _IP:
+        def __init__(self, ip):
+            self.ip = ip
+
+    adapters = [
+        _Adapter([_IP("192.168.100.19")]),
+        _Adapter([_IP("10.42.0.2")]),
+    ]
+    cable = (ipaddress.ip_network("10.42.0.0/24"),)
+    with patch.object(module.ifaddr, "get_adapters", return_value=adapters):
+        assert module.interface_addresses() == ("10.42.0.2", "192.168.100.19")
+        assert module.interface_addresses(cable) == ("192.168.100.19",)
+
+
+async def test_the_answering_surface_is_the_same_set_as_the_claim() -> None:
+    """Publishing an address on one link and answering on another tells a
+    device to come back somewhere it has just shown it cannot reach."""
+
+    from hub.adapters.discovery import zeroconf as m
+
+    instance = MagicMock()
+    for method in ("async_register_service", "async_unregister_service", "async_close"):
+        setattr(instance, method, AsyncMock())
+    with patch.object(m, "AsyncZeroconf", return_value=instance) as constructor, patch.object(
+        m, "interface_snapshot", return_value=(("wlan0", 3, "192.168.100.19", 24),)
+    ):
+        advertiser = _dynamic_advertiser()
+        await advertiser.start()
+        await advertiser.stop()
+
+    assert constructor.call_args.kwargs["interfaces"] == ["192.168.100.19"]
+
+
+async def test_plugging_in_the_operators_cable_does_not_rebuild_the_advertisement() -> None:
+    """It is not a new place the product can be reached, so it is not a change.
+
+    The transport is torn down and rebuilt on every genuine change, which drops
+    the multicast memberships and re-announces. Doing that because a
+    workstation was plugged in would cost every device on the LAN a
+    re-resolution for nothing.
+    """
+
+    import ipaddress
+
+    from hub.adapters.discovery import zeroconf as m
+
+    class _Adapter:
+        def __init__(self, ips):
+            self.ips = ips
+
+    class _IP:
+        def __init__(self, ip):
+            self.ip = ip
+
+    instances = []
+
+    def construct(**_kwargs):
+        instance = MagicMock()
+        for method in ("async_register_service", "async_unregister_service", "async_close"):
+            setattr(instance, method, AsyncMock())
+        instances.append(instance)
+        return instance
+
+    wifi_only = [_Adapter([_IP("192.168.100.19")])]
+    with_cable = [*wifi_only, _Adapter([_IP("10.42.0.2")])]
+    adapters = list(wifi_only)
+    with patch.object(m, "AsyncZeroconf", side_effect=construct), patch.object(
+        m.ifaddr, "get_adapters", side_effect=lambda: adapters
+    ):
+        advertiser = ZeroconfAuthorityCandidateAdvertiser(
+            advertisement_id="test",
+            service_type="_eidolon-owner._tcp.local.",
+            service_name="test._eidolon-owner._tcp.local.",
+            hostname="test",
+            port=9443,
+            owner_domain_id="test",
+            owner_domain_descriptor_uri="https://test.local:9443/descriptor",
+            management_networks=(ipaddress.ip_network("10.42.0.0/24"),),
+            refresh_seconds=0,
+        )
+        await advertiser.start()
+        assert len(instances) == 1
+
+        adapters = with_cable
+        await advertiser.refresh_interfaces()
+        assert len(instances) == 1
+        assert advertiser._info.parsed_addresses() == ["192.168.100.19"]
+        await advertiser.stop()

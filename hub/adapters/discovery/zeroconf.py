@@ -5,17 +5,35 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+from collections.abc import Sequence
 from contextlib import suppress
 
 import ifaddr
-from zeroconf import InterfaceChoice, IPVersion, ServiceInfo
+from eidolon_sdk.system import on_product_link
+from zeroconf import IPVersion, ServiceInfo
 from zeroconf.asyncio import AsyncZeroconf
 
 logger = logging.getLogger(__name__)
 
+IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
-def interface_snapshot() -> tuple[tuple[str, int, str, int], ...]:
-    """Addresses and their interface identities from one OS observation."""
+
+def interface_snapshot(
+    management_networks: Sequence[IPNetwork] = (),
+) -> tuple[tuple[str, int, str, int], ...]:
+    """Addresses and their interface identities from one OS observation.
+
+    Narrowed to the links the product is on, because one name with two A
+    records is a coin toss the device loses: on 2026-09-15 this Hub published
+    both its Wi-Fi address and the address of a cable only the operator's
+    workstation is on, and a device took the second and never reached anything.
+    The interface table cannot tell the two apart — the cable is an ordinary
+    /24 to the kernel — so Ops declares which is which and this reads it.
+
+    The filter is here rather than at the caller so it also narrows what counts
+    as a *change*: plugging that cable in is not a new place the product can be
+    reached, and it should not tear down and rebuild the advertisement.
+    """
     values = set()
     for adapter in ifaddr.get_adapters():
         for item in adapter.ips:
@@ -27,13 +45,15 @@ def interface_snapshot() -> tuple[tuple[str, int, str, int], ...]:
             if (address.is_loopback or address.is_unspecified or
                     address.is_multicast or address.is_link_local):
                 continue
+            if not on_product_link(address, management_networks):
+                continue
             values.add((getattr(adapter, "name", ""), getattr(adapter, "index", 0),
                         str(address), getattr(item, "network_prefix", 0)))
     return tuple(sorted(values))
 
 
-def interface_addresses() -> tuple[str, ...]:
-    return tuple(sorted({entry[2] for entry in interface_snapshot()},
+def interface_addresses(management_networks: Sequence[IPNetwork] = ()) -> tuple[str, ...]:
+    return tuple(sorted({entry[2] for entry in interface_snapshot(management_networks)},
                         key=lambda value: (ipaddress.ip_address(value).version, value)))
 
 
@@ -51,6 +71,7 @@ class ZeroconfAuthorityCandidateAdvertiser:
         owner_domain_id: str,
         owner_domain_descriptor_uri: str,
         addresses: tuple[str, ...] | None = None,
+        management_networks: Sequence[IPNetwork] = (),
         refresh_seconds: float = 10.0,
     ) -> None:
         self._advertisement_id = advertisement_id
@@ -61,6 +82,7 @@ class ZeroconfAuthorityCandidateAdvertiser:
         self._owner_domain_id = owner_domain_id
         self._owner_domain_descriptor_uri = owner_domain_descriptor_uri
         self._addresses = addresses
+        self._management_networks = tuple(management_networks)
         self._refresh_seconds = refresh_seconds
         self._aiozc: AsyncZeroconf | None = None
         self._info: ServiceInfo | None = None
@@ -124,7 +146,8 @@ class ZeroconfAuthorityCandidateAdvertiser:
         async with self._lock:
             if not self._running:
                 return
-            snapshot = interface_snapshot() if self._addresses is None else self._addresses
+            snapshot = (interface_snapshot(self._management_networks)
+                        if self._addresses is None else self._addresses)
             addresses = (tuple(sorted({entry[2] for entry in snapshot}))
                          if self._addresses is None else self._addresses)
             if self._aiozc is not None and snapshot == self._observation:
@@ -135,11 +158,26 @@ class ZeroconfAuthorityCandidateAdvertiser:
             if not addresses:
                 return
             info = self._build_info(addresses)
-            aiozc = AsyncZeroconf(interfaces=InterfaceChoice.All, ip_version=IPVersion.All)
+            # Bound to the addresses just claimed, rather than to every
+            # interface this machine has. `InterfaceChoice.All` made the
+            # answering surface wider than the claim: the Hub declined to
+            # publish an address on a link and then answered queries arriving
+            # over that link anyway, handing back records for somewhere the
+            # asker had just demonstrated it was not.
+            #
+            # One thing this gives up, said out loud because it is invisible: a
+            # Host with no routable IPv6 address to publish no longer joins the
+            # IPv6 multicast group, so it answers over IPv4 only. A responder
+            # answers on the transport a query arrived on, and every resolver
+            # that matters here asks over both — the board asks over IPv4 and
+            # nothing else. Answering over IPv6 with none but A records to give
+            # back was never an answer an IPv6-only asker could use.
+            aiozc = AsyncZeroconf(interfaces=list(addresses), ip_version=IPVersion.All)
             try:
                 await aiozc.async_register_service(info, allow_name_change=False)
                 # Do not adopt a transport created across another network change.
-                if self._addresses is None and interface_snapshot() != snapshot:
+                if (self._addresses is None
+                        and interface_snapshot(self._management_networks) != snapshot):
                     await aiozc.async_unregister_service(info)
                     await aiozc.async_close()
                     return

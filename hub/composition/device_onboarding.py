@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
 
+from eidolon_sdk.system import declared_management_networks
+
 from hub.adapters.discovery.zeroconf import ZeroconfAuthorityCandidateAdvertiser
 from hub.adapters.security.owner_directory import load_owner_directory
 from hub.config import HubConfig
@@ -58,4 +60,11 @@ def _mdns_advertiser(
         port=public_url.port or 443,
         owner_domain_id=config.onboarding.owner_domain_id,
         owner_domain_descriptor_uri=config.onboarding.descriptor_uri,
+        # Read here and passed down, not reached for inside the advertiser:
+        # this is a declaration Ops made about the machine, fixed for the life
+        # of the process, and a publisher whose answer depends on ambient state
+        # is one whose answer its caller cannot see. It is not in `HubConfig`
+        # because it is not the Hub's to configure — it arrives in the sealed
+        # Host profile every unit already reads.
+        management_networks=declared_management_networks(),
     )
