@@ -48,40 +48,27 @@ from .ports import DeviceEraseLedger
 _LOG = logging.getLogger(__name__)
 
 
-def _observed_host_address(request: Request) -> str:
-    """Which of this Host's addresses this device just reached it on.
+#: What the deployment-owned TLS ingress calls the address it accepted a
+#: request on. Defined in `eidolon_ops/src/eidolon_ops/lan_ingress.py`, which
+#: is shipped to the Host as a lone file run by the system python and so can
+#: share no code with this — the name is the contract between them.
+OBSERVED_HOST_HEADER = "eidolon-observed-host"
 
-    A device's channel binding has to name somewhere the device can find this
-    Host's media, and every producer of that answer so far has produced it the
-    same way: by listing the interfaces this machine has. The interface table
-    cannot say which of them a particular device can route to, and on
-    2026-09-15 one of them was a workstation's bench cable and the device was
-    on Wi-Fi. A device that has just arrived has answered the question by
-    arriving — whatever address carried its request is, by construction, an
-    address it can reach.
 
-    So `server`, the local end of the connection, and not `client`, its source:
-    the binding names this Host, and the device's own address answers a
-    different question.
+def _usable_address(value: object) -> str:
+    """An address a device could really have reached this Host at, or "".
 
-    Empty whenever what arrived cannot be that answer. A loopback, link-local,
-    unspecified or multicast local address means the request did not cross a
-    network to get here, and on a deployed Host that is what it always means:
-    `ops/component.toml` binds this service to loopback and the TLS ingress Ops
-    installs in front of it relays bytes without saying who it relayed them
-    for, so all this sees is the ingress's own connection. Answering "nothing
-    observed" there is the whole point of the value being optional — the
-    Provider still has its own candidates, and would rather have none of this
-    than be told the device can be served at 127.0.0.1.
+    Loopback, link-local, unspecified and multicast are all "this did not
+    cross a network to get here", which is the one thing the answer must not
+    claim. Handing `127.0.0.1` down would have the Provider offer a device
+    somewhere to find this Host that is the device itself.
     """
 
-    server = request.scope.get("server")
-    if not isinstance(server, (tuple, list)) or not server:
+    if value is None:
         return ""
     try:
-        address = ipaddress.ip_address(str(server[0]))
+        address = ipaddress.ip_address(str(value))
     except ValueError:
-        # A Unix socket has a path here, not an address. Nothing to observe.
         return ""
     if (
         address.is_loopback
@@ -91,6 +78,49 @@ def _observed_host_address(request: Request) -> str:
     ):
         return ""
     return str(address)
+
+
+def _observed_host_address(request: Request) -> str:
+    """Which of this Host's addresses this device just reached it on.
+
+    A device's channel binding has to name somewhere the device can find this
+    Host's media, and every producer of that answer used to produce it the same
+    way: by listing the interfaces this machine has. The interface table cannot
+    say which of them a particular device can route to, and on 2026-09-15 one
+    of them was a workstation's bench cable and the device was on Wi-Fi. A
+    device that has just arrived has answered the question by arriving —
+    whatever address carried its request is, by construction, an address it can
+    reach.
+
+    Two ways to learn it, because this service is not always the thing the
+    device reached. `ops/component.toml` binds it to loopback and Ops installs
+    a TLS ingress in front of it, so in a deployment every connection here
+    comes from 127.0.0.1 and the socket knows nothing; the ingress is at the
+    address the device actually arrived at, and states it in a header. Where
+    this service does bind the network itself — a local run, the tests — there
+    is no ingress and the socket is the answer, as `server`, the local end of
+    the connection, never `client`, which is the device's own address and
+    answers a different question.
+
+    The header is not a trust input and does not need to be one. Nothing that
+    is not already on this Host can set it, and what reads it downstream only
+    orders candidates it derived for itself, so a value naming somewhere this
+    Host is not selects nothing. It is still checked for being an address a
+    device could have arrived at, so that "observed" means observed.
+
+    Empty when neither source has an answer worth passing on, which stays
+    ordinary rather than a failure: the Provider has its own candidates, and
+    would rather have none of this than be told to serve a device at 127.0.0.1.
+    """
+
+    stated = _usable_address(request.headers.get(OBSERVED_HOST_HEADER))
+    if stated:
+        return stated
+    server = request.scope.get("server")
+    if not isinstance(server, (tuple, list)) or not server:
+        return ""
+    # A Unix socket has a path here, not an address; `_usable_address` says "".
+    return _usable_address(server[0])
 
 
 def _refused(

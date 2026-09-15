@@ -943,14 +943,11 @@ def test_a_configuration_pull_tells_reconciliation_where_it_was_reached() -> Non
 
 
 def test_a_pull_that_crossed_no_network_observes_nothing() -> None:
-    """Which is every pull on a deployed Host, and must stay ordinary.
+    """A connection from 127.0.0.1 to 127.0.0.1 has nothing to say about a LAN.
 
-    `ops/component.toml` binds this service to loopback and Ops installs a TLS
-    ingress in front of it that relays bytes without saying who it relayed them
-    for, so what a device's request looks like here is a connection from
-    127.0.0.1 to 127.0.0.1. Passing that on would have the Provider offer a
-    device `127.0.0.1` as somewhere to find this Host's media — worse than the
-    guess it replaced, and pointing the device at itself.
+    Passing it on would have the Provider offer a device `127.0.0.1` as
+    somewhere to find this Host's media — worse than the guess it replaced, and
+    pointing the device at itself.
 
     So the observation is refused here rather than downstream, and its absence
     is not a failure: reconciliation carries on and the Provider answers from
@@ -983,3 +980,80 @@ def test_a_pull_that_crossed_no_network_observes_nothing() -> None:
 
         assert response.status_code == 200, origin
         assert binding.observed == [""], origin
+
+
+def test_the_ingress_can_say_where_a_pull_arrived_when_the_socket_cannot() -> None:
+    """Which is the deployed case, and the only one that reaches a real device.
+
+    `ops/component.toml` binds this service to loopback and Ops installs a TLS
+    ingress in front of it, so the connection this sees is the ingress's own
+    and the socket knows nothing. The ingress is the thing standing at the
+    address the device arrived at, and it states it
+    (`eidolon_ops/src/eidolon_ops/lan_ingress.py`).
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    public_key_spki = _spki(key)
+    nonce = "fresh_nonce_000020"
+    binding = _ChannelBinding()
+    app = _configuration_app(
+        DeviceClaimProjection(
+            device_ref=REF, state="active", operational_public_key_spki=public_key_spki
+        ),
+        binding,
+    )
+
+    response = TestClient(app, base_url="http://127.0.0.1:8082").post(
+        "/api/device-control/v1/configuration:pull",
+        json={
+            "device_ref": REF.model_dump(mode="json"),
+            "nonce": nonce,
+            "public_key_spki": public_key_spki,
+            "device_signature": _sign(
+                key, device_control_configuration_proof_document(device_ref=REF, nonce=nonce)
+            ),
+        },
+        headers={"eidolon-observed-host": "192.168.100.19"},
+    )
+
+    assert response.status_code == 200
+    assert binding.observed == ["192.168.100.19"]
+
+
+def test_a_stated_address_that_names_no_network_is_not_believed() -> None:
+    """"Observed" has to mean observed, even though nothing rests on it.
+
+    Only something already on this Host can set the header — the port is
+    loopback — and what reads it downstream reorders candidates it derived
+    itself, so a made-up value selects nothing. It is still checked, so that a
+    reader of the Provider's log is looking at an address a device really
+    arrived at.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    public_key_spki = _spki(key)
+    projection = DeviceClaimProjection(
+        device_ref=REF, state="active", operational_public_key_spki=public_key_spki
+    )
+
+    for index, stated in enumerate(("127.0.0.1", "169.254.7.7", "not-an-address", "")):
+        binding = _ChannelBinding()
+        nonce = f"fresh_nonce_00003{index}"
+        response = TestClient(
+            _configuration_app(projection, binding), base_url="http://127.0.0.1:8082"
+        ).post(
+            "/api/device-control/v1/configuration:pull",
+            json={
+                "device_ref": REF.model_dump(mode="json"),
+                "nonce": nonce,
+                "public_key_spki": public_key_spki,
+                "device_signature": _sign(
+                    key,
+                    device_control_configuration_proof_document(device_ref=REF, nonce=nonce),
+                ),
+            },
+            headers={"eidolon-observed-host": stated},
+        )
+
+        assert response.status_code == 200, stated
+        assert binding.observed == [""], stated
