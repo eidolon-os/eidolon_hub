@@ -574,3 +574,83 @@ async def test_a_column_this_release_needs_is_still_missing_and_still_fatal(tmp_
             await database.initialize_schema()
     finally:
         await database.close()
+
+
+async def test_every_column_the_orm_can_add_for_itself_is_reconciled(tmp_path) -> None:
+    """The guard the hand-written migration list could not have.
+
+    That list was three ALTER statements naming their tables, and a release
+    that declared one column on two tables wrote one of them. Nothing could
+    notice: a list has nothing to be compared against. The Host that met the
+    result could not start its Hub and could not go back to the release that
+    would have — `admission_proposals_v1 columns missing=['output_policy_json']`.
+
+    So this asks the question the list could not: for every column the ORM
+    declares that could be added to an existing table without inventing a
+    value, a database that lacks it must come back with it. It is written
+    against the whole schema rather than the column that failed, because the
+    next one will be a different column on a different table.
+    """
+
+    reconcilable: list[tuple[str, str]] = []
+    for table_name, table in sorted(Base.metadata.tables.items()):
+        # SQLite will not drop a column an index names, so the sweep cannot
+        # take those away to see them put back. That is a limit of how the
+        # question is asked here, not of what is reconciled.
+        indexed = {column.name for index in table.indexes for column in index.columns}
+        for column in table.columns:
+            if column.primary_key or column.name in indexed:
+                continue
+            if column.nullable or column.server_default is not None:
+                reconcilable.append((table_name, column.name))
+    # The probe has to be able to see something, or an empty sweep would pass
+    # while proving nothing.
+    assert ("admission_proposals_v1", "output_policy_json") in reconcilable
+    assert ("hub_device_directory_v1", "output_policy_json") in reconcilable
+
+    for index, (table_name, column_name) in enumerate(reconcilable):
+        database = await _established(tmp_path, f"reconcile-{index}.sqlite3")
+        try:
+            async with database.engine.begin() as connection:
+                await connection.execute(
+                    text(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
+                )
+            await database.close()
+
+            database = HubDatabase.sqlite(tmp_path / f"reconcile-{index}.sqlite3")
+            await database.initialize_schema()
+
+            async with database.engine.connect() as connection:
+                columns = {
+                    row[1]
+                    for row in await connection.execute(
+                        text(f"PRAGMA table_info({table_name})")
+                    )
+                }
+            assert column_name in columns, f"{table_name}.{column_name} was not restored"
+        finally:
+            await database.close()
+
+
+async def test_a_mandatory_column_with_no_default_is_not_invented(tmp_path) -> None:
+    """Reconciling what is safe must not become guessing at what is not.
+
+    A mandatory column with no server default is a statement about every row
+    already in the table, and there is no value this code could write into
+    them that would be its to choose. `manifest_declared_revision` is the one
+    place such a decision has been made, and it is made in the open.
+    """
+
+    database = await _established(tmp_path, "mandatory.sqlite3")
+    try:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text("ALTER TABLE hub_device_directory_v1 DROP COLUMN manifest_json")
+            )
+        await database.close()
+        database = HubDatabase.sqlite(tmp_path / "mandatory.sqlite3")
+
+        with pytest.raises(RuntimeError, match="columns missing="):
+            await database.initialize_schema()
+    finally:
+        await database.close()

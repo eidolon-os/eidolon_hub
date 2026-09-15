@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.schema import CreateColumn
 
 from hub.adapters.persistence.models import AuthorityStateRow, Base
 
@@ -164,29 +165,43 @@ class HubDatabase:
             )
             return True, marker, True
 
-        # Admission physical migration adds only the canonical wire envelope.
-        # No legacy ciphertext is read, copied or interpreted by the activated
-        # writer; an existing Authority lineage remains unchanged.
-        grant_table = "admission_claim_grants_v1"
-        if grant_table in actual_tables:
-            grant_columns = {value["name"] for value in schema.get_columns(grant_table)}
-            if "wire_envelope_json" not in grant_columns:
-                connection.exec_driver_sql(
-                    "ALTER TABLE admission_claim_grants_v1 ADD COLUMN wire_envelope_json TEXT"
-                )
+        # Additive columns are reconciled from the ORM rather than listed here
+        # by hand, because the hand-written list was itself the defect. The
+        # release that introduced `output_policy_json` declared it on two
+        # tables and wrote the ALTER for one of them, and nothing anywhere
+        # could notice the difference: a list has nothing to be compared
+        # against. Every Host holding an existing database then met a Hub that
+        # refused to start on it — `admission_proposals_v1 columns
+        # missing=['output_policy_json']` — with no way back, because the
+        # release that could have been rolled back to had already been left.
+        #
+        # Only what can be added without inventing a value for rows that
+        # already exist: a nullable column gets NULL, and one carrying a server
+        # default gets that default. A mandatory column with neither is a
+        # statement about every existing row, which is a decision this code is
+        # not entitled to make on its own — those stay refused below, and the
+        # one place such a decision has been made spells it out immediately
+        # after this.
+        for table_name in sorted(expected_tables & actual_tables):
+            table = Base.metadata.tables[table_name]
+            present = {value["name"] for value in schema.get_columns(table_name)}
+            for column in table.columns:
+                if column.name in present:
+                    continue
+                if not column.nullable and column.server_default is None:
+                    continue
+                definition = CreateColumn(column).compile(dialect=connection.dialect).string
+                connection.exec_driver_sql(f"ALTER TABLE {table_name} ADD COLUMN {definition}")
                 schema = inspect(connection)
 
-        # A device's Manifest revision is additive to the directory projection.
-        # Existing rows carry the revision their Claim recorded, which is 1: it
-        # is the only account of themselves those devices have ever given.
+        # A device's Manifest revision is additive to the directory projection,
+        # and unlike the columns above it is mandatory, so adding it says
+        # something about rows that are already there. Existing rows carry the
+        # revision their Claim recorded, which is 1: it is the only account of
+        # themselves those devices have ever given.
         directory_table = "hub_device_directory_v1"
         if directory_table in actual_tables:
             directory_columns = {value["name"] for value in schema.get_columns(directory_table)}
-            if "output_policy_json" not in directory_columns:
-                connection.exec_driver_sql(
-                    "ALTER TABLE hub_device_directory_v1 ADD COLUMN output_policy_json TEXT"
-                )
-                schema = inspect(connection)
             if "manifest_declared_revision" not in directory_columns:
                 connection.exec_driver_sql(
                     "ALTER TABLE hub_device_directory_v1 "
