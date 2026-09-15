@@ -119,11 +119,19 @@ class ChannelProviderHttpClient:
         manifest: Mapping[str, object],
         manifest_revision: str,
         output_policy: DeviceOutputPolicy | None = None,
+        observed_host_address: str = "",
     ) -> tuple[ChannelBinding, ...]:
         payload = {
             "operation": operation,
             "operation_id": operation_id,
             "device_ref": device_ref.model_dump(mode="json"),
+            # Beside the operation rather than inside `device`: this is not
+            # something the device declared about itself, it is what this
+            # Authority saw of the connection that asked. Left out altogether
+            # when there was nothing to see, so that the Provider reads an
+            # absent field rather than having to decide what an empty address
+            # means.
+            **({"observed_host_address": observed_host_address} if observed_host_address else {}),
             "device": {
                 "owner_id": owner_id,
                 "display_name": display_name,

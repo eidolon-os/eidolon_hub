@@ -653,3 +653,105 @@ async def test_changed_runtime_routes_refresh_before_credential_expiry() -> None
     assert provider._binding.operation_id != first_operation
     await reconcile.execute(device_ref=REF)
     assert len(provider.refreshes) == 1
+
+
+async def test_the_observed_address_reaches_the_provider_without_naming_the_operation() -> None:
+    """Two claims, and the second is what keeps a moving device working.
+
+    The Provider is told where this Host was reached, because it is the only
+    thing that names a server URL. But the operation id must not move with it.
+    That id names a generation of the binding, derived from the DeviceRef and
+    the Manifest; where a device reached this Host is not part of what is being
+    asked for, and it changes whenever the device changes access point. Key on
+    it and the same pending operation, re-sent from a device that has moved,
+    arrives as one id reused for a different payload — which the Provider's
+    ledger refuses as terminal, and the device loses its channel for good.
+    """
+
+    provider = RecordingProvider()
+    reconcile = ReconcileChannelBinding(
+        devices=DeviceReader(), provider=provider, clock=Clock()
+    )
+
+    await reconcile.execute(device_ref=REF, observed_host_address="192.168.100.19")
+    unobserved = RecordingProvider()
+    await ReconcileChannelBinding(
+        devices=DeviceReader(), provider=unobserved, clock=Clock()
+    ).execute(device_ref=REF)
+
+    assert provider.provisions[0]["observed_host_address"] == "192.168.100.19"
+    # Nothing to observe is forwarded as nothing, never omitted downward: the
+    # Provider decides what reaches the wire.
+    assert unobserved.provisions[0]["observed_host_address"] == ""
+    assert (
+        provider.provisions[0]["operation_id"] == unobserved.provisions[0]["operation_id"]
+    )
+
+
+async def test_a_device_that_moved_networks_re_sends_the_same_refresh_operation() -> None:
+    """The refresh id is the one that is actually re-sent across pulls.
+
+    It is derived from the binding being advanced and the Manifest, so it
+    stands still while a device keeps pulling against an expired credential.
+    That is exactly the window in which a device can change network, so it is
+    the path where folding the observation into the id would bite.
+    """
+
+    ids = []
+    for observed in ("192.168.100.19", "10.183.24.39"):
+        provider = RecordingProvider()
+        provider.seed_expired_binding()
+        await ReconcileChannelBinding(
+            devices=DeviceReader(), provider=provider, clock=Clock()
+        ).execute(device_ref=REF, observed_host_address=observed)
+        assert provider.refreshes[0]["observed_host_address"] == observed
+        ids.append(provider.refreshes[0]["operation_id"])
+
+    assert ids[0] == ids[1]
+
+
+async def test_the_provision_wire_carries_the_observation_beside_the_operation() -> None:
+    """Root level, and absent rather than empty when there was nothing to see.
+
+    It is not something the device declared about itself, which is all
+    `device` holds, and a Provider reading `""` there would have to decide for
+    itself that an empty address means no address.
+    """
+
+    sent: list[dict] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        document = json.loads(request.content.decode())
+        sent.append(document)
+        return httpx.Response(
+            200,
+            json={
+                "operation": "channel.provisioned-device",
+                "operation_id": document["operation_id"],
+                "device_ref": REF.model_dump(mode="json"),
+                "manifest_revision": _manifest().digest,
+                "channels": [
+                    item.model_dump(mode="json")
+                    for item in _channel(int((NOW + timedelta(minutes=30)).timestamp() * 1000))
+                ],
+            },
+        )
+
+    device = _device()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        provider = ChannelProviderHttpClient(client, token="t" * 32)
+        for observed in ("192.168.100.19", ""):
+            await provider.provision(
+                operation_id="channel-provision-01",
+                device_ref=REF,
+                owner_id="owner_01",
+                display_name=device.display_name,
+                manifest_id=device.manifest_id,
+                manifest=json.loads(device.manifest_json),
+                manifest_revision=device.manifest_digest,
+                observed_host_address=observed,
+            )
+
+    assert sent[0]["observed_host_address"] == "192.168.100.19"
+    assert "observed_host_address" not in sent[1]
+    assert "observed_host_address" not in sent[0]["device"]

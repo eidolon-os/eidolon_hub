@@ -27,6 +27,7 @@ class ChannelBindingProvider(Protocol):
         manifest: Mapping[str, object],
         manifest_revision: str,
         output_policy: DeviceOutputPolicy | None = None,
+        observed_host_address: str = "",
     ) -> tuple[ChannelBinding, ...]: ...
 
     async def refresh(
@@ -40,6 +41,7 @@ class ChannelBindingProvider(Protocol):
         manifest: Mapping[str, object],
         manifest_revision: str,
         output_policy: DeviceOutputPolicy | None = None,
+        observed_host_address: str = "",
     ) -> tuple[ChannelBinding, ...]: ...
 
     async def revoke(

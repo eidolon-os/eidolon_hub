@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 from dataclasses import dataclass
 from typing import Callable
 
-from fastapi import APIRouter, Header, HTTPException, Response, status
+from fastapi import APIRouter, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -45,6 +46,51 @@ from .domain import (
 from .ports import DeviceEraseLedger
 
 _LOG = logging.getLogger(__name__)
+
+
+def _observed_host_address(request: Request) -> str:
+    """Which of this Host's addresses this device just reached it on.
+
+    A device's channel binding has to name somewhere the device can find this
+    Host's media, and every producer of that answer so far has produced it the
+    same way: by listing the interfaces this machine has. The interface table
+    cannot say which of them a particular device can route to, and on
+    2026-09-15 one of them was a workstation's bench cable and the device was
+    on Wi-Fi. A device that has just arrived has answered the question by
+    arriving — whatever address carried its request is, by construction, an
+    address it can reach.
+
+    So `server`, the local end of the connection, and not `client`, its source:
+    the binding names this Host, and the device's own address answers a
+    different question.
+
+    Empty whenever what arrived cannot be that answer. A loopback, link-local,
+    unspecified or multicast local address means the request did not cross a
+    network to get here, and on a deployed Host that is what it always means:
+    `ops/component.toml` binds this service to loopback and the TLS ingress Ops
+    installs in front of it relays bytes without saying who it relayed them
+    for, so all this sees is the ingress's own connection. Answering "nothing
+    observed" there is the whole point of the value being optional — the
+    Provider still has its own candidates, and would rather have none of this
+    than be told the device can be served at 127.0.0.1.
+    """
+
+    server = request.scope.get("server")
+    if not isinstance(server, (tuple, list)) or not server:
+        return ""
+    try:
+        address = ipaddress.ip_address(str(server[0]))
+    except ValueError:
+        # A Unix socket has a path here, not an address. Nothing to observe.
+        return ""
+    if (
+        address.is_loopback
+        or address.is_link_local
+        or address.is_unspecified
+        or address.is_multicast
+    ):
+        return ""
+    return str(address)
 
 
 def _refused(
@@ -180,6 +226,7 @@ def create_device_erase_router(
     )
     async def pull_configuration(
         payload: PullDeviceConfigurationRequest,
+        request: Request,
     ) -> DeviceConfigurationResult:
         try:
             configuration = await current().configuration.execute(
@@ -236,7 +283,10 @@ def create_device_erase_router(
                 device_ref=claim.device_ref,
             )
         channels = (
-            await current().channel_binding.execute(device_ref=claim.device_ref)
+            await current().channel_binding.execute(
+                device_ref=claim.device_ref,
+                observed_host_address=_observed_host_address(request),
+            )
             if claim.state == "active"
             else ()
         )

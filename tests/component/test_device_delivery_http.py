@@ -123,9 +123,13 @@ class _ChannelBinding:
     def __init__(self, channels=()) -> None:
         self.channels = channels
         self.requested = []
+        # Where the Authority saw this Host being reached, per reconcile, so a
+        # test can tell "nothing was observed" from "nothing was passed on".
+        self.observed = []
 
-    async def execute(self, *, device_ref):
+    async def execute(self, *, device_ref, observed_host_address=""):
         self.requested.append(device_ref)
+        self.observed.append(observed_host_address)
         return self.channels
 
 
@@ -770,7 +774,9 @@ def _who_can(record) -> str:
     return message.split("Who can: ", 1)[1].split(". device=", 1)[0]
 
 
-def _configuration_app(projection: DeviceClaimProjection) -> FastAPI:
+def _configuration_app(
+    projection: DeviceClaimProjection, binding: _ChannelBinding | None = None
+) -> FastAPI:
     app = FastAPI()
     app.include_router(
         create_device_erase_router(
@@ -780,7 +786,7 @@ def _configuration_app(projection: DeviceClaimProjection) -> FastAPI:
                     claims=_ClaimReader(projection),
                     devices=_Devices(_directory_device()),
                 ),
-                channel_binding=_ChannelBinding(),
+                channel_binding=binding or _ChannelBinding(),
                 pull=_Pull(),
                 acknowledge=_Ack(),
                 reconcile=_Reconcile(),
@@ -893,3 +899,87 @@ def test_the_two_ways_a_configuration_pull_refuses_are_told_apart_by_who_must_ac
         assert nonce not in record.getMessage()
         assert presented not in record.getMessage()
         assert signature not in record.getMessage()
+
+
+def test_a_configuration_pull_tells_reconciliation_where_it_was_reached() -> None:
+    """The device answers "where can this Host be found" by arriving.
+
+    Every producer of that answer so far derived it from the interface table,
+    which cannot say which of this machine's links a particular device can
+    route to — and on 2026-09-15 a device took a workstation's bench cable off
+    that list and never reached anything again. A request that arrived carries
+    the answer for the device that sent it, and the configuration pull is
+    where the Authority is holding both at once.
+
+    It reports the local end of the connection, not the device's own address:
+    a channel binding names this Host.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    public_key_spki = _spki(key)
+    nonce = "fresh_nonce_000007"
+    binding = _ChannelBinding()
+    app = _configuration_app(
+        DeviceClaimProjection(
+            device_ref=REF, state="active", operational_public_key_spki=public_key_spki
+        ),
+        binding,
+    )
+    body = {
+        "device_ref": REF.model_dump(mode="json"),
+        "nonce": nonce,
+        "public_key_spki": public_key_spki,
+        "device_signature": _sign(
+            key, device_control_configuration_proof_document(device_ref=REF, nonce=nonce)
+        ),
+    }
+
+    reached_on_the_lan = TestClient(app, base_url="http://192.168.100.19:9443").post(
+        "/api/device-control/v1/configuration:pull", json=body
+    )
+
+    assert reached_on_the_lan.status_code == 200
+    assert binding.observed == ["192.168.100.19"]
+
+
+def test_a_pull_that_crossed_no_network_observes_nothing() -> None:
+    """Which is every pull on a deployed Host, and must stay ordinary.
+
+    `ops/component.toml` binds this service to loopback and Ops installs a TLS
+    ingress in front of it that relays bytes without saying who it relayed them
+    for, so what a device's request looks like here is a connection from
+    127.0.0.1 to 127.0.0.1. Passing that on would have the Provider offer a
+    device `127.0.0.1` as somewhere to find this Host's media — worse than the
+    guess it replaced, and pointing the device at itself.
+
+    So the observation is refused here rather than downstream, and its absence
+    is not a failure: reconciliation carries on and the Provider answers from
+    its own candidates, exactly as it did before any of this existed.
+    """
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    public_key_spki = _spki(key)
+    projection = DeviceClaimProjection(
+        device_ref=REF, state="active", operational_public_key_spki=public_key_spki
+    )
+
+    for index, origin in enumerate(
+        ("http://127.0.0.1:9443", "http://169.254.7.7:9443", "http://testserver")
+    ):
+        binding = _ChannelBinding()
+        nonce = f"fresh_nonce_00001{index}"
+        response = TestClient(_configuration_app(projection, binding), base_url=origin).post(
+            "/api/device-control/v1/configuration:pull",
+            json={
+                "device_ref": REF.model_dump(mode="json"),
+                "nonce": nonce,
+                "public_key_spki": public_key_spki,
+                "device_signature": _sign(
+                    key,
+                    device_control_configuration_proof_document(device_ref=REF, nonce=nonce),
+                ),
+            },
+        )
+
+        assert response.status_code == 200, origin
+        assert binding.observed == [""], origin

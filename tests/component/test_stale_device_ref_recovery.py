@@ -119,7 +119,7 @@ class _ChannelBinding:
     def __init__(self) -> None:
         self.requested: list[DeviceRef] = []
 
-    async def execute(self, *, device_ref: DeviceRef):
+    async def execute(self, *, device_ref: DeviceRef, observed_host_address: str = ""):
         self.requested.append(device_ref)
         return ()
 

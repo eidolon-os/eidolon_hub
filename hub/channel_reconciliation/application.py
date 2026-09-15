@@ -41,7 +41,18 @@ class ReconcileChannelBinding:
         self._provider = provider
         self._clock = clock
 
-    async def execute(self, *, device_ref: DeviceRef) -> tuple[ChannelBinding, ...]:
+    async def execute(
+        self, *, device_ref: DeviceRef, observed_host_address: str = ""
+    ) -> tuple[ChannelBinding, ...]:
+        """Reconcile, optionally saying where this Host was just reached.
+
+        Optional because only one of the two things that call this can say it.
+        A device's own configuration pull is a connection this Authority can
+        look at; an Owner changing a device's output policy is a management
+        action with no device anywhere near it. So the Provider is told when
+        there is something to tell, and gets on without it when there is not.
+        """
+
         device = await self._devices.get(device_ref.device_instance_id)
         if (
             device is None
@@ -86,6 +97,15 @@ class ReconcileChannelBinding:
             # therefore invalidates the binding by changing the digest.
             "manifest_revision": device.manifest_digest,
             **({"output_policy": device.output_policy} if device.output_policy else {}),
+            # Deliberately absent from both operation ids above. Those name a
+            # generation of the binding, and this names a connection — it moves
+            # when a device changes network while nothing about what is being
+            # asked for has. Keying on it would make `refresh` ask for a new
+            # operation the ledger refuses, because a refresh has to be
+            # justified by expiry, a changed Manifest or stale runtime inputs,
+            # and "the device is on the other access point today" is none of
+            # them.
+            "observed_host_address": observed_host_address,
         }
         # Read before deciding. ``provision`` begins a generation and
         # ``refresh`` advances one, and only the Provider knows which is
