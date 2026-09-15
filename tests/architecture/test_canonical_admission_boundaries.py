@@ -5,9 +5,21 @@ import json
 import re
 from pathlib import Path
 
+import eidolon_sdk
+
+ROOT = Path(__file__).resolve().parents[2]
+#: The SDK repository, found through the installed package rather than by
+#: counting directories up from this file. This repo is not always checked out
+#: beside it under the names both were once assumed to have — a git worktree
+#: puts these tests several levels deeper — and the frozen contracts are the
+#: same documents wherever the checkout sits.
+CONTRACTS = (
+    Path(eidolon_sdk.__file__).resolve().parents[1] / "contracts" / "device_foundation" / "v1"
+)
+
 
 def test_canonical_admission_has_no_channel_kernel_companion_or_delivery_dependency() -> None:
-    root = Path(__file__).resolve().parents[2] / "hub" / "admission"
+    root = ROOT / "hub" / "admission"
     forbidden = (
         "hub.domain.channels",
         "hub.ports.channels",
@@ -32,16 +44,13 @@ def test_canonical_admission_has_no_channel_kernel_companion_or_delivery_depende
 
 
 def test_canonical_admission_router_is_the_default_pi5_writer() -> None:
-    composition = (
-        Path(__file__).resolve().parents[2] / "hub" / "composition" / "app.py"
-    ).read_text(encoding="utf-8")
+    composition = (ROOT / "hub" / "composition" / "app.py").read_text(encoding="utf-8")
     assert "create_admission_router" in composition
     assert '"/enrollments/{enrollment_id}/handoff"' not in composition
 
 
 def test_canonical_admission_target_exports_only_sdk_owned_models() -> None:
-    root = Path(__file__).resolve().parents[2]
-    bindings = root / "hub" / "contracts" / "bindings" / "admission.py"
+    bindings = ROOT / "hub" / "contracts" / "bindings" / "admission.py"
     tree = ast.parse(bindings.read_text(encoding="utf-8"))
     assert not any(isinstance(node, ast.ClassDef) for node in ast.walk(tree))
     imports = {
@@ -51,27 +60,16 @@ def test_canonical_admission_target_exports_only_sdk_owned_models() -> None:
     }
     assert imports == {"eidolon_sdk.device_foundation.v1"}
 
-    target = (root / "hub" / "admission" / "target_app.py").read_text(encoding="utf-8")
+    target = (ROOT / "hub" / "admission" / "target_app.py").read_text(encoding="utf-8")
     assert "create_admission_router" in target
     assert "device_onboarding" not in target
     assert "device_management" not in target
 
 
 def test_canonical_admission_uses_only_frozen_source_and_event_catalog() -> None:
-    workspace = Path(__file__).resolve().parents[3]
-    source = (workspace / "eidolon_hub" / "hub" / "admission" / "application.py").read_text(
-        encoding="utf-8"
-    )
+    source = (ROOT / "hub" / "admission" / "application.py").read_text(encoding="utf-8")
     catalog = json.loads(
-        (
-            workspace
-            / "eidolon_sdk"
-            / "contracts"
-            / "device_foundation"
-            / "v1"
-            / "events"
-            / "schemas.schema.json"
-        ).read_text(encoding="utf-8")
+        (CONTRACTS / "events" / "schemas.schema.json").read_text(encoding="utf-8")
     )["$defs"]["AdmissionEventType"]["enum"]
     emitted = set(re.findall(r"live\.eidolon\.device\.[a-z-]+\.v1", source))
     assert emitted
@@ -82,20 +80,11 @@ def test_canonical_admission_uses_only_frozen_source_and_event_catalog() -> None
 
 
 def test_canonical_admission_uses_only_frozen_problem_codes_and_never_maps_to_503() -> None:
-    workspace = Path(__file__).resolve().parents[3]
     schema = json.loads(
-        (
-            workspace
-            / "eidolon_sdk"
-            / "contracts"
-            / "device_foundation"
-            / "v1"
-            / "common"
-            / "schemas.schema.json"
-        ).read_text(encoding="utf-8")
+        (CONTRACTS / "common" / "schemas.schema.json").read_text(encoding="utf-8")
     )
     allowed = set(schema["$defs"]["DeviceProblem"]["properties"]["code"]["enum"])
-    root = workspace / "eidolon_hub" / "hub" / "admission"
+    root = ROOT / "hub" / "admission"
     emitted: set[str] = set()
     for path in root.glob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
@@ -113,7 +102,7 @@ def test_canonical_admission_uses_only_frozen_problem_codes_and_never_maps_to_50
 
 
 def test_canonical_admission_contains_no_legacy_synchronous_callsite() -> None:
-    root = Path(__file__).resolve().parents[2] / "hub" / "admission"
+    root = ROOT / "hub" / "admission"
     text = "\n".join(path.read_text(encoding="utf-8") for path in sorted(root.glob("*.py")))
     for forbidden in (
         "ProvisionDeviceChannels",
@@ -126,11 +115,8 @@ def test_canonical_admission_contains_no_legacy_synchronous_callsite() -> None:
 
 
 def test_ph2b_cutover_manifest_records_direct_default_activation() -> None:
-    workspace = Path(__file__).resolve().parents[3]
     manifest = json.loads(
-        (
-            workspace / "eidolon_hub" / "hub" / "admission" / "ph2b_consumer_cutover.v1.json"
-        ).read_text(encoding="utf-8")
+        (ROOT / "hub" / "admission" / "ph2b_consumer_cutover.v1.json").read_text(encoding="utf-8")
     )
     assert manifest["contract_sdk_commit"] == (
         "ae8ab26f6a0e8afccd7e03024baa4e340754874e"
@@ -167,26 +153,17 @@ def test_ph2b_cutover_manifest_records_direct_default_activation() -> None:
 
 
 def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requirement() -> None:
-    workspace = Path(__file__).resolve().parents[3]
     mapping = json.loads(
-        (
-            workspace / "eidolon_hub" / "hub" / "admission" / "requirement_test_mapping.v1.json"
-        ).read_text(encoding="utf-8")
+        (ROOT / "hub" / "admission" / "requirement_test_mapping.v1.json").read_text(
+            encoding="utf-8"
+        )
     )
     sdk_requirements = json.loads(
-        (
-            workspace
-            / "eidolon_sdk"
-            / "contracts"
-            / "device_foundation"
-            / "v1"
-            / "requirements"
-            / "requirements.json"
-        ).read_text(encoding="utf-8")
+        (CONTRACTS / "requirements" / "requirements.json").read_text(encoding="utf-8")
     )
     frozen_ids = {entry["requirement_id"] for entry in sdk_requirements["requirements"]}
     test_names: set[str] = set()
-    for path in (workspace / "eidolon_hub" / "tests").rglob("test_*.py"):
+    for path in (ROOT / "tests").rglob("test_*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
         test_names.update(
             node.name
@@ -205,6 +182,6 @@ def test_every_hub_ph2a_requirement_maps_to_a_real_test_and_frozen_sdk_requireme
 
 
 def test_canonical_target_never_reads_or_writes_legacy_opaque_grant() -> None:
-    root = Path(__file__).resolve().parents[2] / "hub" / "admission"
+    root = ROOT / "hub" / "admission"
     canonical = "\n".join(path.read_text(encoding="utf-8") for path in sorted(root.glob("*.py")))
     assert "sealed_grant" not in canonical
