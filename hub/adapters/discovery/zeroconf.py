@@ -172,7 +172,7 @@ class ZeroconfAuthorityCandidateAdvertiser:
             # that matters here asks over both — the board asks over IPv4 and
             # nothing else. Answering over IPv6 with none but A records to give
             # back was never an answer an IPv6-only asker could use.
-            aiozc = AsyncZeroconf(interfaces=list(addresses), ip_version=IPVersion.All)
+            aiozc = self._open_network(addresses)
             try:
                 await aiozc.async_register_service(info, allow_name_change=False)
                 # Do not adopt a transport created across another network change.
@@ -185,6 +185,35 @@ class ZeroconfAuthorityCandidateAdvertiser:
                 await aiozc.async_close()
                 raise
             self._aiozc, self._info, self._observation = aiozc, info, snapshot
+
+    def _open_network(self, addresses: tuple[str, ...]) -> AsyncZeroconf:
+        """Sockets on the links just claimed — or on as many as still exist.
+
+        zeroconf resolves an IPv6 entry in this list against the machine's
+        adapters as it opens, and refuses the whole list if one of them is no
+        longer there. The addresses came from an observation taken a moment
+        earlier, so a link that went away in between would take every record
+        with it, including the IPv4 ones that were still true. One link's
+        answering surface is a smaller thing to lose than all of them, and the
+        refresh loop revisits the whole question within `refresh_seconds`
+        either way.
+
+        Nothing here retries an address: if IPv4 cannot be opened either, the
+        caller's handling logs it and the next refresh tries again.
+        """
+
+        try:
+            return AsyncZeroconf(interfaces=list(addresses), ip_version=IPVersion.All)
+        except RuntimeError:
+            ipv4 = [value for value in addresses
+                    if ipaddress.ip_address(value).version == 4]
+            if not ipv4 or len(ipv4) == len(addresses):
+                raise
+            logger.warning(
+                "mDNS binding narrowed to IPv4 advertisement=%s reason=address_not_on_any_adapter",
+                self._advertisement_id,
+            )
+            return AsyncZeroconf(interfaces=ipv4, ip_version=IPVersion.All)
 
     async def stop(self) -> None:
         self._running = False

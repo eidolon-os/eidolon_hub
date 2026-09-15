@@ -330,3 +330,66 @@ async def test_plugging_in_the_operators_cable_does_not_rebuild_the_advertisemen
         assert len(instances) == 1
         assert advertiser._info.parsed_addresses() == ["192.168.100.19"]
         await advertiser.stop()
+
+
+def test_the_interface_list_is_a_shape_the_real_library_understands() -> None:
+    """Every other test here mocks `AsyncZeroconf`, so none of them would
+    notice if this list were a shape zeroconf quietly discards.
+
+    That is not a hypothetical: the library's own `InterfaceChoice.All` path
+    builds IPv6 entries as `(address, index)` tuples, and a list containing
+    those tuples is accepted and then dropped on the floor — which would leave
+    the Hub bound to no interface at all while every assertion above still
+    passed. So this one asks the real library what it makes of what we hand it.
+    """
+
+    import ifaddr as real_ifaddr
+    from zeroconf import IPVersion
+    from zeroconf._utils.net import normalize_interface_choice
+
+    local = [
+        ip.ip
+        for adapter in real_ifaddr.get_adapters()
+        for ip in adapter.ips
+        if isinstance(ip.ip, str) and not ip.ip.startswith("127.")
+    ]
+    if not local:
+        import pytest
+
+        pytest.skip("this machine reports no routable IPv4 address")
+
+    assert normalize_interface_choice(local[:1], IPVersion.All) == local[:1]
+
+
+async def test_one_address_that_moved_does_not_take_the_other_records_with_it() -> None:
+    """zeroconf resolves an IPv6 entry against the adapters as it opens and
+    refuses the whole list if it is gone. The observation that produced these
+    records was taken a moment earlier, so that is a live race — and losing
+    every record because one link moved is worse than losing one link."""
+
+    from hub.adapters.discovery import zeroconf as m
+
+    attempts: list[list[str]] = []
+
+    def construct(**kwargs):
+        attempts.append(list(kwargs["interfaces"]))
+        if any(":" in value for value in kwargs["interfaces"]):
+            raise RuntimeError("No adapter found for IP address 2001:db8::1")
+        instance = MagicMock()
+        for name in ("async_register_service", "async_unregister_service", "async_close"):
+            setattr(instance, name, AsyncMock())
+        return instance
+
+    with patch.object(m, "AsyncZeroconf", side_effect=construct), patch.object(
+        m,
+        "interface_snapshot",
+        return_value=(("wlan0", 3, "192.168.100.19", 24), ("wlan0", 3, "2001:db8::1", 64)),
+    ):
+        advertiser = _dynamic_advertiser()
+        await advertiser.start()
+        published = advertiser._info.parsed_addresses()
+        await advertiser.stop()
+
+    assert attempts == [["192.168.100.19", "2001:db8::1"], ["192.168.100.19"]]
+    # The records still name both; only the answering surface narrowed.
+    assert set(published) == {"192.168.100.19", "2001:db8::1"}
