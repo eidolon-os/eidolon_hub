@@ -10,10 +10,18 @@ reconciliation all name the same type by the same path.
 from __future__ import annotations
 
 from eidolon_sdk.biz.presentation import DeviceOutputPolicy, OutputSelection
-from eidolon_sdk.biz.presentation.device import SetDeviceOutputPolicy
+from eidolon_sdk.biz.presentation.device import (
+    DeviceOutputConfiguration,
+    ReadDeviceOutputPolicy,
+    SetDeviceOutputPolicy,
+)
+from eidolon_sdk.biz.presentation.negotiation import manifest_outputs
 
 __all__ = [
+    "DeviceOutputConfiguration",
     "DeviceOutputPolicy",
     "OutputSelection",
+    "ReadDeviceOutputPolicy",
     "SetDeviceOutputPolicy",
+    "manifest_outputs",
 ]

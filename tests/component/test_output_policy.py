@@ -10,8 +10,11 @@ from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.repositories import SqlHubRepositories
 from hub.admission.domain import ActorContext, AdmissionProblem
 from hub.device_control.output_policy import (
+    POLICY_READ_SCOPE,
     POLICY_WRITE_SCOPE,
     OutputPolicyConflict,
+    ReadDeviceOutputConfiguration,
+    ReadOutputPolicy,
     SetOutputPolicy,
     UpdateDeviceOutputPolicy,
 )
@@ -23,7 +26,30 @@ from hub.ports.management_events import DeviceManagementEventRecord
 NOW = datetime(2026, 9, 15, tzinfo=UTC)
 
 
-def actor(owner="owner_1", scopes=(POLICY_WRITE_SCOPE,)):
+#: What a companion-face device declares about itself: it can receive audio,
+#: it can show this product's face, and it can show dialogue text.
+COMPANION_MANIFEST = {
+    "schema_version": 1,
+    "title": "Companion",
+    "media": [{"kind": "audio", "direction": "bidirectional", "codecs": ["opus"]}],
+    "properties": [
+        {
+            "name": "expression.profile",
+            "observable": False,
+            "writable": False,
+            "schema": {"type": "string", "const": "eidolon.face.v1"},
+        },
+        {
+            "name": "output.dialogue_text",
+            "observable": False,
+            "writable": False,
+            "schema": {"type": "boolean", "const": True},
+        },
+    ],
+}
+
+
+def actor(owner="owner_1", scopes=(POLICY_WRITE_SCOPE, POLICY_READ_SCOPE)):
     return ActorContext(
         actor=ControllerActorRef(
             principal_id="controller-1",
@@ -47,7 +73,7 @@ async def subject(tmp_path):
         display_name="Companion",
         manifest_id="companion",
         manifest=DeviceManifestDocument.from_declaration(
-            document={"schema_version": 1, "title": "Companion"}, declared_revision=1
+            document=COMPANION_MANIFEST, declared_revision=1
         ),
         enrolled_at=NOW,
         updated_at=NOW,
@@ -111,3 +137,44 @@ async def test_foreign_owner_stale_revision_and_missing_scope_cannot_change_poli
     with pytest.raises(OutputPolicyConflict):
         await service.execute(command=voice, context=actor())
     assert not (await repos.devices.get(device.identity.device_id)).output_policy.allowed.speech
+
+
+async def test_read_answers_declared_capability_and_the_undecided_policy(subject):
+    """Capability comes from the Manifest; ``None`` means nobody has decided."""
+
+    service, repos, device, _ = subject
+    reader = ReadDeviceOutputConfiguration(devices=repos.devices)
+    query = ReadOutputPolicy(device_ref=device.device_ref)
+
+    before = await reader.execute(query=query, context=actor())
+    assert before.capabilities == OutputSelection(
+        speech=True, dialogue_text=True, expression=True
+    )
+    assert before.policy is None
+
+    await service.execute(
+        command=SetOutputPolicy(
+            device_ref=device.device_ref,
+            expected_revision=0,
+            allowed=OutputSelection(expression=True),
+        ),
+        context=actor(),
+    )
+    after = await reader.execute(query=query, context=actor())
+    # The Owner narrowing what may be used never narrows what the device is.
+    assert after.capabilities == before.capabilities
+    assert after.policy is not None and after.policy.allowed == OutputSelection(expression=True)
+
+
+async def test_read_refuses_exactly_what_the_write_refuses(subject):
+    _, repos, device, _ = subject
+    reader = ReadDeviceOutputConfiguration(devices=repos.devices)
+    query = ReadOutputPolicy(device_ref=device.device_ref)
+
+    with pytest.raises(PermissionError):
+        await reader.execute(query=query, context=actor("owner_other"))
+    with pytest.raises(AdmissionProblem):
+        await reader.execute(query=query, context=actor(scopes=(POLICY_WRITE_SCOPE,)))
+    older = device.device_ref.model_copy(update={"claim_generation": 2})
+    with pytest.raises(OutputPolicyConflict):
+        await reader.execute(query=ReadOutputPolicy(device_ref=older), context=actor())
