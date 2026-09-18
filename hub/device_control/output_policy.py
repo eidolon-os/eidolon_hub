@@ -12,6 +12,7 @@ from hub.contracts.bindings.presentation import (
     DeviceOutputConfiguration,
     DeviceOutputPolicy,
     manifest_outputs,
+    output_policy_required,
 )
 from hub.contracts.bindings.presentation import ReadDeviceOutputPolicy as ReadOutputPolicy
 from hub.contracts.bindings.presentation import SetDeviceOutputPolicy as SetOutputPolicy
@@ -72,10 +73,13 @@ class ReadDeviceOutputConfiguration:
     ) -> DeviceOutputConfiguration:
         context.require_scope(POLICY_READ_SCOPE)
         current = await _owned_device(self._devices, query.device_ref, context)
+        manifest = json.loads(current.manifest_json)
+        capabilities = manifest_outputs(manifest)
         return DeviceOutputConfiguration(
             device_ref=current.device_ref,
-            capabilities=manifest_outputs(json.loads(current.manifest_json)),
+            capabilities=capabilities,
             policy=current.output_policy,
+            policy_required=output_policy_required(capabilities, manifest=manifest),
         )
 
 

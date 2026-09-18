@@ -147,10 +147,9 @@ async def test_read_answers_declared_capability_and_the_undecided_policy(subject
     query = ReadOutputPolicy(device_ref=device.device_ref)
 
     before = await reader.execute(query=query, context=actor())
-    assert before.capabilities == OutputSelection(
-        speech=True, dialogue_text=True, expression=True
-    )
+    assert before.capabilities == OutputSelection(speech=True, dialogue_text=True, expression=True)
     assert before.policy is None
+    assert before.policy_required is True
 
     await service.execute(
         command=SetOutputPolicy(
@@ -178,3 +177,35 @@ async def test_read_refuses_exactly_what_the_write_refuses(subject):
     older = device.device_ref.model_copy(update={"claim_generation": 2})
     with pytest.raises(OutputPolicyConflict):
         await reader.execute(query=ReadOutputPolicy(device_ref=older), context=actor())
+
+
+async def test_read_projects_explicit_non_face_contract(subject):
+    from dataclasses import replace
+
+    _, _, device, _ = subject
+    manifest = dict(COMPANION_MANIFEST)
+    manifest["properties"] = [
+        p for p in manifest["properties"] if p["name"] != "expression.profile"
+    ]
+    manifest["properties"].append(
+        {
+            "name": "output.contract",
+            "writable": False,
+            "schema": {"type": "string", "const": "eidolon.outputs.v1"},
+        }
+    )
+    changed = replace(
+        device,
+        manifest=DeviceManifestDocument.from_declaration(document=manifest, declared_revision=2),
+    )
+
+    class Repository:
+        async def get(self, device_id):
+            return changed
+
+    result = await ReadDeviceOutputConfiguration(devices=Repository()).execute(
+        query=ReadOutputPolicy(device_ref=changed.device_ref), context=actor()
+    )
+    assert not result.capabilities.expression
+    assert result.policy_required is True
+    assert result.policy is None

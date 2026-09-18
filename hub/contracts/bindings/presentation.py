@@ -15,7 +15,7 @@ from eidolon_sdk.biz.presentation.device import (
     ReadDeviceOutputPolicy,
     SetDeviceOutputPolicy,
 )
-from eidolon_sdk.biz.presentation.negotiation import manifest_outputs
+from eidolon_sdk.biz.presentation.negotiation import manifest_outputs, output_policy_required
 
 __all__ = [
     "DeviceOutputConfiguration",
@@ -24,4 +24,5 @@ __all__ = [
     "ReadDeviceOutputPolicy",
     "SetDeviceOutputPolicy",
     "manifest_outputs",
+    "output_policy_required",
 ]
