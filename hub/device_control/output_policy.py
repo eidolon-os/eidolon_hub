@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from eidolon_sdk.biz.presentation import manifest_inputs
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 
@@ -78,6 +79,7 @@ class ReadDeviceOutputConfiguration:
         return DeviceOutputConfiguration(
             device_ref=current.device_ref,
             capabilities=capabilities,
+            input_capabilities=manifest_inputs(manifest),
             policy=current.output_policy,
             policy_required=output_policy_required(capabilities, manifest=manifest),
         )
@@ -109,12 +111,17 @@ class UpdateDeviceOutputPolicy:
                 current.output_policy is not None
                 and revision == command.expected_revision + 1
                 and current.output_policy.allowed == command.allowed
+                and (command.inputs is None or current.output_policy.inputs == command.inputs)
             ):
                 if self._on_changed is not None:
                     await self._on_changed(command.device_ref)
                 return current.output_policy
             raise OutputPolicyConflict("output policy revision changed")
-        policy = DeviceOutputPolicy(revision=revision + 1, allowed=command.allowed)
+        # Older clients omit inputs: an output-only edit must not reopen a mic.
+        inputs = command.inputs if command.inputs is not None else (
+            current.output_policy.inputs if current.output_policy else None
+        )
+        policy = DeviceOutputPolicy(revision=revision + 1, allowed=command.allowed, inputs=inputs)
         now = self._clock.now()
         await self._mutations.commit(
             expected=current,

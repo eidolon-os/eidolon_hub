@@ -209,3 +209,26 @@ async def test_read_projects_explicit_non_face_contract(subject):
     assert not result.capabilities.expression
     assert result.policy_required is True
     assert result.policy is None
+
+
+async def test_input_permission_persists_and_output_only_clients_cannot_reopen_it(subject):
+    from eidolon_sdk.biz.presentation import InputSelection
+    service, repos, device, db = subject
+    command = SetOutputPolicy(device_ref=device.device_ref, expected_revision=0,
+                              allowed=OutputSelection(speech=True),
+                              inputs=InputSelection(microphone=False))
+    first = await service.execute(command=command, context=actor())
+    assert await service.execute(command=command, context=actor()) == first
+    old_client = SetOutputPolicy(device_ref=device.device_ref, expected_revision=1,
+                                 allowed=OutputSelection(expression=True))
+    updated = await service.execute(command=old_client, context=actor())
+    assert updated.inputs == InputSelection(microphone=False)
+    assert updated.revision == 2
+    await db.initialize_schema()
+    stored = await repos.devices.get(device.identity.device_id)
+    assert stored.output_policy.inputs.microphone is False
+    configuration = await ReadDeviceOutputConfiguration(devices=repos.devices).execute(
+        query=ReadOutputPolicy(device_ref=device.device_ref), context=actor())
+    assert configuration.input_capabilities.microphone is True
+    with pytest.raises(OutputPolicyConflict):
+        await service.execute(command=command.model_copy(update={'inputs': InputSelection(microphone=True)}), context=actor())
