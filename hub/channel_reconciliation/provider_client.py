@@ -18,6 +18,7 @@ from .domain import (
     ChannelProviderUnavailable,
     CurrentChannelBinding,
 )
+from .specification import channel_device_payload
 
 
 class _WireModel(BaseModel):
@@ -132,14 +133,10 @@ class ChannelProviderHttpClient:
             # absent field rather than having to decide what an empty address
             # means.
             **({"observed_host_address": observed_host_address} if observed_host_address else {}),
-            "device": {
-                "owner_id": owner_id,
-                "display_name": display_name,
-                "device_kind": manifest_id,
-                "manifest": dict(manifest),
-                "manifest_revision": manifest_revision,
-                **({"output_policy": output_policy.model_dump(mode="json")} if output_policy else {}),
-            },
+            "device": channel_device_payload(
+                owner_id=owner_id, display_name=display_name, manifest_id=manifest_id,
+                manifest=manifest, manifest_revision=manifest_revision, output_policy=output_policy,
+            ),
         }
         raw = await self._post("device-channels/provision", payload)
         try:
