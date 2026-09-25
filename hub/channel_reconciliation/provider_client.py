@@ -191,6 +191,26 @@ class ChannelProviderHttpClient:
                 detail="revoke response does not match request",
             )
 
+    async def device_conversation(self, *, action: str, owner_id: str,
+                                  session_id: str, selection=None) -> dict:
+        from eidolon_sdk.biz.control.device_conversation import DeviceConversationStatus
+        if action not in {"open", "status", "close"}:
+            raise ValueError("invalid device conversation action")
+        payload = {"owner_id": owner_id}
+        if action == "open":
+            payload["selection"] = selection.model_dump(mode="json")
+        else:
+            payload["session_id"] = session_id
+        raw = await self._post(f"device-conversations/{action}", payload)
+        try:
+            result = DeviceConversationStatus.model_validate_json(raw)
+            if result.session_id != session_id:
+                raise ValueError("conversation response names another session")
+        except (ValidationError, ValueError) as exc:
+            raise ChannelProviderError("INVALID_PROVIDER_RESPONSE", retryable=False,
+                detail="invalid device conversation response") from exc
+        return result.model_dump(mode="json")
+
     async def open_shared_session(self, *, selection, owner_id: str, specifications: list[dict]) -> dict:
         raw = await self._post("shared-sessions/open", {
             "selection": selection.model_dump(mode="json"),

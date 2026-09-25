@@ -25,6 +25,8 @@ from hub.channel_reconciliation.application import (
 )
 from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
 from hub.channel_reconciliation.shared_selection import SharedDeviceSessions
+from hub.channel_reconciliation.device_conversation import DeviceConversations
+from hub.device_control.device_conversation_http import create_device_conversation_router
 from hub.device_control.shared_session_http import create_shared_session_router
 from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
@@ -72,6 +74,7 @@ class ComposedHttpRuntime:
     output_policy: UpdateDeviceOutputPolicy
     output_configuration: ReadDeviceOutputConfiguration
     shared_sessions: SharedDeviceSessions
+    device_conversations: DeviceConversations
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
@@ -202,6 +205,10 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     resources.repositories.devices, channel_provider,
                     channel_binding=channel_binding,
                 ),
+                device_conversations=DeviceConversations(
+                    resources.repositories.devices, channel_provider,
+                    channel_binding=channel_binding,
+                ),
             )
             yield
         finally:
@@ -269,6 +276,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         actor_provider=admission_actor,
     ))
     app.include_router(create_device_erase_router(services=lambda: require_runtime().device_erase))
+    app.include_router(create_device_conversation_router(
+        service=lambda: require_runtime().device_conversations, actor_provider=admission_actor,
+    ))
     app.include_router(create_shared_session_router(
         service=lambda: require_runtime().shared_sessions, actor_provider=admission_actor,
     ))
