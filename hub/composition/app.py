@@ -197,7 +197,10 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 output_configuration=ReadDeviceOutputConfiguration(
                     devices=resources.repositories.devices,
                 ),
-                shared_sessions=SharedDeviceSessions(resources.repositories.devices, channel_provider),
+                shared_sessions=SharedDeviceSessions(
+                    resources.repositories.devices, channel_provider,
+                    channel_binding=device_erase.channel_binding,
+                ),
             )
             yield
         finally:

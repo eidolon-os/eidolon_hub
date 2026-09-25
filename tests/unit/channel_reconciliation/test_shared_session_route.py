@@ -44,7 +44,8 @@ async def test_real_jwt_authority_and_projection_reach_existing_provider_client(
         open_shared_session=AsyncMock(return_value={"state": "transport_ready"}),
         close_shared_session=AsyncMock(return_value={"state": "closed"}),
     )
-    service = SharedDeviceSessions(reader, provider)
+    binding = SimpleNamespace(execute=AsyncMock(return_value=(object(),)))
+    service = SharedDeviceSessions(reader, provider, channel_binding=binding)
     app = FastAPI()
     app.include_router(
         create_shared_session_router(
@@ -88,3 +89,4 @@ async def test_real_jwt_authority_and_projection_reach_existing_provider_client(
             )
         else:
             provider.open_shared_session.assert_not_called()
+            binding.execute.assert_not_called()

@@ -38,7 +38,7 @@ def setup():
 async def test_resolves_only_existing_projection_without_binding_or_operation_state():
     first, second, selection, principal = setup()
     reader = SimpleNamespace(get=AsyncMock(side_effect=[first, second]))
-    result = await SharedDeviceSessions(reader, None).execute(selection, context=principal)
+    result = await SharedDeviceSessions(reader, None, channel_binding=None).execute(selection, context=principal)
     assert result["owner_id"] == "owner_01"
     assert len(result["specifications"]) == 2
     for item in result["specifications"]:
@@ -64,6 +64,33 @@ async def test_refuses_incomplete_or_unauthorized_selection(case):
         second = replace(second, trust_epoch=second.trust_epoch + 1)
     reader = SimpleNamespace(get=AsyncMock(side_effect=[first, second]))
     with pytest.raises((PermissionError, AdmissionProblem)):
-        await SharedDeviceSessions(reader, None).execute(selection, context=principal)
+        await SharedDeviceSessions(reader, None, channel_binding=None).execute(selection, context=principal)
     if case == "unscoped":
         reader.get.assert_not_called()
+
+
+async def test_open_reconciles_standing_bindings_before_inviting():
+    first, second, selection, principal = setup()
+    reader = SimpleNamespace(get=AsyncMock(side_effect=[first, second]))
+    events = []
+    async def reconcile(*, device_ref):
+        events.append(device_ref)
+        return (object(),)
+    async def invite(**kwargs):
+        assert events == list(selection.devices)
+        return {"state": "transport_ready"}
+    service = SharedDeviceSessions(reader, SimpleNamespace(open_shared_session=invite),
+        channel_binding=SimpleNamespace(execute=reconcile))
+    assert await service.open(selection, context=principal) == {"state": "transport_ready"}
+
+
+async def test_open_never_invites_when_standing_binding_cannot_be_reconciled():
+    from hub.channel_reconciliation.domain import ChannelProviderError
+    first, second, selection, principal = setup()
+    reader = SimpleNamespace(get=AsyncMock(side_effect=[first, second]))
+    provider = SimpleNamespace(open_shared_session=AsyncMock())
+    service = SharedDeviceSessions(reader, provider,
+        channel_binding=SimpleNamespace(execute=AsyncMock(return_value=())))
+    with pytest.raises(ChannelProviderError):
+        await service.open(selection, context=principal)
+    provider.open_shared_session.assert_not_called()

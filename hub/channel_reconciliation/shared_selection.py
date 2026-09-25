@@ -11,6 +11,8 @@ from eidolon_sdk.biz.control.shared_session import SharedSessionSelection
 from hub.admission.domain import ActorContext
 from hub.domain.devices.entities import DeviceLifecycleState
 
+from .application import ReconcileChannelBinding
+from .domain import ChannelProviderError
 from .ports import ChannelDeviceProjectionReader
 from .specification import channel_device_payload
 
@@ -18,9 +20,11 @@ SHARED_SESSION_SCOPE = "device.shared-session.control"
 
 
 class SharedDeviceSessions:
-    def __init__(self, devices: ChannelDeviceProjectionReader, provider):
+    def __init__(self, devices: ChannelDeviceProjectionReader, provider, *,
+                 channel_binding: ReconcileChannelBinding):
         self._devices = devices
         self._provider = provider
+        self._channel_binding = channel_binding
 
     async def execute(self, selection: SharedSessionSelection, *, context: ActorContext) -> dict:
         context.require_scope(SHARED_SESSION_SCOPE)
@@ -63,6 +67,12 @@ class SharedDeviceSessions:
 
     async def open(self, selection: SharedSessionSelection, *, context: ActorContext) -> dict:
         resolved = await self.execute(selection, context=context)
+        # A standing transport can remain connected after its join token expires.
+        # Reuse the same lifecycle reconciler as device config pulls; selection
+        # authorization above must complete before any binding is changed.
+        for ref in selection.devices:
+            if not await self._channel_binding.execute(device_ref=ref):
+                raise ChannelProviderError("SHARED_CHANNEL_NOT_READY", retryable=True)
         return await self._provider.open_shared_session(
             selection=selection,
             owner_id=resolved["owner_id"],
