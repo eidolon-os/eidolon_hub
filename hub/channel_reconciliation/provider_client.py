@@ -46,6 +46,17 @@ class _RevokeResponse(_WireModel):
     device_ref: DeviceRef
 
 
+class _SharedReady(_WireModel):
+    session_id: str
+    state: Literal["transport_ready"]
+    device_ids: tuple[str, ...]
+
+
+class _SharedClosed(_WireModel):
+    session_id: str
+    state: Literal["closed"]
+
+
 class ChannelProviderHttpClient:
     """Provider client that never turns domain rejection into transport failure."""
 
@@ -180,13 +191,41 @@ class ChannelProviderHttpClient:
                 detail="revoke response does not match request",
             )
 
-    async def _post(self, route: str, payload: dict[str, object]) -> bytes:
+    async def open_shared_session(self, *, selection, owner_id: str, specifications: list[dict]) -> dict:
+        raw = await self._post("shared-sessions/open", {
+            "selection": selection.model_dump(mode="json"),
+            "owner_id": owner_id, "specifications": specifications,
+        }, timeout_seconds=30.0)
+        try:
+            response = _SharedReady.model_validate_json(raw)
+            if (response.session_id != selection.session_id or
+                    response.device_ids != tuple(r.device_instance_id for r in selection.devices)):
+                raise ValueError("shared admission differs from selected devices")
+        except (ValidationError, ValueError) as exc:
+            raise ChannelProviderError("INVALID_PROVIDER_RESPONSE", retryable=False,
+                                       detail="invalid shared admission response") from exc
+        return response.model_dump(mode="json")
+
+    async def close_shared_session(self, *, session_id: str, owner_id: str) -> dict:
+        raw = await self._post("shared-sessions/close", {
+            "session_id": session_id, "owner_id": owner_id,
+        }, timeout_seconds=30.0)
+        try:
+            response = _SharedClosed.model_validate_json(raw)
+            if response.session_id != session_id:
+                raise ValueError("shared close names another session")
+        except (ValidationError, ValueError) as exc:
+            raise ChannelProviderError("INVALID_PROVIDER_RESPONSE", retryable=False,
+                                       detail="invalid shared close response") from exc
+        return response.model_dump(mode="json")
+
+    async def _post(self, route: str, payload: dict[str, object], *, timeout_seconds: float | None = None) -> bytes:
         try:
             response = await self._client.post(
                 f"{self._base}/{route}",
                 content=json.dumps(payload, separators=(",", ":")),
                 headers={"Content-Type": "application/json", **self._headers},
-                timeout=self._timeout,
+                timeout=self._timeout if timeout_seconds is None else timeout_seconds,
             )
         except httpx.HTTPError as exc:
             raise ChannelProviderUnavailable() from exc
