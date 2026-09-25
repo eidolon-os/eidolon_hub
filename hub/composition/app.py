@@ -24,6 +24,8 @@ from hub.channel_reconciliation.application import (
     ReconcileChannelRevocations,
 )
 from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
+from hub.channel_reconciliation.shared_selection import SharedDeviceSessions
+from hub.device_control.shared_session_http import create_shared_session_router
 from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
@@ -69,6 +71,7 @@ class ComposedHttpRuntime:
     admission_actor: JwtAdmissionActorProvider
     output_policy: UpdateDeviceOutputPolicy
     output_configuration: ReadDeviceOutputConfiguration
+    shared_sessions: SharedDeviceSessions
 
 
 def create_composed_app(config: HubConfig | None = None) -> FastAPI:
@@ -194,6 +197,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 output_configuration=ReadDeviceOutputConfiguration(
                     devices=resources.repositories.devices,
                 ),
+                shared_sessions=SharedDeviceSessions(resources.repositories.devices, channel_provider),
             )
             yield
         finally:
@@ -261,6 +265,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         actor_provider=admission_actor,
     ))
     app.include_router(create_device_erase_router(services=lambda: require_runtime().device_erase))
+    app.include_router(create_shared_session_router(
+        service=lambda: require_runtime().shared_sessions, actor_provider=admission_actor,
+    ))
 
     @app.get("/health")
     async def health() -> dict[str, str]:

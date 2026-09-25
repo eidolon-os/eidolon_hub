@@ -8,30 +8,30 @@ import json
 
 from eidolon_sdk.biz.control.shared_session import SharedSessionSelection
 
+from hub.admission.domain import ActorContext
 from hub.domain.devices.entities import DeviceLifecycleState
-from hub.ports.identity import ManagementPrincipal
 
 from .ports import ChannelDeviceProjectionReader
 from .specification import channel_device_payload
 
+SHARED_SESSION_SCOPE = "device.shared-session.control"
 
-class ResolveSharedSelection:
-    def __init__(self, devices: ChannelDeviceProjectionReader):
+
+class SharedDeviceSessions:
+    def __init__(self, devices: ChannelDeviceProjectionReader, provider):
         self._devices = devices
+        self._provider = provider
 
-    async def execute(
-        self, selection: SharedSessionSelection, *, principal: ManagementPrincipal
-    ) -> dict:
-        # Principal must be produced by the existing boundary authenticator.
-        # An unscoped service reader is not an Owner acting on its devices.
-        if principal.owner_id is None:
-            raise PermissionError("an authenticated Owner scope is required")
+    async def execute(self, selection: SharedSessionSelection, *, context: ActorContext) -> dict:
+        context.require_scope(SHARED_SESSION_SCOPE)
+        owner_id = str(context.business_owner_id)
         devices = []
         for ref in selection.devices:
             device = await self._devices.get(ref.device_instance_id)
             if (
                 device is None
-                or device.owner_id != principal.owner_id
+                or device.owner_id != owner_id
+                or device.owner_domain_id != str(context.owner_domain_id)
                 or device.lifecycle_state != DeviceLifecycleState.APPROVED
                 or device.device_ref != ref
             ):
@@ -57,6 +57,22 @@ class ResolveSharedSelection:
             )
         return {
             "selection": selection.model_dump(mode="json"),
-            "owner_id": principal.owner_id,
+            "owner_id": owner_id,
             "specifications": specifications,
         }
+
+    async def open(self, selection: SharedSessionSelection, *, context: ActorContext) -> dict:
+        resolved = await self.execute(selection, context=context)
+        return await self._provider.open_shared_session(
+            selection=selection,
+            owner_id=resolved["owner_id"],
+            specifications=resolved["specifications"],
+        )
+
+    async def close(self, session_id: str, *, context: ActorContext) -> dict:
+        context.require_scope(SHARED_SESSION_SCOPE)
+        # Cleanup must remain possible after a selected device was revoked.
+        return await self._provider.close_shared_session(
+            session_id=session_id,
+            owner_id=str(context.business_owner_id),
+        )
