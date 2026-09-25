@@ -5,24 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from eidolon_sdk.biz.control.channel_binding import ChannelBinding
 from pydantic import BaseModel, ConfigDict, Field
 
 from hub.contracts.bindings.device import DeviceRef
 from hub.contracts.bindings.presentation import DeviceOutputPolicy
-
-
-class ChannelBinding(BaseModel):
-    """Provider-owned opaque binding exposed by Device Control configuration."""
-
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    channel_id: str = Field(min_length=1, max_length=128)
-    purpose: str = Field(min_length=1, max_length=64)
-    kinds: tuple[str, ...] = Field(min_length=1, max_length=8)
-    binding_format: str = Field(min_length=1, max_length=128)
-    issued_at_ms: int = Field(ge=0)
-    expires_at_ms: int = Field(gt=0)
-    opaque_binding: str = Field(min_length=1, max_length=131_072)
 
 
 class CurrentChannelBinding(BaseModel):
