@@ -139,6 +139,11 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 clock=resources.clock,
                 operation_ttl=erase_operation_ttl,
             )
+            channel_binding = ReconcileChannelBinding(
+                devices=resources.repositories.devices,
+                provider=channel_provider,
+                clock=resources.clock,
+            )
             device_erase = DeviceEraseHttpServices(
                 configuration=PullDeviceConfiguration(
                     claims=resources.repositories.device_erase,
@@ -152,11 +157,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     ids=resources.ids,
                     clock=resources.clock,
                 ),
-                channel_binding=ReconcileChannelBinding(
-                    devices=resources.repositories.devices,
-                    provider=channel_provider,
-                    clock=resources.clock,
-                ),
+                channel_binding=channel_binding,
                 pull=PullDeviceEraseOperation(
                     ledger=resources.repositories.device_erase,
                     clock=resources.clock,
@@ -192,14 +193,14 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     devices=resources.repositories.devices,
                     mutations=resources.repositories.device_mutations,
                     clock=resources.clock, ids=resources.ids,
-                    on_changed=lambda ref: device_erase.channel_binding.execute(device_ref=ref),
+                    on_changed=lambda ref: channel_binding.execute(device_ref=ref),
                 ),
                 output_configuration=ReadDeviceOutputConfiguration(
                     devices=resources.repositories.devices,
                 ),
                 shared_sessions=SharedDeviceSessions(
                     resources.repositories.devices, channel_provider,
-                    channel_binding=device_erase.channel_binding,
+                    channel_binding=channel_binding,
                 ),
             )
             yield
