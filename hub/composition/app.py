@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from hub.channel_reconciliation.role_groups import RoleGroups
+from hub.device_control.role_group_http import create_role_group_router
+
 import os
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -74,6 +77,7 @@ class ComposedHttpRuntime:
     output_policy: UpdateDeviceOutputPolicy
     output_configuration: ReadDeviceOutputConfiguration
     shared_sessions: SharedDeviceSessions
+    role_groups: RoleGroups
     device_conversations: DeviceConversations
 
 
@@ -205,6 +209,8 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                     resources.repositories.devices, channel_provider,
                     channel_binding=channel_binding,
                 ),
+                role_groups=RoleGroups(resources.repositories.devices, channel_provider,
+                                       channel_binding=channel_binding),
                 device_conversations=DeviceConversations(
                     resources.repositories.devices, channel_provider,
                     channel_binding=channel_binding,
@@ -276,6 +282,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         actor_provider=admission_actor,
     ))
     app.include_router(create_device_erase_router(services=lambda: require_runtime().device_erase))
+    app.include_router(create_role_group_router(
+        service=lambda: require_runtime().role_groups, actor_provider=admission_actor,
+    ))
     app.include_router(create_device_conversation_router(
         service=lambda: require_runtime().device_conversations, actor_provider=admission_actor,
     ))

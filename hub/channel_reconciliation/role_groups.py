@@ -1,26 +1,21 @@
-"""Authorize two existing device endpoints without changing their attachments."""
-from eidolon_sdk.biz.control.device_conversation import DeviceConversationSelection
-
+"""Owner-authorized role-group preparation; media and adjudication stay in Channel/Agent."""
 from .endpoint_preparation import prepare_owned_endpoints
 
 DEVICE_CONVERSATION_SCOPE = "device.conversation.control"
 
 
-class DeviceConversations:
+class RoleGroups:
     def __init__(self, devices, provider, *, channel_binding):
-        self._devices = devices
-        self._provider = provider
-        self._channel_binding = channel_binding
+        self._devices, self._provider, self._channel_binding = devices, provider, channel_binding
 
-    async def open(self, selection: DeviceConversationSelection, *, context):
+    async def open(self, selection, *, context):
         context.require_scope(DEVICE_CONVERSATION_SCOPE)
-        owner = str(context.business_owner_id)
         await prepare_owned_endpoints(selection.devices, context=context, devices=self._devices,
                                       channel_binding=self._channel_binding)
-        return await self._provider.device_conversation(action="open", owner_id=owner,
+        return await self._provider.role_group(action="open", owner_id=str(context.business_owner_id),
             selection=selection, session_id=selection.session_id)
 
     async def inspect(self, session_id, *, context, close=False):
         context.require_scope(DEVICE_CONVERSATION_SCOPE)
-        return await self._provider.device_conversation(action="close" if close else "status",
+        return await self._provider.role_group(action="close" if close else "status",
             owner_id=str(context.business_owner_id), session_id=session_id)
