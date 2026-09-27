@@ -196,8 +196,7 @@ class ChannelProviderHttpClient:
         from eidolon_sdk.biz.control.coordination_stream import OpenScene
         if action not in {"open", "status", "close"}:
             raise ValueError("invalid role group action")
-        payload = (OpenScene(type="open", owner_id=owner_id, selection=selection,
-                    mock_order=tuple(m.companion_id for m in selection.members)).model_dump(mode="json")
+        payload = (OpenScene(type="open", owner_id=owner_id, selection=selection).model_dump(mode="json")
                    if action == "open" else {"owner_id": owner_id, "session_id": session_id})
         raw = await self._post(f"role-groups/{action}", payload)
         try:

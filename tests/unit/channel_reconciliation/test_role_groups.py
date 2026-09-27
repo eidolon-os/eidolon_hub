@@ -42,7 +42,7 @@ async def test_provider_team_payload_uses_explicit_order_and_checks_scene(wrong)
         assert request.url.path.endswith('/role-groups/open')
         assert request.headers['Authorization']=='Bearer '+'x'*32
         body=json.loads(request.content)
-        assert body['owner_id']=='owner_01' and body['mock_order']==['one']
+        assert body['owner_id']=='owner_01' and 'mock_order' not in body and body['schema_version'] == 2
         assert body['selection']==selected.model_dump(mode='json')
         return httpx.Response(200,json=dict(session_id='wrong' if wrong else 'team',state='preparing',
             scenario='ip_role_group',completion_basis='native_playout',error=''))
