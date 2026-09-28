@@ -25,3 +25,7 @@ persistence:
   path: $EIDOLON_STATE_ROOT/hub/eidolon-hub.sqlite3
   authority_anchor_path: $EIDOLON_STATE_ROOT/hub/authority-lineage.json
   authority_bootstrap_path: $EIDOLON_STATE_ROOT/hub/authority-bootstrap.json
+
+# Home registry is Data-owned; only execution and Provider state live here.
+smarthome:
+  workspace_url: http://127.0.0.1:8085

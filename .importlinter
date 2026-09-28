@@ -36,3 +36,19 @@ forbidden_modules =
     hub.adapters
     hub.interfaces
     hub.composition
+
+[importlinter:contract:smarthome-execution]
+name = Home execution has no admission, transport, presentation or composition dependencies
+type = forbidden
+source_modules =
+    hub.smarthome.runtime
+    hub.smarthome.ports
+forbidden_modules =
+    hub.admission
+    hub.channel_reconciliation
+    hub.device_control
+    hub.interfaces
+    hub.composition
+    hub.smarthome.http
+    hub.smarthome.http_registry
+    hub.smarthome.virtual

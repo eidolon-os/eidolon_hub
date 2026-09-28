@@ -2,9 +2,6 @@
 
 from __future__ import annotations
 
-from hub.channel_reconciliation.role_groups import RoleGroups
-from hub.device_control.role_group_http import create_role_group_router
-
 import os
 from contextlib import AsyncExitStack, asynccontextmanager
 from dataclasses import dataclass
@@ -26,17 +23,17 @@ from hub.channel_reconciliation.application import (
     ReconcileChannelBinding,
     ReconcileChannelRevocations,
 )
-from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
-from hub.channel_reconciliation.shared_selection import SharedDeviceSessions
 from hub.channel_reconciliation.device_conversation import DeviceConversations
-from hub.device_control.device_conversation_http import create_device_conversation_router
-from hub.device_control.shared_session_http import create_shared_session_router
+from hub.channel_reconciliation.provider_client import ChannelProviderHttpClient
+from hub.channel_reconciliation.role_groups import RoleGroups
+from hub.channel_reconciliation.shared_selection import SharedDeviceSessions
 from hub.composition.device_onboarding import build_device_onboarding
 from hub.composition.management import build_device_management
 from hub.composition.resources import (
     load_runtime_secrets,
     open_runtime_resources,
 )
+from hub.composition.smarthome import build_smarthome
 from hub.config import HubConfig, load_hub_config
 from hub.device_control.application import (
     AcceptDeviceManifest,
@@ -46,6 +43,7 @@ from hub.device_control.application import (
     PullDeviceEraseOperation,
     ReconcileDeviceEraseOperations,
 )
+from hub.device_control.device_conversation_http import create_device_conversation_router
 from hub.device_control.http import (
     DeviceEraseHttpServices,
     create_device_erase_router,
@@ -55,6 +53,8 @@ from hub.device_control.output_policy import (
     UpdateDeviceOutputPolicy,
 )
 from hub.device_control.output_policy_http import create_output_policy_router
+from hub.device_control.role_group_http import create_role_group_router
+from hub.device_control.shared_session_http import create_shared_session_router
 from hub.interfaces.http.routers.device_management import (
     DeviceManagementHttpServices,
     create_device_management_router,
@@ -64,10 +64,13 @@ from hub.interfaces.http.routers.device_onboarding import (
     create_device_onboarding_router,
 )
 from hub.ports.identity import ManagementPermission
+from hub.smarthome.http import create_smarthome_router
+from hub.smarthome.runtime import SmartHomeRuntime
 
 
 @dataclass(frozen=True, slots=True)
 class ComposedHttpRuntime:
+    smarthome: SmartHomeRuntime | None
     device_onboarding: DeviceOnboardingHttpServices
     management: DeviceManagementHttpServices
     device_erase: DeviceEraseHttpServices
@@ -190,6 +193,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 stack.push_async_callback(device_onboarding.mdns_advertiser.stop)
 
             runtime = ComposedHttpRuntime(
+                smarthome=build_smarthome(app_config, resources.http_client, os.environ),
                 device_onboarding=device_onboarding.http_services,
                 management=management,
                 device_erase=device_erase,
@@ -243,6 +247,10 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
             content={"detail": jsonable_encoder(errors)},
         )
 
+    app.include_router(create_smarthome_router(
+        lambda: require_runtime().smarthome,
+        lambda: os.environ.get("EIDOLON_HUB_SMARTHOME_TOKEN", ""),
+    ))
     app.include_router(create_device_onboarding_router(lambda: require_runtime().device_onboarding))
 
     async def admission_actor(request: Request):

@@ -99,9 +99,15 @@ class CommissioningProofConfig(_StrictConfig):
 
     enabled: bool = True
 
+class SmartHomeConfig(_StrictConfig):
+    workspace_url: str | None = None
+    state_path: str | None = None
+
+
 class HubConfig(_StrictConfig):
     """Local behavior and external contract addresses."""
 
+    smarthome: SmartHomeConfig = Field(default_factory=SmartHomeConfig)
     persistence: PersistenceConfig = Field(default_factory=PersistenceConfig)
     discovery: DiscoveryConfig = Field(default_factory=DiscoveryConfig)
     onboarding: OnboardingConfig = Field(default_factory=OnboardingConfig)

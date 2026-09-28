@@ -106,6 +106,12 @@ backup = "sqlite-online"
 # Every device admission a Host has ever made. Losing it does not lose a
 # setting, it loses the record of which devices are allowed to be here.
 
+[[state.authority]]
+path = "/var/lib/eidolon/hub/smarthome.sqlite3"
+owner = "eidolon"
+group = "eidolon"
+backup = "sqlite-online"
+
 [state]
 runtime = []
 

@@ -1,5 +1,7 @@
 # eidolon-hub
 
+2026-09-29 边界更新：Hub 增加独立的家庭设备执行子域 `hub.smarthome`，详见 [ADR](docs/adr/20260929-home-device-execution.md)。下文“不负责 Command/State”针对原生 Body 的通道与媒体热路径；家庭设备 Provider 执行由该新子域负责，面板呈现仍属 Channel。
+
 Eidolon Hub 是 Eidolon OS 的 **Device Onboarding、Registry 与 Policy Authority**：它是新设备加入系统的入口，保存设备身份和能力，等待人工审批，并把已批准设备安全交接给外部 Channel Provider。
 
 交接完成后，设备不再连接 Hub。Hub 不是长期设备连接服务、在线状态服务、Device Bus、Channel 或媒体服务器。
