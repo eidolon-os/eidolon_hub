@@ -13,6 +13,14 @@ from hub.config import (
 )
 
 
+def test_home_execution_is_enabled_by_additive_environment_configuration(monkeypatch):
+    monkeypatch.delenv("EIDOLON_HUB_SMARTHOME_WORKSPACE_URL", raising=False)
+    assert HubConfig().smarthome.workspace_url is None
+    monkeypatch.setenv("EIDOLON_HUB_SMARTHOME_WORKSPACE_URL", "http://127.0.0.1:8085")
+    assert HubConfig().smarthome.workspace_url == "http://127.0.0.1:8085"
+    assert HubConfig.model_validate({"smarthome": {"workspace_url": None}}).smarthome.workspace_url is None
+
+
 def test_default_config_knows_only_local_behavior_and_public_contract_addresses(
     tmp_path, monkeypatch
 ) -> None:

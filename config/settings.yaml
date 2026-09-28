@@ -26,6 +26,5 @@ persistence:
   authority_anchor_path: $EIDOLON_STATE_ROOT/hub/authority-lineage.json
   authority_bootstrap_path: $EIDOLON_STATE_ROOT/hub/authority-bootstrap.json
 
-# Home registry is Data-owned; only execution and Provider state live here.
-smarthome:
-  workspace_url: http://127.0.0.1:8085
+# Ops enables home execution through EIDOLON_HUB_SMARTHOME_WORKSPACE_URL.
+# Keep this shared settings document readable by the previous release at cutover.

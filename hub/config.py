@@ -100,7 +100,9 @@ class CommissioningProofConfig(_StrictConfig):
     enabled: bool = True
 
 class SmartHomeConfig(_StrictConfig):
-    workspace_url: str | None = None
+    workspace_url: str | None = Field(
+        default_factory=lambda: os.environ.get("EIDOLON_HUB_SMARTHOME_WORKSPACE_URL") or None
+    )
     state_path: str | None = None
 
 
