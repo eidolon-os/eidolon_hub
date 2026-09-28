@@ -1,6 +1,6 @@
 # 家庭设备执行归属 Hub
 
-状态：实现中，运行时切换须按 Ops 的协调发布流程进行。
+状态：已实现，Mac 已通过 Ops 协调切换和真实客户端验证；其他 Host 按同一职责边界发布。
 
 Hub 新增 `hub.smarthome`，负责家庭设备 Provider、命令校验、场景展开、deadline、幂等和 Provider 状态读取。该子域不导入 admission、Channel、Agent 或任何面板类型。`hub.composition.smarthome` 是唯一装配点。原生 Body 的身份准入、Channel handoff 和会话连接职责保持原边界；第三方家居端点不冒充原生 DeviceRef。
 
@@ -12,9 +12,9 @@ Provider 实现从 Channel 迁移，未复制双份。Channel 不依赖 Hub Pyth
 
 ## 已有状态与升级
 
-虚拟设备状态的唯一文件迁至 `$EIDOLON_STATE_ROOT/hub/smarthome.sqlite3`，表结构不变。Hub 检出旧的 `channel/smarthome.sqlite3` 存在而新文件不存在时拒绝静默创建空库。协调切换需要停掉旧执行者、用 SQLite backup 保留旧库与 WAL 内容、校验后迁移，再启动新执行者；不能让两套执行者并存。暂不执行线上切换，以免尚未纳入发布流程的文件迁移丢失状态。
+虚拟设备状态的唯一文件迁至 `$EIDOLON_STATE_ROOT/hub/smarthome.sqlite3`，表结构不变。Hub 检出旧的 `channel/smarthome.sqlite3` 存在而新文件不存在时拒绝静默创建空库。协调切换需要停掉旧执行者、用 SQLite backup 保留旧库与 WAL 内容、校验后迁移，再启动新执行者；不能让两套执行者并存。Mac 的 Ops start/restart 在检测到待迁移库时先停止 Host，再执行 SQLite backup、完整性检查及原子发布。保留原库，拒绝覆盖目的库；停止失败不迁移。
 
-新内部凭证通过已有 Ops converge-inputs 机制补齐，不手工轮换其他密钥。部署 settings 跟随各组件源模板，旧凭证通过既有输入收敛撤回。回滚也必须协调 Provider 状态，不能只回滚代码指针。
+新内部凭证通过已有 Ops converge-inputs 机制补齐，不手工轮换其他密钥。部署 settings 跟随各组件源模板，旧凭证通过既有输入收敛撤回。启用端点使用 `EIDOLON_HUB_SMARTHOME_WORKSPACE_URL`，避免在协调切换前向旧 Hub 的严格 YAML 配置写入不认识的字段；新旧版本配置检查仍为必须通过的发布门禁。回滚也必须协调 Provider 状态，不能只回滚代码指针。
 
 ## 有意保留的范围
 
