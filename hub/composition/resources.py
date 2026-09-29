@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
+from eidolon_sdk.core.http import create_async_client
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.memory import InMemoryDeviceDirectoryRepository
@@ -67,7 +68,7 @@ async def open_runtime_resources(
     # Provider egress is an explicit contract boundary. Inheriting ambient
     # proxy settings can silently redirect credentials and makes provider
     # egress depend on process-global configuration.
-    http_client = await stack.enter_async_context(httpx.AsyncClient(trust_env=False))
+    http_client = await stack.enter_async_context(create_async_client(timeout=5.0, trust_env=False))
     repositories = SqlHubRepositories(database)
     directory: DeviceDirectoryRepository = InMemoryDeviceDirectoryRepository()
     commissioning_proofs, commissioning_ready = load_commissioning_proof_verifier(
