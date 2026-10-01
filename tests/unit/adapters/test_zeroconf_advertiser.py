@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from hub.adapters.discovery.zeroconf import ZeroconfAuthorityCandidateAdvertiser
 from hub.composition.device_onboarding import _mdns_advertiser
 from hub.config import HubConfig, OnboardingConfig
@@ -393,3 +395,23 @@ async def test_one_address_that_moved_does_not_take_the_other_records_with_it() 
     assert attempts == [["192.168.100.19", "2001:db8::1"], ["192.168.100.19"]]
     # The records still name both; only the answering surface narrowed.
     assert set(published) == {"192.168.100.19", "2001:db8::1"}
+
+
+@pytest.mark.parametrize(('addresses', 'version'), [
+    (('192.168.1.37',), 'V4Only'),
+    (('2001:db8::5',), 'V6Only'),
+    (('192.168.1.37', '2001:db8::5'), 'All'),
+])
+def test_multicast_listener_matches_the_address_families_it_publishes(addresses, version):
+    from zeroconf import IPVersion
+
+    advertiser = ZeroconfAuthorityCandidateAdvertiser(
+        advertisement_id='family-selection',
+        service_type='_eidolon-owner._tcp.local.',
+        service_name='owner-test._eidolon-owner._tcp.local.',
+        hostname='hub-test', port=8443,
+        owner_domain_id='owner-test', owner_domain_descriptor_uri='https://hub-test.local',
+    )
+    with patch('hub.adapters.discovery.zeroconf.AsyncZeroconf') as constructor:
+        advertiser._open_network(addresses)
+    constructor.assert_called_once_with(interfaces=list(addresses), ip_version=getattr(IPVersion, version))

@@ -202,8 +202,14 @@ class ZeroconfAuthorityCandidateAdvertiser:
         caller's handling logs it and the next refresh tries again.
         """
 
+        versions = {ipaddress.ip_address(value).version for value in addresses}
+        # Join multicast on the families actually offered. On Darwin an IPv6
+        # dual-stack listener cannot join an IPv4-only interface: zeroconf
+        # silently leaves it without a responder even though registration succeeds.
+        version = (IPVersion.V4Only if versions == {4} else
+                   IPVersion.V6Only if versions == {6} else IPVersion.All)
         try:
-            return AsyncZeroconf(interfaces=list(addresses), ip_version=IPVersion.All)
+            return AsyncZeroconf(interfaces=list(addresses), ip_version=version)
         except RuntimeError:
             ipv4 = [value for value in addresses
                     if ipaddress.ip_address(value).version == 4]
@@ -213,7 +219,7 @@ class ZeroconfAuthorityCandidateAdvertiser:
                 "mDNS binding narrowed to IPv4 advertisement=%s reason=address_not_on_any_adapter",
                 self._advertisement_id,
             )
-            return AsyncZeroconf(interfaces=ipv4, ip_version=IPVersion.All)
+            return AsyncZeroconf(interfaces=ipv4, ip_version=IPVersion.V4Only)
 
     async def stop(self) -> None:
         self._running = False
