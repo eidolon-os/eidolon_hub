@@ -28,3 +28,9 @@ persistence:
 
 # Ops enables home execution through EIDOLON_HUB_SMARTHOME_WORKSPACE_URL.
 # Keep this shared settings document readable by the previous release at cutover.
+smarthome:
+  # Provider adapters this Host assembles, comma-separated. "virtual" alone is
+  # the simulated home; "zhoubian" adds the 周边好生活 cloud (needs
+  # EIDOLON_HUB_VAULT_KEY for its credentials). An unknown name fails startup.
+  # Ops sets this per Host through its settings overlay.
+  providers: virtual

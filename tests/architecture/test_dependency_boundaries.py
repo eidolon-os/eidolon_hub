@@ -55,10 +55,16 @@ def test_sdk_dependency_is_confined_to_canonical_contract_adapters() -> None:
         Path("hub/adapters/discovery/zeroconf.py"),
         Path("hub/composition/device_onboarding.py"),
     }
+    # Capability domains and the integration primitives are made of SDK
+    # contracts; every file in them may import the SDK.
+    allowed_roots = (Path("hub/smarthome"), Path("hub/integration"))
     violations = []
     for path in (ROOT / "hub").rglob("*.py"):
-        if "eidolon_sdk" in _imports(path) and path.relative_to(ROOT) not in allowed:
-            violations.append(str(path.relative_to(ROOT)))
+        relative = path.relative_to(ROOT)
+        if "eidolon_sdk" in _imports(path) and relative not in allowed and not any(
+            relative.is_relative_to(root) for root in allowed_roots
+        ):
+            violations.append(str(relative))
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     dependencies = project["project"]["dependencies"]
     assert any(item.split("[", 1)[0].lower() == "eidolon-sdk" for item in dependencies)

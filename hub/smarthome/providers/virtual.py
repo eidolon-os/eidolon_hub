@@ -113,6 +113,7 @@ class VirtualProvider:
     """``SmartHomeProvider`` for devices that exist only on this Host."""
 
     name = PROVIDER_NAME
+    pushes_observations = False
 
     def __init__(self, path: Path) -> None:
         self._path = path

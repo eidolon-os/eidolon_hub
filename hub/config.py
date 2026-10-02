@@ -9,7 +9,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _CONFIG_ROOT = _REPO_ROOT / "config"
@@ -99,11 +99,26 @@ class CommissioningProofConfig(_StrictConfig):
 
     enabled: bool = True
 
+
 class SmartHomeConfig(_StrictConfig):
     workspace_url: str | None = Field(
         default_factory=lambda: os.environ.get("EIDOLON_HUB_SMARTHOME_WORKSPACE_URL") or None
     )
     state_path: str | None = None
+    # Which Provider adapters this Host assembles. A kind the code does not know
+    # fails startup. Account-backed kinds also need EIDOLON_HUB_VAULT_KEY.
+    providers: tuple[str, ...] = ("virtual",)
+    # Accounts, credentials, receipts and observations; beside smarthome.sqlite3 by default.
+    integration_path: str | None = None
+
+    @field_validator("providers", mode="before")
+    @classmethod
+    def split_providers(cls, value):
+        # The settings template and the Ops overlay carry one scalar; a list is
+        # accepted too so tests and code can be literal.
+        if isinstance(value, str):
+            return tuple(part.strip() for part in value.split(",") if part.strip())
+        return tuple(value)
 
 
 class HubConfig(_StrictConfig):

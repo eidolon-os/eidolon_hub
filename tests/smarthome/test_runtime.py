@@ -5,8 +5,8 @@ import asyncio
 import pytest
 from eidolon_sdk.biz.smarthome import Device, Origin, Registry, initial_state
 
+from hub.smarthome.providers.virtual import VirtualProvider
 from hub.smarthome.runtime import IdempotencyConflict, SmartHomeRuntime
-from hub.smarthome.virtual import VirtualProvider
 
 from .helpers import OTHER_OWNER, OWNER, Clock, FakeRegistry, cmd, home, request, scene
 
@@ -158,8 +158,9 @@ async def test_http_authentication_and_conflict(setup):
 
 async def test_legacy_state_is_not_silently_replaced(tmp_path):
     import httpx
-    from hub.config import HubConfig, PersistenceConfig, SmartHomeConfig
+
     from hub.composition.smarthome import build_smarthome
+    from hub.config import HubConfig, PersistenceConfig, SmartHomeConfig
     old = tmp_path / 'channel/smarthome.sqlite3'
     old.parent.mkdir()
     old.write_bytes(b'existing-authority')

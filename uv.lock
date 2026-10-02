@@ -284,6 +284,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
+    { name = "cryptography" },
     { name = "eidolon-sdk" },
     { name = "fastapi" },
     { name = "httpx" },
@@ -311,6 +312,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiosqlite", specifier = ">=0.20" },
+    { name = "cryptography", specifier = ">=42" },
     { name = "eidolon-sdk", editable = "../eidolon_sdk" },
     { name = "fastapi", specifier = ">=0.109" },
     { name = "httpx", specifier = ">=0.27" },

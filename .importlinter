@@ -51,4 +51,42 @@ forbidden_modules =
     hub.composition
     hub.smarthome.http
     hub.smarthome.http_registry
-    hub.smarthome.virtual
+    hub.smarthome.providers
+
+[importlinter:contract:kernel-knows-no-domain]
+name = Kernel subdomains and layers do not import capability domains
+type = forbidden
+source_modules =
+    hub.admission
+    hub.device_control
+    hub.channel_reconciliation
+    hub.domain
+    hub.application
+    hub.ports
+    hub.adapters
+    hub.contracts
+forbidden_modules =
+    hub.smarthome
+    hub.integration
+
+[importlinter:contract:integration-is-domain-neutral]
+name = Integration primitives know no domain, admission or presentation
+type = forbidden
+source_modules =
+    hub.integration
+forbidden_modules =
+    hub.smarthome
+    hub.admission
+    hub.device_control
+    hub.interfaces
+    hub.composition
+
+[importlinter:contract:smarthome-runtime-no-providers]
+name = Home runtime, ports and importer depend on provider ports only
+type = forbidden
+source_modules =
+    hub.smarthome.runtime
+    hub.smarthome.ports
+    hub.smarthome.importer
+forbidden_modules =
+    hub.smarthome.providers

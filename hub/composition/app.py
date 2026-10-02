@@ -33,7 +33,7 @@ from hub.composition.resources import (
     load_runtime_secrets,
     open_runtime_resources,
 )
-from hub.composition.smarthome import build_smarthome
+from hub.composition.smarthome import SmartHome, build_smarthome
 from hub.config import HubConfig, load_hub_config
 from hub.device_control.application import (
     AcceptDeviceManifest,
@@ -65,12 +65,11 @@ from hub.interfaces.http.routers.device_onboarding import (
 )
 from hub.ports.identity import ManagementPermission
 from hub.smarthome.http import create_smarthome_router
-from hub.smarthome.runtime import SmartHomeRuntime
 
 
 @dataclass(frozen=True, slots=True)
 class ComposedHttpRuntime:
-    smarthome: SmartHomeRuntime | None
+    smarthome: SmartHome | None
     device_onboarding: DeviceOnboardingHttpServices
     management: DeviceManagementHttpServices
     device_erase: DeviceEraseHttpServices
@@ -192,8 +191,18 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 await device_onboarding.mdns_advertiser.start()
                 stack.push_async_callback(device_onboarding.mdns_advertiser.stop)
 
+            smarthome = build_smarthome(
+                app_config,
+                resources.http_client,
+                os.environ,
+                host_identity=app_config.onboarding.owner_domain_id,
+            )
+            if smarthome is not None and smarthome.accounts is not None:
+                await smarthome.accounts.start()
+                stack.push_async_callback(smarthome.accounts.stop)
+
             runtime = ComposedHttpRuntime(
-                smarthome=build_smarthome(app_config, resources.http_client, os.environ),
+                smarthome=smarthome,
                 device_onboarding=device_onboarding.http_services,
                 management=management,
                 device_erase=device_erase,
@@ -248,8 +257,9 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
         )
 
     app.include_router(create_smarthome_router(
-        lambda: require_runtime().smarthome,
+        lambda: (require_runtime().smarthome.runtime if require_runtime().smarthome else None),
         lambda: os.environ.get("EIDOLON_HUB_SMARTHOME_TOKEN", ""),
+        lambda: (require_runtime().smarthome.accounts if require_runtime().smarthome else None),
     ))
     app.include_router(create_device_onboarding_router(lambda: require_runtime().device_onboarding))
 

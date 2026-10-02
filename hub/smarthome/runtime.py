@@ -1,4 +1,17 @@
-"""Owner-scoped device execution. No transport, panel or model dependencies."""
+"""Owner-scoped device execution. No transport, panel or model dependencies.
+
+What this runtime guarantees, independent of the Provider behind a device:
+
+- a request is idempotent by (scope, request_id) and that record survives a
+  restart (``ReceiptLedger``); a reuse for different content is a conflict;
+- one Owner's requests are admitted one at a time, but Provider I/O runs
+  outside the Owner lock, serialised per device only, so a slow device never
+  holds up another;
+- what the panel and the Agent read is observed state (``ObservationCache``),
+  never what a command intended;
+- a platform that only takes instructions in words yields ``delegated``, which
+  this runtime never upgrades to ``succeeded``.
+"""
 
 from __future__ import annotations
 
@@ -6,7 +19,7 @@ import asyncio
 import json
 import logging
 import time
-from collections import OrderedDict
+from collections import defaultdict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
@@ -18,19 +31,22 @@ from eidolon_sdk.biz.smarthome import (
     ERROR_UNKNOWN_SCENE,
     Command,
     CommandResult,
+    Device,
     ExecuteRequest,
     ExecuteResult,
     Registry,
     SmartHomeError,
-    validate_command,
-    validate_state,
+    provider_binding,
+    validate_device_command,
+    validate_device_state,
 )
 
-from .ports import RegistrySource, SmartHomeProvider
+from hub.integration.ledger import MemoryLedger, ReceiptConflict, ReceiptLedger, Timestamps
+from hub.integration.observation import MemoryObservationCache, ObservationCache
+
+from .ports import Delegated, RegistrySource, SmartHomeProvider
 
 logger = logging.getLogger("hub.smarthome")
-IDEMPOTENCY_TTL_MS = 10 * 60_000
-IDEMPOTENCY_CAPACITY = 1024
 
 
 class IdempotencyConflict(ValueError):
@@ -40,20 +56,22 @@ class IdempotencyConflict(ValueError):
     """
 
 
-@dataclass(frozen=True, slots=True)
-class _Recorded:
-    expires_at_ms: int
-    fingerprint: str
-    result: ExecuteResult
-
-
 @dataclass
 class _Owner:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     registry: Registry | None = None
-    # Last state each Provider reported, for devices a registered Provider serves.
-    states: dict[str, dict[str, Any]] = field(default_factory=dict)
-    recorded: OrderedDict[tuple[str, str], _Recorded] = field(default_factory=OrderedDict)
+    inflight: dict[tuple[str, str], asyncio.Future[ExecuteResult]] = field(default_factory=dict)
+    device_locks: defaultdict[str, asyncio.Lock] = field(
+        default_factory=lambda: defaultdict(asyncio.Lock)
+    )
+
+
+@dataclass
+class _Timing:
+    submitted_at_ms: int
+    provider_started_at_ms: int | None = None
+    provider_returned_at_ms: int | None = None
+    confirmed_at_ms: int | None = None
 
 
 class SmartHomeRuntime:
@@ -63,15 +81,27 @@ class SmartHomeRuntime:
         registry: RegistrySource,
         providers: Mapping[str, SmartHomeProvider],
         now_ms: Callable[[], int] | None = None,
-        idempotency_ttl_ms: int = IDEMPOTENCY_TTL_MS,
-        idempotency_capacity: int = IDEMPOTENCY_CAPACITY,
+        ledger: ReceiptLedger | None = None,
+        observations: ObservationCache | None = None,
     ):
         self._registry_source = registry
         self._providers = dict(providers)
         self._now_ms = now_ms or (lambda: time.time_ns() // 1_000_000)
-        self._ttl_ms = idempotency_ttl_ms
-        self._capacity = idempotency_capacity
+        self._ledger = ledger if ledger is not None else MemoryLedger()
+        self._observations = observations if observations is not None else MemoryObservationCache()
         self._owners: dict[str, _Owner] = {}
+
+    @property
+    def observations(self) -> ObservationCache:
+        return self._observations
+
+    @property
+    def ledger(self) -> ReceiptLedger:
+        return self._ledger
+
+    @property
+    def providers(self) -> Mapping[str, SmartHomeProvider]:
+        return self._providers
 
     async def execute(self, owner_id: str, request: ExecuteRequest) -> ExecuteResult:
         scope = request.origin.device_ref if request.origin.kind == "touch" else ""
@@ -83,94 +113,155 @@ class SmartHomeRuntime:
         key = (scope, request.request_id)
         fingerprint = _fingerprint(request)
         owner = self._owner(owner_id)
+        waiting: asyncio.Future[ExecuteResult] | None = None
         async with owner.lock:
-            recorded = self._lookup(owner, key, fingerprint)
-            if recorded is not None:
-                return recorded
-            if request.deadline_ms <= self._now_ms():
-                result = _refused(request, ERROR_DEADLINE_EXCEEDED)
-                self._record(owner, key, fingerprint, result)
-                return result
-            registry = await self._registry(owner_id, owner)
-            commands = request.commands
-            if request.scene_id is not None:
-                scene = registry.scene(request.scene_id)
-                if scene is None:
-                    result = _refused(request, ERROR_UNKNOWN_SCENE)
-                    self._record(owner, key, fingerprint, result)
-                    return result
-                commands = scene.actions
-            before: dict[str, dict[str, Any] | None] = {}
-            results = []
-            for command in commands:
-                results.append(
-                    await self._run(owner_id, owner, registry, command, request.deadline_ms, before)
+            try:
+                existing = await self._ledger.begin(
+                    owner_id, scope, request.request_id, fingerprint, self._now_ms()
                 )
-            result = ExecuteResult(request_id=request.request_id, results=tuple(results))
+            except ReceiptConflict as exc:
+                raise IdempotencyConflict(
+                    f"request_id {request.request_id!r} was used for a different request"
+                ) from exc
+            if existing is not None:
+                if existing.result is not None:
+                    return ExecuteResult.model_validate(existing.result)
+                waiting = owner.inflight.get(key)
+            if waiting is None:
+                # Either new, or recorded in flight by a process that died before
+                # completing; in both cases this call carries it out.
+                owner.inflight[key] = asyncio.get_running_loop().create_future()
+        if waiting is not None:
+            return await asyncio.shield(waiting)
+        future = owner.inflight[key]
+        timing = _Timing(submitted_at_ms=self._now_ms())
+        try:
+            result = await self._perform(owner_id, owner, request, timing)
             # Recorded before anyone is told, so a failed send can never cause a rerun.
-            self._record(owner, key, fingerprint, result)
-            return result
+            await self._ledger.complete(
+                owner_id,
+                scope,
+                request.request_id,
+                result.model_dump(mode="json"),
+                Timestamps(
+                    timing.submitted_at_ms,
+                    timing.provider_started_at_ms,
+                    timing.provider_returned_at_ms,
+                    timing.confirmed_at_ms,
+                    self._now_ms(),
+                ),
+            )
+        except BaseException as exc:
+            if not future.done():
+                future.set_exception(exc)
+            raise
+        finally:
+            owner.inflight.pop(key, None)
+        if not future.done():
+            future.set_result(result)
+        return result
+
+    async def _perform(
+        self, owner_id: str, owner: _Owner, request: ExecuteRequest, timing: _Timing
+    ) -> ExecuteResult:
+        if request.deadline_ms <= self._now_ms():
+            return _refused(request, ERROR_DEADLINE_EXCEEDED)
+        async with owner.lock:
+            registry = await self._registry(owner_id, owner)
+        commands = request.commands
+        if request.scene_id is not None:
+            scene = registry.scene(request.scene_id)
+            if scene is None:
+                return _refused(request, ERROR_UNKNOWN_SCENE)
+            commands = scene.actions
+        timing.provider_started_at_ms = self._now_ms()
+        results = await asyncio.gather(
+            *(
+                self._run(owner_id, owner, registry, command, request.deadline_ms)
+                for command in commands
+            )
+        )
+        timing.provider_returned_at_ms = self._now_ms()
+        if any(r.status == "succeeded" for r in results):
+            timing.confirmed_at_ms = timing.provider_returned_at_ms
+        return ExecuteResult(request_id=request.request_id, results=tuple(results))
 
     async def _run(
-        self,
-        owner_id: str,
-        owner: _Owner,
-        registry: Registry,
-        command: Command,
-        deadline_ms: int,
-        before: dict[str, dict[str, Any] | None],
+        self, owner_id: str, owner: _Owner, registry: Registry, command: Command, deadline_ms: int
     ) -> CommandResult:
-        remaining_ms = deadline_ms - self._now_ms()
-        if remaining_ms <= 0:
-            # Whoever asked has stopped waiting, and this one was never started.
-            return _failed(command, ERROR_DEADLINE_EXCEEDED)
         # Another Owner's device is simply not in this registry.
         device = registry.device(command.device_id)
         if device is None:
             return _failed(command, ERROR_UNKNOWN_DEVICE)
         try:
-            validate_command(device.type, command)
+            validate_device_command(device, command)
         except SmartHomeError as exc:
             return _failed(command, exc.code)
-        provider = self._providers.get(device.provider)
-        if provider is None:
+        kind, _account = provider_binding(device.provider)
+        provider = self._providers.get(kind)
+        if provider is None or device.orphaned:
             return _failed(command, ERROR_DEVICE_OFFLINE)
-        try:
-            async with asyncio.timeout(remaining_ms / 1000):
-                state = await provider.execute(owner_id, device, command)
-            validate_state(device.type, state)
-        except SmartHomeError as exc:
-            return _failed(command, exc.code)
-        except TimeoutError:
-            # The Provider may still act on it. Reconcile, never resend.
-            return _unknown(command, ERROR_DEADLINE_EXCEEDED)
-        except Exception:
-            logger.exception(
-                "smart home provider=%s owner=%s device=%s left the command unresolved",
-                device.provider,
-                owner_id,
-                device.device_id,
+        async with owner.device_locks[device.device_id]:
+            remaining_ms = deadline_ms - self._now_ms()
+            if remaining_ms <= 0:
+                # Whoever asked has stopped waiting, and this one was never started.
+                return _failed(command, ERROR_DEADLINE_EXCEEDED)
+            try:
+                async with asyncio.timeout(remaining_ms / 1000):
+                    outcome = await provider.execute(owner_id, device, command)
+                if not isinstance(outcome, Delegated):
+                    validate_device_state(device, outcome)
+            except SmartHomeError as exc:
+                return _failed(command, exc.code)
+            except TimeoutError:
+                # The Provider may still act on it. Reconcile, never resend.
+                return _unknown(command, ERROR_DEADLINE_EXCEEDED)
+            except Exception:
+                logger.exception(
+                    "smart home provider=%s owner=%s device=%s left the command unresolved",
+                    device.provider,
+                    owner_id,
+                    device.device_id,
+                )
+                return _unknown(command, None)
+        now = self._now_ms()
+        if isinstance(outcome, Delegated):
+            await self._observations.put(
+                owner_id, device.device_id, reachable=True, state=None, observed_at_ms=now
             )
-            return _unknown(command, None)
-        before.setdefault(device.device_id, owner.states.get(device.device_id))
-        owner.states[device.device_id] = state
-        return CommandResult(device_id=command.device_id, status="succeeded", state=state)
+            return CommandResult(
+                device_id=command.device_id,
+                status="delegated",
+                platform_answer=outcome.answer[:200],
+            )
+        await self._observations.put(
+            owner_id, device.device_id, reachable=True, state=outcome, observed_at_ms=now
+        )
+        return CommandResult(device_id=command.device_id, status="succeeded", state=outcome)
 
     async def snapshot(self, owner_id: str) -> dict[str, Any]:
-        """Current registry and Provider state for a trusted Agent command."""
+        """Current registry and observed state for a trusted Agent command."""
         owner = self._owner(owner_id)
         async with owner.lock:
             registry = await self._registry(owner_id, owner)
-            return {
-                "registry": registry.model_dump(mode="json"),
-                "status": {
-                    device.device_id: {
-                        "online": device.device_id in owner.states,
-                        "state": owner.states.get(device.device_id, {}),
-                    }
-                    for device in registry.devices
-                },
+        observed = await self._observations.snapshot(owner_id)
+        status = {}
+        for device in registry.devices:
+            seen = observed.get(device.device_id)
+            online = seen is not None and seen.reachable and not device.orphaned
+            status[device.device_id] = {
+                "online": online,
+                "state": seen.state if seen is not None and seen.state is not None else {},
             }
+        return {"registry": registry.model_dump(mode="json"), "status": status}
+
+    async def observe(
+        self, owner_id: str, device_id: str, *, reachable: bool, state: dict[str, Any] | None
+    ) -> None:
+        """An adapter reports what it saw; the cache decides whether it is a change."""
+        await self._observations.put(
+            owner_id, device_id, reachable=reachable, state=state, observed_at_ms=self._now_ms()
+        )
 
     def _owner(self, owner_id: str) -> _Owner:
         if not owner_id:
@@ -179,36 +270,35 @@ class SmartHomeRuntime:
 
     async def _registry(self, owner_id: str, owner: _Owner) -> Registry:
         registry = await self._registry_source.get(owner_id)
-        states = {}
         changed = owner.registry is None or owner.registry.revision != registry.revision
-        for name, provider in self._providers.items():
-            devices = [d for d in registry.devices if d.provider == name]
+        now = self._now_ms()
+        for kind, provider in self._providers.items():
+            devices = [d for d in devices_of(registry, kind) if not d.orphaned]
             if changed:
                 await provider.reconcile(owner_id, devices)
-            states.update(await provider.states(owner_id, devices))
-        owner.registry, owner.states = registry, states
+            if getattr(provider, "pushes_observations", False):
+                continue
+            states = await provider.states(owner_id, devices)
+            for device in devices:
+                state = states.get(device.device_id)
+                await self._observations.put(
+                    owner_id,
+                    device.device_id,
+                    reachable=state is not None,
+                    state=state,
+                    observed_at_ms=now,
+                )
+        if changed and owner.registry is not None:
+            gone = {d.device_id for d in owner.registry.devices} - {
+                d.device_id for d in registry.devices
+            }
+            await self._observations.forget(owner_id, gone)
+        owner.registry = registry
         return registry
 
-    def _lookup(
-        self, owner: _Owner, key: tuple[str, str], fingerprint: str
-    ) -> ExecuteResult | None:
-        now_ms = self._now_ms()
-        # Constant TTL: insertion order is expiry order.
-        while owner.recorded and next(iter(owner.recorded.values())).expires_at_ms <= now_ms:
-            owner.recorded.popitem(last=False)
-        recorded = owner.recorded.get(key)
-        if recorded is None:
-            return None
-        if recorded.fingerprint != fingerprint:
-            raise IdempotencyConflict(f"request_id {key[1]!r} was used for a different request")
-        return recorded.result
 
-    def _record(
-        self, owner: _Owner, key: tuple[str, str], fingerprint: str, result: ExecuteResult
-    ) -> None:
-        owner.recorded[key] = _Recorded(self._now_ms() + self._ttl_ms, fingerprint, result)
-        while len(owner.recorded) > self._capacity:
-            owner.recorded.popitem(last=False)
+def devices_of(registry: Registry, kind: str) -> list[Device]:
+    return [d for d in registry.devices if provider_binding(d.provider)[0] == kind]
 
 
 def _fingerprint(request: ExecuteRequest) -> str:

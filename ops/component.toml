@@ -111,6 +111,14 @@ path = "/var/lib/eidolon/hub/smarthome.sqlite3"
 owner = "eidolon"
 group = "eidolon"
 backup = "sqlite-online"
+# Virtual device state only. Accounts, encrypted credentials, command receipts
+# and observed state of real Providers live in the next file.
+
+[[state.authority]]
+path = "/var/lib/eidolon/hub/integration.sqlite3"
+owner = "eidolon"
+group = "eidolon"
+backup = "sqlite-online"
 
 [state]
 runtime = []

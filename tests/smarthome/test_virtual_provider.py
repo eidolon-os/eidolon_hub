@@ -16,7 +16,7 @@ from eidolon_sdk.biz.smarthome import (
     validate_state,
 )
 
-from hub.smarthome.virtual import VirtualProvider, apply_command
+from hub.smarthome.providers.virtual import VirtualProvider, apply_command
 
 from .helpers import OTHER_OWNER, OWNER, cmd
 
