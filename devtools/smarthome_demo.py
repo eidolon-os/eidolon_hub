@@ -140,6 +140,11 @@ async def main() -> int:
                     print(f"no device named {args.name!r}", file=sys.stderr)
                     return 2
                 request_id = f"demo:{uuid.uuid4().hex[:12]}"
+                # Say it in the device's own trait: a cover opens and closes.
+                if device["type"] == "cover":
+                    trait, verb = "position", ("open" if args.command == "on" else "close")
+                else:
+                    trait, verb = "on_off", args.command
                 started = time.time()
                 result = await hub.call(
                     "execute",
@@ -148,8 +153,8 @@ async def main() -> int:
                         "commands": [
                             {
                                 "device_id": device["device_id"],
-                                "trait": "on_off",
-                                "command": args.command,
+                                "trait": trait,
+                                "command": verb,
                                 "params": {},
                             }
                         ],

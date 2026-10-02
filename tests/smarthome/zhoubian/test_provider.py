@@ -182,6 +182,7 @@ async def test_platform_that_forgot_us_is_reactivated_on_bind_and_refused_on_exe
     # The platform loses our user secret and tokens (environment reset).
     cloud.state.tenant.user_secrets.clear()
     cloud.state.tenant.tokens.clear()
+    cloud.state.tenant.refresh.clear()
     lamp = device("主卧吸顶灯", "x")
     with pytest.raises(SmartHomeError) as refused:
         await provider.execute(
