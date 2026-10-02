@@ -174,3 +174,26 @@ def test_helpers():
     assert suggest_type("ac", "空调") == "climate"
     assert suggest_type("", "智能窗帘") == "cover"
     assert suggest_type("other", "未知") == "switch"
+
+
+async def test_platform_that_forgot_us_is_reactivated_on_bind_and_refused_on_execute(setup):
+    provider, cloud, vault, accounts = setup
+    await provider.bind(OWNER, ACCOUNT, FIELDS)
+    # The platform loses our user secret and tokens (environment reset).
+    cloud.state.tenant.user_secrets.clear()
+    cloud.state.tenant.tokens.clear()
+    lamp = device("主卧吸顶灯", "x")
+    with pytest.raises(SmartHomeError) as refused:
+        await provider.execute(
+            OWNER, lamp, Command(device_id=lamp.device_id, trait="on_off", command="on")
+        )
+    assert refused.value.code == "PLATFORM_REJECTED"
+    # Binding again re-activates with the same phone and works.
+    account = await provider.bind(OWNER, ACCOUNT, FIELDS)
+    assert account.status == "connected"
+    assert isinstance(
+        await provider.execute(
+            OWNER, lamp, Command(device_id=lamp.device_id, trait="on_off", command="on")
+        ),
+        Delegated,
+    )

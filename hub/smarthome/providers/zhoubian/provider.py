@@ -154,9 +154,18 @@ class ZhoubianProvider:
         stored_secret = await self._vault.get(account_id, "user_secret")
         if stored_secret:
             session.user_secret = stored_secret
+            try:
+                await self._token(session)
+            except BindError:
+                # The platform no longer knows the secret it issued us (reset,
+                # migration, or a test environment restarted). Activate again
+                # rather than refuse: the document allows re-activation when
+                # the secret is lost, and nothing else of the account changes.
+                session.user_secret = await self._activate(session, fields["phone"])
+                await self._token(session)
         else:
             session.user_secret = await self._activate(session, fields["phone"])
-        await self._token(session)
+            await self._token(session)
         homes = await self._homes(session)
         if session.home_id is None and len(homes) == 1:
             session.home_id = homes[0]["homeId"]
@@ -271,7 +280,12 @@ class ZhoubianProvider:
                 f"{command.trait}.{command.command} cannot be said to this platform",
             )
         query = template.format(name=device.name)
-        answer = await self._control(session, query)
+        try:
+            answer = await self._control(session, query)
+        except BindError as exc:
+            # Authentication failed before the instruction was sent: a known
+            # non-execution, not an unknown outcome.
+            raise SmartHomeError(ERROR_PLATFORM_REJECTED, exc.message) from exc
         status, text = int(answer.get("status", -1)), str(answer.get("answer") or "")
         if status == p.CONTROL_OK:
             return Delegated(text or "平台已受理")
