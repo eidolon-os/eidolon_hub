@@ -71,6 +71,22 @@ async def test_bind_discover_and_delegated_control(setup):
         ("客厅空调", "客厅", False),
     ]
     assert found[0].external_ref == "ATARS1Bj0001D83BDA303CD8.property.power1"
+    assert [(d.suggested_type, d.traits) for d in found] == [
+        ("switch", ("on_off",)),
+        ("switch", ("on_off",)),
+        ("cover", ("position",)),
+        ("climate", ("on_off",)),
+    ]
+    # Every discovered device must be a valid registry device, or the import would refuse it.
+    for d in found:
+        Device(
+            device_id="x",
+            name="x",
+            type=d.suggested_type,
+            traits=d.traits,
+            provider="zhoubian:a",
+            provider_ref=d.external_ref,
+        )
     lamp = device("主卧吸顶灯", found[0].external_ref)
     outcome = await provider.execute(
         OWNER, lamp, Command(device_id=lamp.device_id, trait="on_off", command="on")

@@ -219,14 +219,13 @@ class ZhoubianProvider:
         for row in rows:
             ref = external_ref(row["deviceId"], row.get("resourceId"))
             seen[ref] = bool(row.get("connected", True))
+            kind = suggest_type(row.get("classifyName") or "", row.get("productName") or "")
             found.append(
                 DiscoveredDevice(
                     external_ref=ref,
                     name=(row.get("deviceName") or row.get("productName") or "设备")[:64],
-                    suggested_type=suggest_type(
-                        row.get("classifyName") or "", row.get("productName") or ""
-                    ),
-                    traits=("on_off",),
+                    suggested_type=kind,
+                    traits=traits_for(kind),
                     area_name=(row.get("place") or None),
                     reachable=bool(row.get("connected", True)),
                 )
@@ -441,6 +440,15 @@ def external_ref(device_id: str, resource_id: str | None) -> str:
     share a deviceId and differ by resource."""
     ref = f"{device_id}.{resource_id}" if resource_id else device_id
     return "".join(ch if (ch.isalnum() or ch in "._:-") else "-" for ch in ref)[:128]
+
+
+# The protocol lets us say open/close (or on/off) and nothing finer, so every
+# type is narrowed to the one trait those words map onto.
+_TRAITS_FOR: dict[str, tuple[str, ...]] = {"cover": ("position",), "sensor": ("measure",)}
+
+
+def traits_for(kind: str) -> tuple[str, ...]:
+    return _TRAITS_FOR.get(kind, ("on_off",))
 
 
 def suggest_type(classify_name: str, product_name: str) -> str:

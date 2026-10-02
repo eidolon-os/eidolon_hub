@@ -156,19 +156,29 @@ async def test_http_authentication_and_conflict(setup):
             )
             assert response.status_code == status
 
+
 async def test_legacy_state_is_not_silently_replaced(tmp_path):
     import httpx
 
     from hub.composition.smarthome import build_smarthome
     from hub.config import HubConfig, PersistenceConfig, SmartHomeConfig
-    old = tmp_path / 'channel/smarthome.sqlite3'
+
+    old = tmp_path / "channel/smarthome.sqlite3"
     old.parent.mkdir()
-    old.write_bytes(b'existing-authority')
-    config = HubConfig(persistence=PersistenceConfig(path=str(tmp_path/'hub/hub.sqlite3')),
-                       smarthome=SmartHomeConfig(workspace_url='http://data'))
+    old.write_bytes(b"existing-authority")
+    config = HubConfig(
+        persistence=PersistenceConfig(path=str(tmp_path / "hub/hub.sqlite3")),
+        smarthome=SmartHomeConfig(workspace_url="http://data"),
+    )
     async with httpx.AsyncClient() as client:
-        with pytest.raises(RuntimeError, match='offline migration'):
-            build_smarthome(config,client,{'EIDOLON_HUB_SMARTHOME_TOKEN':'s'*32,
-                'EIDOLON_DATA_WORKSPACE_AUTHORITY_TOKEN':'w'*32})
-    assert not (tmp_path/'hub/smarthome.sqlite3').exists()
-    assert old.read_bytes()==b'existing-authority'
+        with pytest.raises(RuntimeError, match="offline migration"):
+            build_smarthome(
+                config,
+                client,
+                {
+                    "EIDOLON_HUB_SMARTHOME_TOKEN": "s" * 32,
+                    "EIDOLON_DATA_WORKSPACE_AUTHORITY_TOKEN": "w" * 32,
+                },
+            )
+    assert not (tmp_path / "hub/smarthome.sqlite3").exists()
+    assert old.read_bytes() == b"existing-authority"

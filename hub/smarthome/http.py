@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import Callable
+from dataclasses import asdict
 from typing import Any
 
 from eidolon_sdk.biz.smarthome import ExecuteRequest
@@ -114,7 +115,7 @@ def create_smarthome_router(
         return {
             "request_id": found.request_id,
             "scope": found.scope,
-            "timestamps": found.timestamps.__dict__,
+            "timestamps": asdict(found.timestamps),
             "result": found.result,
         }
 

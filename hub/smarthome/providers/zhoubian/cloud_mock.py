@@ -69,7 +69,7 @@ def demo_tenant() -> MockTenant:
         MockDevice(
             "ATARS1Bj0001D83BDA303CD8", "property.power2", "PVIG069E", "开关", "客厅筒灯", "客厅"
         ),
-        MockDevice("ATARS1Bj0001xxxxxxxxx", None, "ABCCCCC", "开关", "主卧窗帘", "主卧"),
+        MockDevice("ATARS1Bj0001xxxxxxxxx", None, "ABCCCCC", "窗帘", "主卧窗帘", "主卧"),
         MockDevice(
             "ATARS1Bj0002AC00000001", None, "O0EQQ701", "空调", "客厅空调", "客厅", connected=False
         ),
@@ -237,7 +237,7 @@ def create_app(tenant: MockTenant | None = None, *, clock=time.time) -> FastAPI:
             request.query_params.getlist("productIds")
             + request.query_params.getlist("productIds[]")
         )
-        classify = {"开关": "switch", "空调": "ac"}
+        classify = {"开关": "switch", "空调": "ac", "窗帘": "curtain"}
         seen: dict[str, dict[str, Any]] = {}
         for devices in tenant.devices.values():
             for d in devices:
