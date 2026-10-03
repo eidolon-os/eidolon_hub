@@ -74,6 +74,7 @@ class _Pending:
 class _Owner:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     registry: Registry | None = None
+    registry_read_at_ms: int = 0
     pending: dict[str, list[_Pending]] = field(default_factory=dict)
     inflight: dict[tuple[str, str], asyncio.Future[ExecuteResult]] = field(default_factory=dict)
     device_locks: defaultdict[str, asyncio.Lock] = field(
@@ -98,6 +99,7 @@ class SmartHomeRuntime:
         now_ms: Callable[[], int] | None = None,
         ledger: ReceiptLedger | None = None,
         observations: ObservationCache | None = None,
+        registry_ttl_ms: int = 0,
     ):
         self._registry_source = registry
         self._providers = dict(providers)
@@ -105,6 +107,11 @@ class SmartHomeRuntime:
         self._ledger = ledger if ledger is not None else MemoryLedger()
         self._observations = observations if observations is not None else MemoryObservationCache()
         self._owners: dict[str, _Owner] = {}
+        # How long a registry read from Data stays good. Every snapshot and
+        # execute re-reads it otherwise, which measured ~40 ms of a ~45 ms
+        # command. The Owner lock makes the reuse safe; a change made through
+        # Data within the window is seen on the next read.
+        self._registry_ttl_ms = registry_ttl_ms
 
     @property
     def observations(self) -> ObservationCache:
@@ -353,7 +360,15 @@ class SmartHomeRuntime:
         return self._owners.setdefault(owner_id, _Owner())
 
     async def _registry(self, owner_id: str, owner: _Owner) -> Registry:
+        now = self._now_ms()
+        if (
+            owner.registry is not None
+            and self._registry_ttl_ms > 0
+            and now - owner.registry_read_at_ms < self._registry_ttl_ms
+        ):
+            return owner.registry
         registry = await self._registry_source.get(owner_id)
+        owner.registry_read_at_ms = now
         changed = owner.registry is None or owner.registry.revision != registry.revision
         for kind, provider in self._providers.items():
             devices = [d for d in devices_of(registry, kind) if not d.orphaned]

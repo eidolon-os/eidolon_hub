@@ -100,6 +100,7 @@ def build_smarthome(
         providers=providers,
         ledger=SqliteReceiptLedger(integration_store),
         observations=SqliteObservationCache(integration_store),
+        registry_ttl_ms=1_000,
     )
     integrations: dict[str, ProviderIntegration] = {
         kind: provider for kind, provider in providers.items() if kind in ACCOUNT_PROVIDER_KINDS

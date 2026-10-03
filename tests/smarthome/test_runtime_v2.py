@@ -159,3 +159,19 @@ async def test_observed_changes_stream(setup):
     changes = await runtime.observations.changes_since(OWNER, seq, 0.1)
     assert [(c.target, c.reachable) for c in changes] == [("zb.lamp", False)]
     assert isinstance(Device.model_validate(home_with_spoken().devices[-1].model_dump()), Device)
+
+
+async def test_registry_ttl_reuses_the_last_read_within_the_window(tmp_path):
+    virtual = VirtualProvider(tmp_path / "virtual.sqlite3")
+    virtual.initialize()
+    clock = Clock()
+    registry = FakeRegistry({OWNER: home()})
+    runtime = SmartHomeRuntime(
+        registry=registry, providers={"virtual": virtual}, now_ms=clock, registry_ttl_ms=1_000
+    )
+    await runtime.snapshot(OWNER)
+    await runtime.execute(OWNER, request("a", cmd("living.main_light", "on_off", "on")))
+    assert registry.reads == 1
+    clock.now_ms += 1_000
+    await runtime.snapshot(OWNER)
+    assert registry.reads == 2
