@@ -195,3 +195,11 @@ def test_service_calls_and_confirmation():
         ).service
         == "return_to_base"
     )
+
+
+def test_cover_without_set_position_refuses_set_before_calling_home_assistant():
+    cover = device("cover", "cover.c", traits=("position",))
+    setting = Command(device_id="d", trait="position", command="set", params={"value": 50})
+    with pytest.raises(Exception, match="UNSUPPORTED_COMMAND"):
+        to_service_call(cover, setting, {}, features=3)
+    assert to_service_call(cover, setting, {}, features=15).data["position"] == 50
