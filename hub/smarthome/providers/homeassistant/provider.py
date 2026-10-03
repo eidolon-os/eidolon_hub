@@ -40,7 +40,10 @@ class HomeAssistantProvider:
     """``SmartHomeProvider`` + ``ProviderIntegration``; event-confirming."""
 
     kind = KIND
-    pushes_observations = True
+    # The connection already holds every entity's state; ``states`` projects it
+    # with no I/O, so the runtime's refresh on each snapshot is the cheapest
+    # way to keep observations current. ``observe`` additionally pushes changes.
+    pushes_observations = False
 
     def __init__(
         self,
@@ -158,7 +161,15 @@ class HomeAssistantProvider:
         return None
 
     async def states(self, owner_id: str, devices: Sequence[Device]) -> dict[str, dict[str, Any]]:
-        return {}
+        states: dict[str, dict[str, Any]] = {}
+        for device in devices:
+            _kind, account_id = provider_binding(device.provider)
+            if self._owners.get(account_id) != owner_id:
+                continue
+            state = self.project(device, account_id)
+            if state is not None:
+                states[device.device_id] = state
+        return states
 
     async def execute(self, owner_id: str, device: Device, command: Command) -> dict[str, Any]:
         _kind, account_id = provider_binding(device.provider)
@@ -269,7 +280,7 @@ class HomeAssistantProvider:
                 [self._entity(account_id, p) for p in parts[1:]],
             )
         state = connection.states.get(device.provider_ref)
-        if state is None:
+        if state is None or state.get("state") in ("unavailable", "unknown"):
             return None
         return project_state(device, self._entity(account_id, state))
 

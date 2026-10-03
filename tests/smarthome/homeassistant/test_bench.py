@@ -165,3 +165,27 @@ async def test_execute_is_confirmed_by_the_entity_state(provider):
         ),
     )
     assert warm["target_c"] == target
+
+
+async def test_states_project_the_cache_without_io(provider):
+    from eidolon_sdk.biz.smarthome import validate_device_state
+
+    await bind(provider)
+    found = {d.external_ref: d for d in await provider.discover(OWNER, ACCOUNT)}
+    devices = [
+        Device(
+            device_id=f"d{i}",
+            name="x",
+            type=d.suggested_type,
+            traits=d.traits,
+            limits=d.limits,
+            provider=f"homeassistant:{ACCOUNT}",
+            provider_ref=d.external_ref,
+        )
+        for i, d in enumerate(found.values())
+    ]
+    states = await provider.states(OWNER, devices)
+    assert len(states) >= len(devices) - 3  # unavailable demo entities are simply absent
+    for device in devices:
+        if device.device_id in states:
+            validate_device_state(device, states[device.device_id])

@@ -13,6 +13,8 @@ import secrets
 from collections.abc import Mapping
 from typing import Any
 
+from eidolon_sdk.biz.smarthome import Device
+
 from hub.integration.accounts import ProviderAccountStore
 
 from .importer import RegistryImporter
@@ -152,24 +154,32 @@ class AccountService:
         integration = self._integrations[kind]
         provider = f"{kind}:{account_id}"
 
+        project = getattr(integration, "project", None)
+
         async def run() -> None:
             async for observation in integration.observe(owner_id, account_id):
                 snapshot = await self._runtime.snapshot(owner_id)
-                device_id = next(
+                row = next(
                     (
-                        d["device_id"]
+                        d
                         for d in snapshot["registry"]["devices"]
-                        if d["provider"] == provider and d["provider_ref"] == observation.device_id
+                        if d["provider"] == provider
+                        and observation.device_id in (d["provider_ref"] or "").split(":")
                     ),
                     None,
                 )
-                if device_id is not None:
-                    await self._runtime.observe(
-                        owner_id,
-                        device_id,
-                        reachable=observation.reachable,
-                        state=observation.state,
-                    )
+                if row is None:
+                    continue
+                state = observation.state
+                if state is None and project is not None and observation.reachable:
+                    # The adapter knows the entity; the registry row knows the traits.
+                    state = project(Device.model_validate(row), account_id)
+                await self._runtime.observe(
+                    owner_id,
+                    row["device_id"],
+                    reachable=observation.reachable,
+                    state=state,
+                )
 
         self._observers[account_id] = asyncio.create_task(
             run(), name=f"smarthome-observe-{account_id}"
