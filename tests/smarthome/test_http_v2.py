@@ -55,6 +55,7 @@ async def test_execute_then_receipt_and_changes(client):
         "provider_returned_at_ms",
         "confirmed_at_ms",
         "completed_at_ms",
+        "reconciled_at_ms",
     }
     assert (await post(client, "receipts", request_id="nope")).status_code == 404
     changes = await post(client, "changes", since=0)

@@ -44,9 +44,12 @@ from eidolon_sdk.biz.smarthome import (
 from hub.integration.ledger import MemoryLedger, ReceiptConflict, ReceiptLedger, Timestamps
 from hub.integration.observation import MemoryObservationCache, ObservationCache
 
+from .effects import satisfied
 from .ports import Delegated, RegistrySource, SmartHomeProvider
 
 logger = logging.getLogger("hub.smarthome")
+# How long an unknown outcome waits for an observation that settles it.
+RECONCILE_WINDOW_MS = 10 * 60_000
 
 
 class IdempotencyConflict(ValueError):
@@ -56,10 +59,22 @@ class IdempotencyConflict(ValueError):
     """
 
 
+@dataclass(frozen=True, slots=True)
+class _Pending:
+    """An unknown outcome waiting for the observation that settles it."""
+
+    scope: str
+    request_id: str
+    command: Command
+    before: dict[str, Any] | None
+    expires_at_ms: int
+
+
 @dataclass
 class _Owner:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     registry: Registry | None = None
+    pending: dict[str, list[_Pending]] = field(default_factory=dict)
     inflight: dict[tuple[str, str], asyncio.Future[ExecuteResult]] = field(default_factory=dict)
     device_locks: defaultdict[str, asyncio.Lock] = field(
         default_factory=lambda: defaultdict(asyncio.Lock)
@@ -136,7 +151,7 @@ class SmartHomeRuntime:
         future = owner.inflight[key]
         timing = _Timing(submitted_at_ms=self._now_ms())
         try:
-            result = await self._perform(owner_id, owner, request, timing)
+            result = await self._perform(owner_id, owner, request, timing, scope)
             # Recorded before anyone is told, so a failed send can never cause a rerun.
             await self._ledger.complete(
                 owner_id,
@@ -162,7 +177,12 @@ class SmartHomeRuntime:
         return result
 
     async def _perform(
-        self, owner_id: str, owner: _Owner, request: ExecuteRequest, timing: _Timing
+        self,
+        owner_id: str,
+        owner: _Owner,
+        request: ExecuteRequest,
+        timing: _Timing,
+        scope: str = "",
     ) -> ExecuteResult:
         if request.deadline_ms <= self._now_ms():
             return _refused(request, ERROR_DEADLINE_EXCEEDED)
@@ -177,7 +197,15 @@ class SmartHomeRuntime:
         timing.provider_started_at_ms = self._now_ms()
         results = await asyncio.gather(
             *(
-                self._run(owner_id, owner, registry, command, request.deadline_ms)
+                self._run(
+                    owner_id,
+                    owner,
+                    registry,
+                    command,
+                    request.deadline_ms,
+                    scope,
+                    request.request_id,
+                )
                 for command in commands
             )
         )
@@ -187,7 +215,14 @@ class SmartHomeRuntime:
         return ExecuteResult(request_id=request.request_id, results=tuple(results))
 
     async def _run(
-        self, owner_id: str, owner: _Owner, registry: Registry, command: Command, deadline_ms: int
+        self,
+        owner_id: str,
+        owner: _Owner,
+        registry: Registry,
+        command: Command,
+        deadline_ms: int,
+        scope: str = "",
+        request_id: str = "",
     ) -> CommandResult:
         # Another Owner's device is simply not in this registry.
         device = registry.device(command.device_id)
@@ -215,6 +250,16 @@ class SmartHomeRuntime:
                 return _failed(command, exc.code)
             except TimeoutError:
                 # The Provider may still act on it. Reconcile, never resend.
+                seen = (await self._observations.snapshot(owner_id)).get(device.device_id)
+                owner.pending.setdefault(device.device_id, []).append(
+                    _Pending(
+                        scope,
+                        request_id,
+                        command,
+                        None if seen is None else seen.state,
+                        self._now_ms() + RECONCILE_WINDOW_MS,
+                    )
+                )
                 return _unknown(command, ERROR_DEADLINE_EXCEEDED)
             except Exception:
                 logger.exception(
@@ -224,19 +269,14 @@ class SmartHomeRuntime:
                     device.device_id,
                 )
                 return _unknown(command, None)
-        now = self._now_ms()
         if isinstance(outcome, Delegated):
-            await self._observations.put(
-                owner_id, device.device_id, reachable=True, state=None, observed_at_ms=now
-            )
+            await self._observed(owner_id, owner, device.device_id, reachable=True, state=None)
             return CommandResult(
                 device_id=command.device_id,
                 status="delegated",
                 platform_answer=outcome.answer[:200],
             )
-        await self._observations.put(
-            owner_id, device.device_id, reachable=True, state=outcome, observed_at_ms=now
-        )
+        await self._observed(owner_id, owner, device.device_id, reachable=True, state=outcome)
         return CommandResult(device_id=command.device_id, status="succeeded", state=outcome)
 
     async def snapshot(self, owner_id: str) -> dict[str, Any]:
@@ -259,9 +299,53 @@ class SmartHomeRuntime:
         self, owner_id: str, device_id: str, *, reachable: bool, state: dict[str, Any] | None
     ) -> None:
         """An adapter reports what it saw; the cache decides whether it is a change."""
-        await self._observations.put(
-            owner_id, device_id, reachable=reachable, state=state, observed_at_ms=self._now_ms()
+        await self._observed(
+            owner_id, self._owner(owner_id), device_id, reachable=reachable, state=state
         )
+
+    async def _observed(
+        self,
+        owner_id: str,
+        owner: _Owner,
+        device_id: str,
+        *,
+        reachable: bool,
+        state: dict[str, Any] | None,
+    ) -> None:
+        """Record an observation and settle any unknown outcome it answers."""
+        now = self._now_ms()
+        await self._observations.put(
+            owner_id, device_id, reachable=reachable, state=state, observed_at_ms=now
+        )
+        waiting = owner.pending.get(device_id)
+        if not waiting:
+            return
+        remaining: list[_Pending] = []
+        for item in waiting:
+            if item.expires_at_ms <= now:
+                continue
+            if state is not None and satisfied(item.command, item.before, state):
+                settled = CommandResult(device_id=device_id, status="succeeded", state=state)
+                await self._ledger.reconcile(
+                    owner_id,
+                    item.scope,
+                    item.request_id,
+                    device_id,
+                    settled.model_dump(mode="json"),
+                    now,
+                )
+                logger.info(
+                    "smart home reconciled owner=%s device=%s request=%s",
+                    owner_id,
+                    device_id,
+                    item.request_id,
+                )
+                continue
+            remaining.append(item)
+        if remaining:
+            owner.pending[device_id] = remaining
+        else:
+            owner.pending.pop(device_id, None)
 
     def _owner(self, owner_id: str) -> _Owner:
         if not owner_id:
@@ -271,7 +355,6 @@ class SmartHomeRuntime:
     async def _registry(self, owner_id: str, owner: _Owner) -> Registry:
         registry = await self._registry_source.get(owner_id)
         changed = owner.registry is None or owner.registry.revision != registry.revision
-        now = self._now_ms()
         for kind, provider in self._providers.items():
             devices = [d for d in devices_of(registry, kind) if not d.orphaned]
             if changed:
@@ -281,12 +364,8 @@ class SmartHomeRuntime:
             states = await provider.states(owner_id, devices)
             for device in devices:
                 state = states.get(device.device_id)
-                await self._observations.put(
-                    owner_id,
-                    device.device_id,
-                    reachable=state is not None,
-                    state=state,
-                    observed_at_ms=now,
+                await self._observed(
+                    owner_id, owner, device.device_id, reachable=state is not None, state=state
                 )
         if changed and owner.registry is not None:
             gone = {d.device_id for d in owner.registry.devices} - {

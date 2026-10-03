@@ -20,6 +20,8 @@ from eidolon_sdk.biz.smarthome import (
     device_traits,
 )
 
+from hub.smarthome.effects import satisfied as effect_satisfied
+
 # HA hvac modes → SDK thermostat modes. ``off`` is the on_off trait, not a mode.
 _HVAC_TO_MODE = {
     "cool": "cool",
@@ -328,62 +330,7 @@ def to_service_call(
 
 def satisfied(command: Command, before: Mapping[str, Any], after: Mapping[str, Any]) -> bool:
     """Whether ``after`` shows the command took effect; what the adapter waits for."""
-    p = command.params
-    match command.trait, command.command:
-        case "on_off", "on":
-            return after.get("on") is True
-        case "on_off", "off":
-            return after.get("on") is False
-        case "on_off", "toggle":
-            return after.get("on") is not None and after.get("on") != before.get("on")
-        case "level", "set":
-            return (
-                after.get("on") is True and abs(int(after.get("level", -1)) - int(p["value"])) <= 1
-            )
-        case "level", "step":
-            return (
-                after.get("on") is True
-                and after.get("level") != before.get("level")
-                or int(p["delta"]) == 0
-            )
-        case "thermostat", "set_mode":
-            return after.get("mode") == p["mode"]
-        case "thermostat", "set_target":
-            return (
-                after.get("target_c") is not None
-                and abs(float(after["target_c"]) - float(p["celsius"])) < 0.01
-            )
-        case "thermostat", "step":
-            return after.get("target_c") != before.get("target_c") or float(p["delta"]) == 0
-        case "fan_speed", "set":
-            return after.get("speed") == int(p["value"])
-        case "position", "open":
-            return int(after.get("position", -1)) == 100
-        case "position", "close":
-            return int(after.get("position", -1)) == 0
-        case "position", "stop":
-            return True
-        case "position", "set":
-            return int(after.get("position", -1)) == int(p["value"])
-        case "lock", "lock":
-            return after.get("locked") is True
-        case "lock", "unlock":
-            return after.get("locked") is False
-        case "operational", "start":
-            return after.get("run_state") == "running"
-        case "operational", "pause":
-            return after.get("run_state") == "paused"
-        case "operational", "stop":
-            return after.get("run_state") in ("idle", "docked")
-        case "operational", "dock":
-            return after.get("run_state") == "docked"
-        case "volume", "set":
-            return abs(int(after.get("volume", -1)) - int(p["value"])) <= 1
-        case "volume", "step":
-            return after.get("volume") != before.get("volume") or int(p["delta"]) == 0
-        case "volume", "mute":
-            return after.get("muted") == bool(p["muted"])
-    return False
+    return effect_satisfied(command, before, after)
 
 
 def _clamp(value, low, high):

@@ -8,7 +8,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS provider_accounts (
@@ -42,6 +42,7 @@ CREATE TABLE IF NOT EXISTS receipts (
     confirmed_at_ms INTEGER,
     completed_at_ms INTEGER,
     result_json TEXT,
+    reconciled_at_ms INTEGER,
     PRIMARY KEY (owner_id, scope, request_id)
 );
 CREATE INDEX IF NOT EXISTS ix_receipts_submitted ON receipts (submitted_at_ms);
@@ -72,9 +73,12 @@ class IntegrationStore:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         with self.transaction() as db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version not in {0, SCHEMA_VERSION}:
+            if version not in {0, 1, SCHEMA_VERSION}:
                 raise RuntimeError(f"unsupported integration store schema version: {version}")
             db.executescript(_SCHEMA)
+            if version == 1:
+                # v2: a receipt remembers when a later observation settled an unknown outcome.
+                db.execute("ALTER TABLE receipts ADD COLUMN reconciled_at_ms INTEGER")
             db.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
         # Credentials live here; only the service account reads them.
         os.chmod(self._path, 0o600)

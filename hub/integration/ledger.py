@@ -30,6 +30,7 @@ class Timestamps:
     provider_returned_at_ms: int | None = None
     confirmed_at_ms: int | None = None
     completed_at_ms: int | None = None
+    reconciled_at_ms: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +67,21 @@ class ReceiptLedger(Protocol):
     ) -> None: ...
 
     async def get(self, owner_id: str, scope: str, request_id: str) -> Receipt | None: ...
+
+    async def reconcile(
+        self,
+        owner_id: str,
+        scope: str,
+        request_id: str,
+        target: str,
+        result_item: dict[str, Any],
+        at_ms: int,
+    ) -> bool:
+        """Replace the recorded item for ``target`` once a later observation settled it.
+
+        Returns False when there is no such receipt or the item is no longer unknown.
+        """
+        ...
 
 
 class SqliteReceiptLedger:
@@ -112,11 +128,42 @@ class SqliteReceiptLedger:
         with self._store.transaction() as db:
             return _fetch(db, owner_id, scope, request_id)
 
+    async def reconcile(self, owner_id, scope, request_id, target, result_item, at_ms) -> bool:
+        with self._store.transaction() as db:
+            receipt = _fetch(db, owner_id, scope, request_id)
+            replaced = _replace_unknown(receipt, target, result_item)
+            if replaced is None:
+                return False
+            db.execute(
+                "UPDATE receipts SET result_json=?, reconciled_at_ms=? WHERE owner_id=? AND scope=? AND request_id=?",
+                (
+                    json.dumps(replaced, ensure_ascii=False, separators=(",", ":")),
+                    at_ms,
+                    owner_id,
+                    scope,
+                    request_id,
+                ),
+            )
+            return True
+
+
+def _replace_unknown(
+    receipt: Receipt | None, target: str, result_item: dict[str, Any]
+) -> dict[str, Any] | None:
+    if receipt is None or receipt.result is None:
+        return None
+    items = list(receipt.result.get("results") or [])
+    for index, item in enumerate(items):
+        if item.get("device_id") == target and item.get("status") == "unknown":
+            items[index] = result_item
+            return {**receipt.result, "results": items}
+    return None
+
 
 def _fetch(db, owner_id: str, scope: str, request_id: str) -> Receipt | None:
     row = db.execute(
         """SELECT fingerprint, submitted_at_ms, provider_started_at_ms, provider_returned_at_ms,
-        confirmed_at_ms, completed_at_ms, result_json FROM receipts
+        confirmed_at_ms, completed_at_ms, result_json, reconciled_at_ms FROM receipts
         WHERE owner_id=? AND scope=? AND request_id=?""",
         (owner_id, scope, request_id),
     ).fetchone()
@@ -127,7 +174,7 @@ def _fetch(db, owner_id: str, scope: str, request_id: str) -> Receipt | None:
         scope=scope,
         request_id=request_id,
         fingerprint=row[0],
-        timestamps=Timestamps(row[1], row[2], row[3], row[4], row[5]),
+        timestamps=Timestamps(row[1], row[2], row[3], row[4], row[5], row[7]),
         result=None if row[6] is None else json.loads(row[6]),
     )
 
@@ -161,6 +208,25 @@ class MemoryLedger:
 
     async def get(self, owner_id, scope, request_id) -> Receipt | None:
         return self._rows.get((owner_id, scope, request_id))
+
+    async def reconcile(self, owner_id, scope, request_id, target, result_item, at_ms) -> bool:
+        key = (owner_id, scope, request_id)
+        row = self._rows.get(key)
+        replaced = _replace_unknown(row, target, result_item)
+        if replaced is None:
+            return False
+        timestamps = Timestamps(
+            row.timestamps.submitted_at_ms,
+            row.timestamps.provider_started_at_ms,
+            row.timestamps.provider_returned_at_ms,
+            row.timestamps.confirmed_at_ms,
+            row.timestamps.completed_at_ms,
+            at_ms,
+        )
+        self._rows[key] = Receipt(
+            owner_id, scope, request_id, row.fingerprint, timestamps, replaced
+        )
+        return True
 
 
 def now_ms() -> int:
