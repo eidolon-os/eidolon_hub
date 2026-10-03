@@ -61,6 +61,43 @@ class Hub:
         await self._client.aclose()
 
 
+async def expose_demo(url: str, token: str) -> None:
+    """Expose the bench's demo entities to the conversation assistant (what Hub imports)."""
+    import aiohttp
+
+    ws_url = url.replace("http://", "ws://", 1).replace("https://", "wss://", 1) + "/api/websocket"
+    async with aiohttp.ClientSession() as session, session.ws_connect(ws_url) as ws:
+        await ws.receive_json()
+        await ws.send_json({"type": "auth", "access_token": token})
+        assert (await ws.receive_json())["type"] == "auth_ok"
+        await ws.send_json({"id": 1, "type": "get_states"})
+        states = (await ws.receive_json())["result"]
+        domains = {
+            "light",
+            "cover",
+            "climate",
+            "fan",
+            "lock",
+            "media_player",
+            "vacuum",
+            "water_heater",
+            "switch",
+            "sensor",
+        }
+        entity_ids = [s["entity_id"] for s in states if s["entity_id"].split(".")[0] in domains]
+        await ws.send_json(
+            {
+                "id": 2,
+                "type": "homeassistant/expose_entity",
+                "assistants": ["conversation"],
+                "entity_ids": entity_ids,
+                "should_expose": True,
+            }
+        )
+        reply = await ws.receive_json()
+        print(f"exposed {len(entity_ids)} demo entities: success={reply.get('success')}")
+
+
 def dump(value) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2))
 
@@ -82,6 +119,19 @@ async def main() -> int:
     bind.add_argument("--app-secret", default=DEFAULT_APP_SECRET)
     bind.add_argument("--phone", default=DEFAULT_PHONE)
     bind.add_argument("--home-id", default="")
+    bind_ha = sub.add_parser("bind-ha", help="bind a Home Assistant instance")
+    bind_ha.add_argument("--url", default="http://127.0.0.1:8123")
+    bind_ha.add_argument(
+        "--token-file",
+        type=Path,
+        default=Path(
+            "~/ai/eidolon/.eidolon/mac-product/homeassistant/config/ha.token"
+        ).expanduser(),
+    )
+    bind_ha.add_argument("--account", dest="ha_account", default="acc_ha_bench")
+    bind_ha.add_argument(
+        "--expose-demo", action="store_true", help="expose the bench's demo entities first"
+    )
     sub.add_parser("providers")
     sub.add_parser("accounts")
     sub.add_parser("unbind")
@@ -117,6 +167,18 @@ async def main() -> int:
                 dump(
                     await hub.call(
                         "accounts/bind", kind="zhoubian", account_id=args.account, fields=fields
+                    )
+                )
+            case "bind-ha":
+                token_value = args.token_file.read_text().strip()
+                if args.expose_demo:
+                    await expose_demo(args.url, token_value)
+                dump(
+                    await hub.call(
+                        "accounts/bind",
+                        kind="homeassistant",
+                        account_id=args.ha_account,
+                        fields={"url": args.url, "token": token_value},
                     )
                 )
             case "unbind":
