@@ -132,6 +132,18 @@ async def main() -> int:
     bind_ha.add_argument(
         "--expose-demo", action="store_true", help="expose the bench's demo entities first"
     )
+    rename = sub.add_parser(
+        "rename", help="rename a registry device through Data (recorded as an Owner override)"
+    )
+    rename.add_argument("device_id")
+    rename.add_argument("name")
+    rename.add_argument("--data", default="http://127.0.0.1:8085")
+    bench = sub.add_parser(
+        "bench", help="N on/off cycles on one device; segment latencies from receipts"
+    )
+    bench.add_argument("name")
+    bench.add_argument("--n", type=int, default=20)
+    bench.add_argument("--out", type=Path, default=None, help="write the raw samples as JSON")
     sub.add_parser("providers")
     sub.add_parser("accounts")
     sub.add_parser("unbind")
@@ -229,6 +241,98 @@ async def main() -> int:
                 )
                 dump(result)
                 dump(await hub.call("receipts", request_id=request_id))
+            case "rename":
+                data_token = read_env(args.env)["EIDOLON_DATA_WORKSPACE_AUTHORITY_TOKEN"]
+                async with httpx.AsyncClient(
+                    base_url=args.data,
+                    headers={"Authorization": f"Bearer {data_token}"},
+                    timeout=15,
+                ) as data:
+                    base = f"/api/workspace-authority/v1/owners/{args.owner}/smarthome"
+                    registry = (await data.get(f"{base}/registry")).json()
+                    device = next(
+                        (d for d in registry["devices"] if d["device_id"] == args.device_id), None
+                    )
+                    if device is None:
+                        print(f"no device {args.device_id!r}", file=sys.stderr)
+                        return 2
+                    device["name"] = args.name
+                    device["overrides"] = sorted(set(device.get("overrides") or []) | {"name"})
+                    response = await data.put(
+                        f"{base}/devices/{args.device_id}",
+                        json={"expected_revision": registry["revision"], "device": device},
+                    )
+                    response.raise_for_status()
+                    print(
+                        f"renamed {args.device_id} -> {args.name!r} (revision {response.json()['revision']})"
+                    )
+            case "bench":
+                snapshot = await hub.call("snapshot")
+                device = next(
+                    (d for d in snapshot["registry"]["devices"] if d["name"] == args.name), None
+                )
+                if device is None:
+                    print(f"no device named {args.name!r}", file=sys.stderr)
+                    return 2
+                trait, verbs = (
+                    ("position", ("open", "close"))
+                    if device["type"] == "cover"
+                    else ("on_off", ("on", "off"))
+                )
+                samples = []
+                for index in range(args.n):
+                    verb = verbs[index % 2]
+                    request_id = f"bench:{uuid.uuid4().hex[:12]}"
+                    started = time.time()
+                    result = await hub.call(
+                        "execute",
+                        request={
+                            "request_id": request_id,
+                            "commands": [
+                                {
+                                    "device_id": device["device_id"],
+                                    "trait": trait,
+                                    "command": verb,
+                                    "params": {},
+                                }
+                            ],
+                            "origin": {"kind": "text", "label": "bench"},
+                            "deadline_ms": int(time.time() * 1000) + 3000,
+                        },
+                    )
+                    round_trip_ms = (time.time() - started) * 1000
+                    receipt = await hub.call("receipts", request_id=request_id)
+                    t = receipt["timestamps"]
+                    samples.append(
+                        {
+                            "request_id": request_id,
+                            "verb": verb,
+                            "status": result["results"][0]["status"],
+                            "round_trip_ms": round(round_trip_ms, 1),
+                            "hub_admit_ms": (t["provider_started_at_ms"] or 0)
+                            - t["submitted_at_ms"],
+                            "provider_ms": (t["provider_returned_at_ms"] or 0)
+                            - (t["provider_started_at_ms"] or 0),
+                            "complete_ms": (t["completed_at_ms"] or 0) - t["submitted_at_ms"],
+                        }
+                    )
+                statuses = {}
+                for s_ in samples:
+                    statuses[s_["status"]] = statuses.get(s_["status"], 0) + 1
+                print(f"device={device['device_id']} n={len(samples)} statuses={statuses}")
+                for key in ("round_trip_ms", "hub_admit_ms", "provider_ms", "complete_ms"):
+                    values = sorted(s_[key] for s_ in samples)
+                    p50 = values[len(values) // 2]
+                    p95 = values[min(len(values) - 1, int(len(values) * 0.95))]
+                    print(f"  {key:<14} p50={p50:>8.1f}  p95={p95:>8.1f}  max={values[-1]:>8.1f}")
+                if args.out is not None:
+                    args.out.parent.mkdir(parents=True, exist_ok=True)
+                    args.out.write_text(
+                        json.dumps(
+                            {"device": device, "samples": samples}, ensure_ascii=False, indent=2
+                        )
+                    )
+                    print(f"samples written to {args.out}")
             case "receipt":
                 dump(await hub.call("receipts", request_id=args.request_id))
             case "changes":

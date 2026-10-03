@@ -198,3 +198,18 @@ async def test_platform_that_forgot_us_is_reactivated_on_bind_and_refused_on_exe
         ),
         Delegated,
     )
+
+
+async def test_two_homes_make_the_account_pending_until_one_is_chosen(setup):
+    provider, cloud, _, accounts = setup
+    cloud.state.tenant.homes["hxxx02"] = "我的家2"
+    cloud.state.tenant.devices["hxxx02"] = []
+    account = await provider.bind(OWNER, ACCOUNT, FIELDS)
+    assert account.status == "pending"
+    assert [c.value for c in account.choices] == ["hxxx01", "hxxx02"]
+    with pytest.raises(BindError) as refused:
+        await provider.discover(OWNER, ACCOUNT)
+    assert refused.value.code == "HOME_NOT_CHOSEN"
+    chosen = await provider.bind(OWNER, ACCOUNT, {**FIELDS, "home_id": "hxxx01"})
+    assert chosen.status == "connected" and chosen.label == "我的家"
+    assert len(await provider.discover(OWNER, ACCOUNT)) == 4
