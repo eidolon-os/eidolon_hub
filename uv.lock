@@ -283,6 +283,7 @@ name = "eidolon-hub"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "aiohttp" },
     { name = "aiosqlite" },
     { name = "cryptography" },
     { name = "eidolon-sdk" },
@@ -311,6 +312,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "aiohttp", specifier = ">=3.9" },
     { name = "aiosqlite", specifier = ">=0.20" },
     { name = "cryptography", specifier = ">=42" },
     { name = "eidolon-sdk", editable = "../eidolon_sdk" },

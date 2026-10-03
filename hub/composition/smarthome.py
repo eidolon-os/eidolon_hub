@@ -10,6 +10,7 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import aiohttp
 import httpx
 
 from hub.integration.accounts import ProviderAccountStore
@@ -22,11 +23,12 @@ from hub.smarthome.http_registry import HttpRegistrySource
 from hub.smarthome.importer import HttpRegistryWriter, RegistryImporter
 from hub.smarthome.integration_service import AccountService
 from hub.smarthome.ports import ProviderIntegration
+from hub.smarthome.providers.homeassistant.provider import HomeAssistantProvider
 from hub.smarthome.providers.virtual import VirtualProvider
 from hub.smarthome.providers.zhoubian.provider import ZhoubianProvider
 from hub.smarthome.runtime import SmartHomeRuntime
 
-ACCOUNT_PROVIDER_KINDS = frozenset({"zhoubian"})
+ACCOUNT_PROVIDER_KINDS = frozenset({"zhoubian", "homeassistant"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,7 +38,11 @@ class SmartHome:
 
 
 def build_smarthome(
-    config, client: httpx.AsyncClient, environ, host_identity: str = ""
+    config,
+    client: httpx.AsyncClient,
+    environ,
+    host_identity: str = "",
+    ws_session: aiohttp.ClientSession | None = None,
 ) -> SmartHome | None:
     if config.smarthome.workspace_url is None:
         return None
@@ -76,6 +82,14 @@ def build_smarthome(
             vault=vault,
             accounts=accounts_store,
             host_identity=host_identity or os.uname().nodename,
+        ),
+    )
+    registry.register(
+        "homeassistant",
+        lambda: HomeAssistantProvider(
+            session=ws_session or aiohttp.ClientSession(trust_env=False),
+            vault=vault,
+            accounts=accounts_store,
         ),
     )
     providers = registry.build(enabled)

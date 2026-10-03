@@ -196,6 +196,7 @@ def create_composed_app(config: HubConfig | None = None) -> FastAPI:
                 resources.http_client,
                 os.environ,
                 host_identity=app_config.onboarding.owner_domain_id,
+                ws_session=resources.ws_session,
             )
             if smarthome is not None and smarthome.accounts is not None:
                 await smarthome.accounts.start()

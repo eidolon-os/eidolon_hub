@@ -7,6 +7,7 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from pathlib import Path
 
+import aiohttp
 import httpx
 from eidolon_sdk.core.http import create_async_client
 
@@ -39,6 +40,9 @@ class RuntimeResources:
     repositories: SqlHubRepositories
     directory: DeviceDirectoryRepository
     http_client: httpx.AsyncClient
+    # WebSocket-capable egress for Provider adapters that need it (Home Assistant).
+    # Same policy as http_client: no ambient proxy settings.
+    ws_session: aiohttp.ClientSession
     clock: Clock
     ids: IdGenerator
     commissioning_proofs: CommissioningProofVerifier
@@ -69,6 +73,11 @@ async def open_runtime_resources(
     # proxy settings can silently redirect credentials and makes provider
     # egress depend on process-global configuration.
     http_client = await stack.enter_async_context(create_async_client(timeout=5.0, trust_env=False))
+    ws_session = await stack.enter_async_context(
+        aiohttp.ClientSession(
+            trust_env=False, timeout=aiohttp.ClientTimeout(total=None, connect=10)
+        )
+    )
     repositories = SqlHubRepositories(database)
     directory: DeviceDirectoryRepository = InMemoryDeviceDirectoryRepository()
     commissioning_proofs, commissioning_ready = load_commissioning_proof_verifier(
@@ -80,6 +89,7 @@ async def open_runtime_resources(
         repositories=repositories,
         directory=directory,
         http_client=http_client,
+        ws_session=ws_session,
         clock=SystemClock(),
         ids=SecureIdGenerator(),
         commissioning_proofs=commissioning_proofs,
