@@ -203,7 +203,7 @@ async def test_no_network_and_registration_failure_recover_without_hub_restart()
         broken.async_close.assert_awaited_once()
         assert a._aiozc is None
         await a.refresh_interfaces()
-        assert a._aiozc is healthy
+        assert a._aiozc == (healthy,)
         snapshot.return_value = ()
         await a.refresh_interfaces()
         healthy.async_close.assert_awaited_once()
@@ -392,7 +392,7 @@ async def test_one_address_that_moved_does_not_take_the_other_records_with_it() 
         published = advertiser._info.parsed_addresses()
         await advertiser.stop()
 
-    assert attempts == [["192.168.100.19", "2001:db8::1"], ["192.168.100.19"]]
+    assert attempts == [["192.168.100.19"], ["2001:db8::1"]]
     # The records still name both; only the answering surface narrowed.
     assert set(published) == {"192.168.100.19", "2001:db8::1"}
 
@@ -402,7 +402,7 @@ async def test_one_address_that_moved_does_not_take_the_other_records_with_it() 
     (('2001:db8::5',), 'V6Only'),
     (('192.168.1.37', '2001:db8::5'), 'All'),
 ])
-def test_multicast_listener_matches_the_address_families_it_publishes(addresses, version):
+async def test_multicast_listener_matches_the_address_families_it_publishes(addresses, version):
     from zeroconf import IPVersion
 
     advertiser = ZeroconfAuthorityCandidateAdvertiser(
@@ -413,5 +413,66 @@ def test_multicast_listener_matches_the_address_families_it_publishes(addresses,
         owner_domain_id='owner-test', owner_domain_descriptor_uri='https://hub-test.local',
     )
     with patch('hub.adapters.discovery.zeroconf.AsyncZeroconf') as constructor:
-        advertiser._open_network(addresses)
-    constructor.assert_called_once_with(interfaces=list(addresses), ip_version=getattr(IPVersion, version))
+        await advertiser._open_network(addresses)
+    expected = [
+        (list(group), family) for group, family in (
+            ([a for a in addresses if ':' not in a], IPVersion.V4Only),
+            ([a for a in addresses if ':' in a], IPVersion.V6Only),
+        ) if group
+    ]
+    assert [(call.kwargs['interfaces'], call.kwargs['ip_version']) for call in constructor.call_args_list] == expected
+
+
+async def test_real_dual_stack_publisher_answers_ipv4_query() -> None:
+    """Exercise actual sockets: constructor mocks missed Darwin dropping IPv4."""
+    import asyncio
+    import socket
+    import struct
+    import uuid
+
+    from zeroconf import DNSIncoming
+
+    from hub.adapters.discovery.zeroconf import interface_addresses
+
+    addresses = interface_addresses()
+    ipv4 = next((address for address in addresses if ':' not in address), None)
+    if ipv4 is None or not any(':' in address for address in addresses):
+        pytest.skip('requires a dual-stack product link')
+    hostname = f'eidolon-test-{uuid.uuid4().hex[:12]}'
+    advertiser = ZeroconfAuthorityCandidateAdvertiser(
+        advertisement_id=hostname,
+        service_type='_eidolon-owner._tcp.local.',
+        service_name=f'{hostname}._eidolon-owner._tcp.local.',
+        hostname=hostname, port=8443, owner_domain_id=hostname,
+        owner_domain_descriptor_uri=f'https://{hostname}.local:8443/descriptor',
+        addresses=addresses, refresh_seconds=0,
+    )
+    client = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    client.bind((ipv4, 0))
+    client.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(ipv4))
+    client.setblocking(False)
+    name = hostname + '.local.'
+    packet = struct.pack('!HHHHHH', 1234, 0, 1, 0, 0, 0)
+    packet += b''.join(bytes([len(label)]) + label.encode() for label in name.rstrip('.').split('.'))
+    packet += b'\0' + struct.pack('!HH', 1, 1)
+    try:
+        await advertiser.start()
+        loop = asyncio.get_running_loop()
+        await loop.sock_sendto(client, packet, ('224.0.0.251', 5353))
+        data, _ = await asyncio.wait_for(loop.sock_recvfrom(client, 8192), timeout=3)
+        answers = DNSIncoming(data).answers()
+        assert any(record.name == name and record.type == 1 and
+                   record.address == socket.inet_aton(ipv4) for record in answers)
+    finally:
+        client.close()
+        await advertiser.stop()
+
+
+async def test_second_family_open_failure_closes_first_family() -> None:
+    advertiser = _dynamic_advertiser()
+    ipv4 = MagicMock()
+    ipv4.async_close = AsyncMock()
+    with patch('hub.adapters.discovery.zeroconf.AsyncZeroconf', side_effect=[ipv4, OSError('socket failure')]):
+        with pytest.raises(OSError, match='socket failure'):
+            await advertiser._open_network(('192.168.1.37', '2001:db8::5'))
+    ipv4.async_close.assert_awaited_once()

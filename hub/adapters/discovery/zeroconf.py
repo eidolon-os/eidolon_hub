@@ -84,7 +84,7 @@ class ZeroconfAuthorityCandidateAdvertiser:
         self._addresses = addresses
         self._management_networks = tuple(management_networks)
         self._refresh_seconds = refresh_seconds
-        self._aiozc: AsyncZeroconf | None = None
+        self._aiozc: tuple[AsyncZeroconf, ...] | None = None
         self._info: ServiceInfo | None = None
         self._refresh_task: asyncio.Task[None] | None = None
         self._running = False
@@ -138,9 +138,9 @@ class ZeroconfAuthorityCandidateAdvertiser:
         if aiozc is not None:
             try:
                 if info is not None:
-                    await aiozc.async_unregister_service(info)
+                    await asyncio.gather(*(network.async_unregister_service(info) for network in aiozc))
             finally:
-                await aiozc.async_close()
+                await asyncio.gather(*(network.async_close() for network in aiozc))
 
     async def refresh_interfaces(self) -> None:
         async with self._lock:
@@ -158,68 +158,51 @@ class ZeroconfAuthorityCandidateAdvertiser:
             if not addresses:
                 return
             info = self._build_info(addresses)
-            # Bound to the addresses just claimed, rather than to every
-            # interface this machine has. `InterfaceChoice.All` made the
-            # answering surface wider than the claim: the Hub declined to
-            # publish an address on a link and then answered queries arriving
-            # over that link anyway, handing back records for somewhere the
-            # asker had just demonstrated it was not.
-            #
-            # One thing this gives up, said out loud because it is invisible: a
-            # Host with no routable IPv6 address to publish no longer joins the
-            # IPv6 multicast group, so it answers over IPv4 only. A responder
-            # answers on the transport a query arrived on, and every resolver
-            # that matters here asks over both — the board asks over IPv4 and
-            # nothing else. Answering over IPv6 with none but A records to give
-            # back was never an answer an IPv6-only asker could use.
-            aiozc = self._open_network(addresses)
+            # Bind only to product links, with an independent listener for
+            # each family. Darwin cannot join IPv4 multicast on the IPv6
+            # listener that zeroconf creates for IPVersion.All.
+            aiozc = await self._open_network(addresses)
             try:
-                await aiozc.async_register_service(info, allow_name_change=False)
+                results = await asyncio.gather(
+                    *(network.async_register_service(info, allow_name_change=False) for network in aiozc),
+                    return_exceptions=True,
+                )
+                for result in results:
+                    if isinstance(result, BaseException):
+                        raise result
                 # Do not adopt a transport created across another network change.
                 if (self._addresses is None
                         and interface_snapshot(self._management_networks) != snapshot):
-                    await aiozc.async_unregister_service(info)
-                    await aiozc.async_close()
+                    await asyncio.gather(*(network.async_unregister_service(info) for network in aiozc))
+                    await asyncio.gather(*(network.async_close() for network in aiozc))
                     return
             except BaseException:
-                await aiozc.async_close()
+                await asyncio.gather(*(network.async_close() for network in aiozc))
                 raise
             self._aiozc, self._info, self._observation = aiozc, info, snapshot
 
-    def _open_network(self, addresses: tuple[str, ...]) -> AsyncZeroconf:
-        """Sockets on the links just claimed — or on as many as still exist.
-
-        zeroconf resolves an IPv6 entry in this list against the machine's
-        adapters as it opens, and refuses the whole list if one of them is no
-        longer there. The addresses came from an observation taken a moment
-        earlier, so a link that went away in between would take every record
-        with it, including the IPv4 ones that were still true. One link's
-        answering surface is a smaller thing to lose than all of them, and the
-        refresh loop revisits the whole question within `refresh_seconds`
-        either way.
-
-        Nothing here retries an address: if IPv4 cannot be opened either, the
-        caller's handling logs it and the next refresh tries again.
-        """
-
-        versions = {ipaddress.ip_address(value).version for value in addresses}
-        # Join multicast on the families actually offered. On Darwin an IPv6
-        # dual-stack listener cannot join an IPv4-only interface: zeroconf
-        # silently leaves it without a responder even though registration succeeds.
-        version = (IPVersion.V4Only if versions == {4} else
-                   IPVersion.V6Only if versions == {6} else IPVersion.All)
+    async def _open_network(self, addresses: tuple[str, ...]) -> tuple[AsyncZeroconf, ...]:
+        """Use the library's native single-family listeners on product links."""
+        ipv4 = [value for value in addresses if ipaddress.ip_address(value).version == 4]
+        ipv6 = [value for value in addresses if ipaddress.ip_address(value).version == 6]
+        networks = []
+        if ipv4:
+            networks.append(AsyncZeroconf(interfaces=ipv4, ip_version=IPVersion.V4Only))
         try:
-            return AsyncZeroconf(interfaces=list(addresses), ip_version=version)
-        except RuntimeError:
-            ipv4 = [value for value in addresses
-                    if ipaddress.ip_address(value).version == 4]
-            if not ipv4 or len(ipv4) == len(addresses):
-                raise
-            logger.warning(
-                "mDNS binding narrowed to IPv4 advertisement=%s reason=address_not_on_any_adapter",
-                self._advertisement_id,
-            )
-            return AsyncZeroconf(interfaces=ipv4, ip_version=IPVersion.V4Only)
+            if ipv6:
+                try:
+                    networks.append(AsyncZeroconf(interfaces=ipv6, ip_version=IPVersion.V6Only))
+                except RuntimeError:
+                    if not networks:
+                        raise
+                    logger.warning(
+                        "mDNS binding narrowed to IPv4 advertisement=%s reason=address_not_on_any_adapter",
+                        self._advertisement_id,
+                    )
+        except BaseException:
+            await asyncio.gather(*(network.async_close() for network in networks))
+            raise
+        return tuple(networks)
 
     async def stop(self) -> None:
         self._running = False

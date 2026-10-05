@@ -1,0 +1,21 @@
+{
+  "problem": "Darwin zeroconf IPVersion.All silently omitted IPv4 responder sockets on a dual-stack interface",
+  "baseline": {
+    "ipv4_query_result": "timeout",
+    "device_queries_received_on_mac": 8,
+    "device_resolve_result": "ESP_ERR_NOT_FOUND",
+    "device_resolve_ms": 8101
+  },
+  "fix": "Separate native IPv4 and IPv6 zeroconf listeners within the existing discovery adapter; unchanged service identity and onboarding protocol",
+  "regression": "Real UDP IPv4 query against a dual-stack publisher fails under old IPVersion.All and succeeds with separate listeners",
+  "hardware": {
+    "board": "xiaoling ESP32-S3",
+    "firmware_changed": false,
+    "first_resolve_ms": 116,
+    "wifi_configuration": "committed",
+    "claim": "activated",
+    "mobile_ui": "设备已接入这台主机",
+    "subsequent_state": "waiting-binding"
+  },
+  "other_hosts": "code only; deployment deferred as requested"
+}
