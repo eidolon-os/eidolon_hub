@@ -175,3 +175,11 @@ async def test_registry_ttl_reuses_the_last_read_within_the_window(tmp_path):
     clock.now_ms += 1_000
     await runtime.snapshot(OWNER)
     assert registry.reads == 2
+
+
+async def test_fan_delta_receipt_prevents_double_increment_after_restart(setup):
+    make, _, _ = setup
+    req=request('durable-fan',cmd('master.humidifier','fan_speed','step',delta=10))
+    first=await make().execute(OWNER,req)
+    assert (await make().execute(OWNER,req))==first
+    assert (await make().snapshot(OWNER))['status']['master.humidifier']['state']['speed']==40

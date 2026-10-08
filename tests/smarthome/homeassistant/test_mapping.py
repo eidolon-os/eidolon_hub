@@ -203,3 +203,20 @@ def test_cover_without_set_position_refuses_set_before_calling_home_assistant():
     with pytest.raises(Exception, match="UNSUPPORTED_COMMAND"):
         to_service_call(cover, setting, {}, features=3)
     assert to_service_call(cover, setting, {}, features=15).data["position"] == 50
+
+
+@pytest.mark.parametrize('speed', [None, True, '30', -1, 101])
+def test_fan_step_requires_known_numeric_state(speed):
+    from eidolon_sdk.biz.smarthome import SmartHomeError
+    d=device('fan','fan.humidifier')
+    c=Command(device_id='d',trait='fan_speed',command='step',params={'delta':10})
+    with pytest.raises(SmartHomeError, match='state unavailable'):
+        to_service_call(d,c,{'speed':speed})
+
+
+def test_fan_step_uses_actual_current_state_and_clamps():
+    d=device('fan','fan.humidifier')
+    c=Command(device_id='d',trait='fan_speed',command='step',params={'delta':10})
+    call=to_service_call(d,c,{'speed':95})
+    assert call.service == 'set_percentage'
+    assert call.data['percentage'] == 100

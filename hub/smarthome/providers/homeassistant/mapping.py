@@ -290,6 +290,11 @@ def to_service_call(
             )
             value = _clamp(float(current.get("target_c", 0)) + float(p["delta"]), low, high)
             return ServiceCall(domain, "set_temperature", {**target, "temperature": value})
+        case "fan_speed", "step":
+            speed = current.get("speed")
+            if type(speed) is not int or not 0 <= speed <= 100:
+                raise SmartHomeError(ERROR_UNSUPPORTED_COMMAND, "fan speed state unavailable")
+            return ServiceCall("fan", "set_percentage", {**target, "percentage": _clamp(speed + p["delta"], 0, 100)})
         case "fan_speed", "set":
             return ServiceCall("fan", "set_percentage", {**target, "percentage": int(p["value"])})
         case "position", "open":

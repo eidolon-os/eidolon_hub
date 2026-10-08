@@ -39,6 +39,11 @@ def satisfied(command: Command, before: Mapping[str, Any] | None, after: Mapping
             )
         case "thermostat", "step":
             return float(p["delta"]) == 0 or after.get("target_c") != before.get("target_c")
+        case "fan_speed", "step":
+            speed = before.get("speed")
+            if type(speed) is not int or not 0 <= speed <= 100:
+                return False
+            return after.get("speed") == max(0, min(100, speed + int(p["delta"])))
         case "fan_speed", "set":
             return after.get("speed") == int(p["value"])
         case "position", "open":

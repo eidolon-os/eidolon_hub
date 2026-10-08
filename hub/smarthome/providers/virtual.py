@@ -69,6 +69,8 @@ def apply_command(kind: str, state: Mapping[str, Any], command: Command) -> dict
             new["target_c"] = _celsius(_clamp(state["target_c"] + params["delta"], low, high))
         case "fan_speed", "set":
             new["speed"] = params["value"]
+        case "fan_speed", "step":
+            new["speed"] = _clamp(state["speed"] + params["delta"], 0, 100)
         case "position", "open":
             new["position"] = 100
         case "position", "close":

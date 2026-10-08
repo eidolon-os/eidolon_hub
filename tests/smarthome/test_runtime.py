@@ -182,3 +182,13 @@ async def test_legacy_state_is_not_silently_replaced(tmp_path):
             )
     assert not (tmp_path / "hub/smarthome.sqlite3").exists()
     assert old.read_bytes() == b"existing-authority"
+
+
+async def test_repeated_fan_delta_is_idempotent_per_request(setup):
+    runtime, _, _, _ = setup
+    command=request('fan-once',cmd('master.humidifier','fan_speed','step',delta=10))
+    values=await asyncio.gather(*(runtime.execute(OWNER,command) for _ in range(4)))
+    assert all(v==values[0] for v in values)
+    assert (await runtime.snapshot(OWNER))['status']['master.humidifier']['state']['speed']==40
+    await runtime.execute(OWNER,request('fan-next',cmd('master.humidifier','fan_speed','step',delta=10)))
+    assert (await runtime.snapshot(OWNER))['status']['master.humidifier']['state']['speed']==50
