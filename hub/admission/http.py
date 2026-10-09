@@ -345,6 +345,58 @@ def create_admission_router(
         except (KeyError, TypeError, ValueError) as exc:
             return problem_response(_invalid(exc), command_id=command_id)
 
+    @router.post("/commissioning-standings")
+    async def record_commissioning_standing(payload: dict, request: Request) -> JSONResponse:
+        """What a Host asks before it signs a voucher, said as what it is.
+
+        It used to ask ``GET /base-identities`` — which identity does this key
+        hold — and then sign. The question was right and the record of it was
+        missing: the Controller asking is the Owner deciding that this key may
+        join, and the Authority learned of that decision only as an anonymous
+        proof fifteen minutes later. Asking here records the standing under
+        the ``jti`` the voucher will carry, and answers the same identity.
+        """
+
+        try:
+            _strict(payload, {"contract_version", "jti", "operational_key_id"})
+            if payload.get("contract_version", "1") != "1":
+                raise AdmissionProblem(
+                    "INVALID_ARGUMENT",
+                    "unsupported contract_version",
+                    status=422,
+                    category="invalid",
+                )
+            jti = payload["jti"]
+            operational_key_id = payload["operational_key_id"]
+            if not isinstance(jti, str) or not jti.strip() or len(jti) > 256:
+                raise AdmissionProblem(
+                    "INVALID_ARGUMENT", "jti is required", status=422, category="invalid"
+                )
+            if (
+                not isinstance(operational_key_id, str)
+                or not operational_key_id.startswith("sha256:")
+                or len(operational_key_id) != 71
+            ):
+                raise AdmissionProblem(
+                    "INVALID_ARGUMENT",
+                    "operational_key_id must be an sha256: fingerprint",
+                    status=422,
+                    category="invalid",
+                )
+            context = await actor_provider(request)
+            answered = await current().record_commissioning_standing(
+                jti=jti, operational_key_id=operational_key_id, context=context
+            )
+            return JSONResponse(status_code=200, content=answered)
+        except AdmissionProblem as exc:
+            return problem_response(exc)
+        except PermissionError as exc:
+            return problem_response(
+                AdmissionProblem("FORBIDDEN", str(exc), status=403, category="forbidden")
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return problem_response(_invalid(exc))
+
     @router.get("/base-identities")
     async def base_identity_for_key(
         request: Request, operational_key_id: str

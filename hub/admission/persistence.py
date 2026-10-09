@@ -15,6 +15,7 @@ from hub.adapters.persistence.models import (
     AdmissionClaimEventStreamRow,
     AdmissionClaimRow,
     AdmissionCommandResultRow,
+    AdmissionCommissioningStandingRow,
     AdmissionCommissioningVoucherRow,
     AdmissionDecisionRow,
     AdmissionGrantAckRow,
@@ -174,13 +175,15 @@ class SqlAdmissionStore:
         )
 
     @staticmethod
-    def add_proposal(session, **values) -> None:
+    def add_proposal(session, **values) -> AdmissionProposalRow:
         # The Proposal is the first durable record of a hardware identity, and
         # Grants and Claims only copy it forward across generations. Refusing a
         # ref that was not derived here is what stops an operator-typed or
         # adapter-invented board claim from becoming permanent history.
         require_derived_hardware_identity_ref(values["hardware_identity_ref"])
-        session.add(AdmissionProposalRow(**values))
+        row = AdmissionProposalRow(**values)
+        session.add(row)
+        return row
 
     @staticmethod
     def add_decision(session, **values) -> None:
@@ -378,6 +381,77 @@ class SqlAdmissionStore:
                 expires_at=expires_at,
                 consumed_at=consumed_at,
             )
+        )
+
+    async def record_commissioning_standing(
+        self,
+        session,
+        *,
+        jti: str,
+        operational_key_id: str,
+        owner_domain_id: str,
+        business_owner_id: str,
+        actor_json: str,
+        recorded_at: datetime,
+    ) -> bool:
+        """Record who admitted this key, once per voucher; say whether this call did.
+
+        The same voucher asked about twice with the same standing is one fact
+        and is answered as such. The same ``jti`` arriving with a different key
+        or a different Controller is two vouchers claiming one identity, which
+        no caller can mean, so it is refused rather than silently resolved.
+        """
+
+        existing = await session.get(AdmissionCommissioningStandingRow, jti)
+        if existing is not None:
+            if (
+                existing.operational_key_id != operational_key_id
+                or existing.owner_domain_id != owner_domain_id
+                or existing.business_owner_id != business_owner_id
+                or existing.actor_json != actor_json
+            ):
+                raise AdmissionProblem(
+                    "IDEMPOTENCY_CONFLICT",
+                    "commissioning standing was already recorded for another key or Controller",
+                )
+            return False
+        session.add(
+            AdmissionCommissioningStandingRow(
+                jti=jti,
+                operational_key_id=operational_key_id,
+                owner_domain_id=owner_domain_id,
+                business_owner_id=business_owner_id,
+                actor_json=actor_json,
+                recorded_at=recorded_at,
+            )
+        )
+        return True
+
+    async def commissioning_standing(self, session, jti: str):
+        return await session.get(AdmissionCommissioningStandingRow, jti)
+
+    async def latest_commissioning_standing_for_key(
+        self, session, *, owner_domain_id: str, operational_key_id: str
+    ):
+        """The most recent standing this Owner Domain recorded for a key.
+
+        A continuation Proposal carries no voucher, so it is answered by the
+        standing its key last earned. Most recent, because a Body that was
+        removed and commissioned again earned a newer one, and that is the
+        Controller the Owner acted through this time.
+        """
+
+        return await session.scalar(
+            select(AdmissionCommissioningStandingRow)
+            .where(
+                AdmissionCommissioningStandingRow.owner_domain_id == owner_domain_id,
+                AdmissionCommissioningStandingRow.operational_key_id == operational_key_id,
+            )
+            .order_by(
+                AdmissionCommissioningStandingRow.recorded_at.desc(),
+                AdmissionCommissioningStandingRow.jti.desc(),
+            )
+            .limit(1)
         )
 
     async def requires_fresh_presence(

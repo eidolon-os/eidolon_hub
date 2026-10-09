@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Protocol
 
@@ -39,6 +40,7 @@ from hub.contracts.bindings.admission import (
     ClaimRecord,
     ClaimRevokedEvent,
     ClaimState,
+    ControllerActorRef,
     DeviceRef,
     EnrollmentProposal,
     EnrollmentProposalPage,
@@ -59,6 +61,12 @@ class ClaimDirectoryProjector(Protocol):
     async def __call__(self, device_instance_id: str) -> object: ...
 
 
+@dataclass(frozen=True, slots=True)
+class _RecordedStanding:
+    actor: ControllerActorRef
+    business_owner_id: BusinessOwnerId
+
+
 class AdmissionAuthority:
     SOURCE = "urn:eidolon:authority:admission"
 
@@ -74,6 +82,7 @@ class AdmissionAuthority:
         claim_directory_projector: ClaimDirectoryProjector | None = None,
         proposal_ttl: timedelta = timedelta(minutes=15),
         grant_ttl: timedelta = timedelta(minutes=10),
+        decide_from_standing: bool = True,
     ) -> None:
         self.store = store
         self.clock = clock
@@ -84,6 +93,11 @@ class AdmissionAuthority:
         self.claim_directory_projector = claim_directory_projector
         self.proposal_ttl = proposal_ttl
         self.grant_ttl = grant_ttl
+        # Whether a Proposal whose key has recorded standing is decided by the
+        # Controller that recorded it, at creation. Off, every Proposal waits
+        # in the queue for a Controller to decide it by hand — the behaviour
+        # this Authority had before standing was recorded at issuance.
+        self.decide_from_standing = decide_from_standing
 
     async def _project_committed_claim(self, result: dict) -> None:
         if self.claim_directory_projector is None:
@@ -337,7 +351,7 @@ class AdmissionAuthority:
                             status=403,
                             category="forbidden",
                         )
-                self.store.add_proposal(
+                proposal = self.store.add_proposal(
                     session,
                     enrollment_id=enrollment_id,
                     device_instance_id=payload["device_instance_candidate_id"],
@@ -379,7 +393,112 @@ class AdmissionAuthority:
                     event=event,
                     occurred_at=now,
                 )
+                # The Owner already decided this, through the Controller that
+                # recorded standing for this key when it issued the voucher;
+                # the Proposal is that decision arriving from the device's
+                # side. What the device is told is still the Proposal as
+                # created — revision 1, pending — because that is what it
+                # collects against; the Decision is one revision later, as it
+                # is when a Controller decides from the queue.
+                standing = await self._standing_for(
+                    session,
+                    verified=verified,
+                    owner_domain_id=str(requested),
+                    operational_key_id=operational_key_id,
+                )
+                if standing is not None:
+                    await self._decide_in_session(
+                        session,
+                        proposal=proposal,
+                        decision="approve",
+                        actor=standing.actor,
+                        target_domain=requested,
+                        target_owner=standing.business_owner_id,
+                        reviewed=manifest_ref,
+                        command_id=f"{command_id}:standing",
+                        correlation_id=correlation_id,
+                        now=now,
+                    )
         return result
+
+    async def _standing_for(
+        self,
+        session,
+        *,
+        verified: VerifiedCommissioning,
+        owner_domain_id: str,
+        operational_key_id: str,
+    ) -> _RecordedStanding | None:
+        """The standing a Proposal arrives with, if this Owner Domain recorded any.
+
+        A voucher names its standing by ``jti``; a continuation carries none
+        and is answered by the latest standing its key earned. Either way the
+        standing must be this Owner Domain's, for this key, and recorded by a
+        Controller that could have decided from the queue — a standing that
+        says less than that decides nothing here, and the Proposal waits for a
+        Controller as it always did.
+        """
+
+        if not self.decide_from_standing:
+            return None
+        if verified.scheme == VOUCHER_SCHEME:
+            row = await self.store.commissioning_standing(session, str(verified.jti))
+        else:
+            row = await self.store.latest_commissioning_standing_for_key(
+                session, owner_domain_id=owner_domain_id, operational_key_id=operational_key_id
+            )
+        if (
+            row is None
+            or row.owner_domain_id != owner_domain_id
+            or row.operational_key_id != operational_key_id
+        ):
+            return None
+        try:
+            actor = ControllerActorRef.model_validate_json(row.actor_json)
+        except ValueError:
+            return None
+        if (
+            actor.owner_domain_id != OwnerDomainId(owner_domain_id)
+            or "device.claim.approve" not in actor.granted_scopes
+        ):
+            return None
+        return _RecordedStanding(
+            actor=actor, business_owner_id=BusinessOwnerId(row.business_owner_id)
+        )
+
+    async def record_commissioning_standing(
+        self, *, jti: str, operational_key_id: str, context: ActorContext
+    ) -> dict:
+        """Record who is admitting this key, before the voucher that says so is signed.
+
+        The Host asks this instead of merely asking which identity the key
+        holds: the answer is the same, and the asking is what the Owner's
+        decision looks like from here. A Controller that may decide from the
+        queue is the only one whose asking counts as deciding — the scope is
+        required now so that it cannot be found missing later, when the device
+        has already been told to expect admission.
+        """
+
+        context.require_scope("device.claim.approve")
+        now = self.clock.now()
+        actor_json = json.dumps(context.actor.model_dump(mode="json"), sort_keys=True)
+        async with self.store.lock:
+            async with self.store.transaction() as session:
+                await self.store.record_commissioning_standing(
+                    session,
+                    jti=jti,
+                    operational_key_id=operational_key_id,
+                    owner_domain_id=str(context.owner_domain_id),
+                    business_owner_id=str(context.business_owner_id),
+                    actor_json=actor_json,
+                    recorded_at=now,
+                )
+                answered = await self._base_identity_answer(
+                    session,
+                    operational_key_id=operational_key_id,
+                    owner_domain_id=str(context.owner_domain_id),
+                )
+        return {**answered, "jti": jti}
 
     async def expire_due(self) -> int:
         """Persist deadline terminal facts; callers never infer expiry from a read."""
@@ -595,86 +714,18 @@ class AdmissionAuthority:
                     raise AdmissionProblem(
                         "REVISION_CONFLICT", "reviewed ManifestRef does not match Proposal"
                     )
-                decision_id = self.ids.new("decision")
-                decision = ApprovalDecision(
-                    decision_id=decision_id,
-                    enrollment_id=enrollment_id,
+                decision, grant_id = await self._decide_in_session(
+                    session,
+                    proposal=proposal,
                     decision=payload["decision"],
                     actor=context.actor,
-                    target_owner_domain_id=target_domain,
-                    target_business_owner_id=target_owner,
-                    reviewed_manifest_ref=reviewed,
-                    expected_proposal_revision=proposal.revision,
-                    decided_at=now,
+                    target_domain=target_domain,
+                    target_owner=target_owner,
+                    reviewed=reviewed,
+                    command_id=command_id,
+                    correlation_id=correlation_id,
+                    now=now,
                 )
-                self.store.add_decision(
-                    session,
-                    decision_id=decision_id,
-                    enrollment_id=enrollment_id,
-                    decision=decision.decision,
-                    actor_json=json.dumps(decision.actor.model_dump(mode="json"), sort_keys=True),
-                    target_owner_domain_id=str(target_domain),
-                    target_business_owner_id=str(target_owner),
-                    reviewed_manifest_json=json.dumps(
-                        reviewed.model_dump(mode="json"), sort_keys=True
-                    ),
-                    expected_proposal_revision=proposal.revision,
-                    decided_at=now,
-                )
-                proposal.state = (
-                    "approved_awaiting_handoff" if decision.decision == "approve" else "rejected"
-                )
-                proposal.revision += 1
-                proposal.updated_at = now
-                grant_id = None
-                if decision.decision == "approve":
-                    current_generation = await self.store.max_claim_generation(
-                        session,
-                        owner_domain_id=str(target_domain),
-                        hardware_identity_ref=proposal.hardware_identity_ref,
-                    )
-                    device_ref = DeviceRef(
-                        device_instance_id=proposal.device_instance_id,
-                        owner_domain_id=target_domain,
-                        owner_domain_generation=self.owner_domain_generation,
-                        claim_generation=current_generation + 1,
-                        trust_epoch=1,
-                    )
-                    grant_id = self.ids.new("grant")
-                    grant = ClaimGrant(
-                        grant_id=grant_id,
-                        enrollment_id=enrollment_id,
-                        device_ref=device_ref,
-                        manifest_ref=reviewed,
-                        approval_decision_id=decision_id,
-                        handoff_key_id=proposal.handoff_key_id,
-                        operational_key_id=proposal.operational_key_id,
-                        issued_at=now,
-                        expires_at=now + self.grant_ttl,
-                    )
-                    self.store.add_grant(
-                        session,
-                        grant_id=grant_id,
-                        enrollment_id=enrollment_id,
-                        decision_id=decision_id,
-                        owner_domain_id=str(target_domain),
-                        hardware_identity_ref=proposal.hardware_identity_ref,
-                        claim_generation=device_ref.claim_generation,
-                        device_ref_json=json.dumps(
-                            device_ref.model_dump(mode="json"), sort_keys=True
-                        ),
-                        manifest_ref_json=json.dumps(
-                            reviewed.model_dump(mode="json"), sort_keys=True
-                        ),
-                        handoff_key_id=proposal.handoff_key_id,
-                        operational_key_id=proposal.operational_key_id,
-                        grant_json=json.dumps(grant.model_dump(mode="json"), sort_keys=True),
-                        wire_envelope_json=None,
-                        issued_at=now,
-                        expires_at=now + self.grant_ttl,
-                        delivered_at=None,
-                        revoked_at=None,
-                    )
                 result = {
                     "command_id": command_id,
                     "outcome": "committed",
@@ -692,33 +743,134 @@ class AdmissionAuthority:
                     result=result,
                     occurred_at=now,
                 )
-                event_id = self.ids.new("admission-event")
-                event_type = (
-                    "live.eidolon.device.enrollment-approved.v1"
-                    if decision.decision == "approve"
-                    else "live.eidolon.device.enrollment-rejected.v1"
-                )
-                event = self._event(
-                    event_id=event_id,
-                    event_type=event_type,
-                    subject=f"enrollments/{enrollment_id}",
-                    owner_domain_id=str(target_domain),
-                    revision=proposal.revision,
-                    command_id=command_id,
-                    correlation_id=correlation_id,
-                    occurred_at=now,
-                    data={"decision_id": decision_id, "decision": decision.decision},
-                )
-                self.store.add_outbox(
-                    session,
-                    event_id=event_id,
-                    event_type=event_type,
-                    aggregate_id=enrollment_id,
-                    aggregate_revision=proposal.revision,
-                    event=event,
-                    occurred_at=now,
-                )
         return result
+
+    async def _decide_in_session(
+        self,
+        session,
+        *,
+        proposal,
+        decision: str,
+        actor: ControllerActorRef,
+        target_domain: OwnerDomainId,
+        target_owner: BusinessOwnerId,
+        reviewed: ManifestRef,
+        command_id: str,
+        correlation_id: str,
+        now: datetime,
+    ) -> tuple[ApprovalDecision, str | None]:
+        """Record one immutable Decision on a Proposal and what follows from it.
+
+        One body for the two ways a Decision comes to exist: a Controller
+        deciding from the queue, and the Authority applying the standing a
+        Controller recorded when it issued the voucher the Proposal carries.
+        Both write the same Decision, mint the same Grant and publish the same
+        event; what differs is only who decided and when, and that is what the
+        Decision's actor says.
+        """
+
+        enrollment_id = proposal.enrollment_id
+        decision_id = self.ids.new("decision")
+        decided = ApprovalDecision(
+            decision_id=decision_id,
+            enrollment_id=enrollment_id,
+            decision=decision,
+            actor=actor,
+            target_owner_domain_id=target_domain,
+            target_business_owner_id=target_owner,
+            reviewed_manifest_ref=reviewed,
+            expected_proposal_revision=proposal.revision,
+            decided_at=now,
+        )
+        self.store.add_decision(
+            session,
+            decision_id=decision_id,
+            enrollment_id=enrollment_id,
+            decision=decided.decision,
+            actor_json=json.dumps(decided.actor.model_dump(mode="json"), sort_keys=True),
+            target_owner_domain_id=str(target_domain),
+            target_business_owner_id=str(target_owner),
+            reviewed_manifest_json=json.dumps(reviewed.model_dump(mode="json"), sort_keys=True),
+            expected_proposal_revision=proposal.revision,
+            decided_at=now,
+        )
+        proposal.state = (
+            "approved_awaiting_handoff" if decided.decision == "approve" else "rejected"
+        )
+        proposal.revision += 1
+        proposal.updated_at = now
+        grant_id = None
+        if decided.decision == "approve":
+            current_generation = await self.store.max_claim_generation(
+                session,
+                owner_domain_id=str(target_domain),
+                hardware_identity_ref=proposal.hardware_identity_ref,
+            )
+            device_ref = DeviceRef(
+                device_instance_id=proposal.device_instance_id,
+                owner_domain_id=target_domain,
+                owner_domain_generation=self.owner_domain_generation,
+                claim_generation=current_generation + 1,
+                trust_epoch=1,
+            )
+            grant_id = self.ids.new("grant")
+            grant = ClaimGrant(
+                grant_id=grant_id,
+                enrollment_id=enrollment_id,
+                device_ref=device_ref,
+                manifest_ref=reviewed,
+                approval_decision_id=decision_id,
+                handoff_key_id=proposal.handoff_key_id,
+                operational_key_id=proposal.operational_key_id,
+                issued_at=now,
+                expires_at=now + self.grant_ttl,
+            )
+            self.store.add_grant(
+                session,
+                grant_id=grant_id,
+                enrollment_id=enrollment_id,
+                decision_id=decision_id,
+                owner_domain_id=str(target_domain),
+                hardware_identity_ref=proposal.hardware_identity_ref,
+                claim_generation=device_ref.claim_generation,
+                device_ref_json=json.dumps(device_ref.model_dump(mode="json"), sort_keys=True),
+                manifest_ref_json=json.dumps(reviewed.model_dump(mode="json"), sort_keys=True),
+                handoff_key_id=proposal.handoff_key_id,
+                operational_key_id=proposal.operational_key_id,
+                grant_json=json.dumps(grant.model_dump(mode="json"), sort_keys=True),
+                wire_envelope_json=None,
+                issued_at=now,
+                expires_at=now + self.grant_ttl,
+                delivered_at=None,
+                revoked_at=None,
+            )
+        event_id = self.ids.new("admission-event")
+        event_type = (
+            "live.eidolon.device.enrollment-approved.v1"
+            if decided.decision == "approve"
+            else "live.eidolon.device.enrollment-rejected.v1"
+        )
+        event = self._event(
+            event_id=event_id,
+            event_type=event_type,
+            subject=f"enrollments/{enrollment_id}",
+            owner_domain_id=str(target_domain),
+            revision=proposal.revision,
+            command_id=command_id,
+            correlation_id=correlation_id,
+            occurred_at=now,
+            data={"decision_id": decision_id, "decision": decided.decision},
+        )
+        self.store.add_outbox(
+            session,
+            event_id=event_id,
+            event_type=event_type,
+            aggregate_id=enrollment_id,
+            aggregate_revision=proposal.revision,
+            event=event,
+            occurred_at=now,
+        )
+        return decided, grant_id
 
     async def collect_claim_grant(
         self,
@@ -1299,17 +1451,26 @@ class AdmissionAuthority:
 
         context.require_scope("device.read")
         async with self.store.transaction() as session:
-            row = await self.store.base_identity_for_key(session, operational_key_id)
-            requires_presence = (
-                await self.store.requires_fresh_presence(
-                    session,
-                    owner_domain_id=str(context.owner_domain_id),
-                    hardware_identity_ref=row.hardware_identity_ref,
-                )
-                if row is not None
-                else False
+            return await self._base_identity_answer(
+                session,
+                operational_key_id=operational_key_id,
+                owner_domain_id=str(context.owner_domain_id),
             )
-        known = row is not None and row.owner_domain_id == str(context.owner_domain_id)
+
+    async def _base_identity_answer(
+        self, session, *, operational_key_id: str, owner_domain_id: str
+    ) -> dict:
+        row = await self.store.base_identity_for_key(session, operational_key_id)
+        requires_presence = (
+            await self.store.requires_fresh_presence(
+                session,
+                owner_domain_id=owner_domain_id,
+                hardware_identity_ref=row.hardware_identity_ref,
+            )
+            if row is not None
+            else False
+        )
+        known = row is not None and row.owner_domain_id == owner_domain_id
         return {
             "contract_version": "1",
             "operational_key_id": operational_key_id,

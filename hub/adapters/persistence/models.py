@@ -173,6 +173,35 @@ class AdmissionCommissioningVoucherRow(Base):
     consumed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AdmissionCommissioningStandingRow(Base):
+    """The issued half of a voucher: who admitted this key, recorded before it is signed.
+
+    Admin signs vouchers and keeps no record; this Authority keeps the record
+    and signs nothing. Until now the record began at consumption, so the one
+    thing the Owner actually decided — that this key may join, said through
+    a Controller during a witnessed commissioning — reached the Authority as
+    an anonymous proof, and the Owner was asked to say it a second time from
+    a queue with a fifteen-minute clock. Recording the standing at issuance is
+    what lets the Proposal that later carries the voucher be decided by the
+    Controller that issued it, without that Controller having to be present
+    again.
+
+    Keyed by the voucher's ``jti`` so the two halves of one voucher meet on
+    one key. The operational key is indexed because a continuation Proposal
+    (``enrolled-base-key-v1``) carries no voucher and is answered by the
+    latest standing recorded for its key.
+    """
+
+    __tablename__ = "admission_commissioning_standings_v1"
+
+    jti: Mapped[str] = mapped_column(String(256), primary_key=True)
+    operational_key_id: Mapped[str] = mapped_column(String(71), index=True)
+    owner_domain_id: Mapped[str] = mapped_column(String(128), index=True)
+    business_owner_id: Mapped[str] = mapped_column(String(128))
+    actor_json: Mapped[str] = mapped_column(Text)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 class AdmissionProposalRow(Base):
     __tablename__ = "admission_proposals_v1"
 
