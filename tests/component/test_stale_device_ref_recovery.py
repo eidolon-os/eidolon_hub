@@ -119,9 +119,11 @@ class _ChannelBinding:
     def __init__(self) -> None:
         self.requested: list[DeviceRef] = []
 
-    async def execute(self, *, device_ref: DeviceRef, observed_host_address: str = ""):
+    async def resolve(self, *, device_ref: DeviceRef, observed_host_address: str = ""):
+        from hub.channel_reconciliation.domain import ChannelBindingResolution
+
         self.requested.append(device_ref)
-        return ()
+        return ChannelBindingResolution()
 
 
 class _Unused:

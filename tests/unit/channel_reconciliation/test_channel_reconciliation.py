@@ -755,3 +755,67 @@ async def test_the_provision_wire_carries_the_observation_beside_the_operation()
     assert sent[0]["observed_host_address"] == "192.168.100.19"
     assert "observed_host_address" not in sent[1]
     assert "observed_host_address" not in sent[0]["device"]
+
+
+@pytest.mark.asyncio
+async def test_missing_owner_policy_waits_without_provision_then_recovers():
+    from eidolon_sdk.biz.presentation import OutputSelection
+
+    from hub.contracts.bindings.presentation import DeviceOutputPolicy
+    manifest = json.loads(_device().manifest_json)
+    manifest["properties"] = [{"name": "output.contract", "writable": False,
+        "schema": {"type": "string", "const": "eidolon.outputs.v1"}}]
+    device = replace(_device(), manifest=DeviceManifestDocument.from_declaration(
+        document=manifest, declared_revision=1))
+
+    class Devices:
+        async def get(self, _id):
+            return device
+
+    class Provider:
+        calls = 0
+        async def current(self, **kwargs):
+            self.calls += 1
+            return None
+        async def provision(self, **kwargs):
+            assert kwargs["output_policy"].revision == 1
+            return _channel(1_800_000_000_000)
+
+    provider = Provider()
+    reconcile = ReconcileChannelBinding(devices=Devices(), provider=provider, clock=Clock())
+    for _ in range(5):
+        result = await reconcile.resolve(device_ref=REF)
+        assert not result.channels
+        assert result.problem.code == "OUTPUT_POLICY_REQUIRED"
+        assert not result.problem.retryable
+    assert provider.calls == 0
+    device = replace(device, output_policy=DeviceOutputPolicy(
+        revision=1, allowed=OutputSelection(speech=True)))
+    result = await reconcile.resolve(device_ref=REF)
+    assert result.channels and result.problem is None
+    assert provider.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refusal_replays_until_manifest_inputs_change():
+    device = _device()
+    class Devices:
+        async def get(self, _id):
+            return device
+    class Provider:
+        calls = 0
+        async def current(self, **kwargs):
+            return None
+        async def provision(self, **kwargs):
+            self.calls += 1
+            raise ChannelProviderError("INVALID_ARGUMENT", retryable=False, detail="bad manifest")
+    provider = Provider()
+    reconcile = ReconcileChannelBinding(devices=Devices(), provider=provider, clock=Clock())
+    for _ in range(5):
+        result = await reconcile.resolve(device_ref=REF)
+        assert result.problem.code == "INVALID_ARGUMENT"
+    assert provider.calls == 1
+    device = replace(device, manifest=DeviceManifestDocument.from_declaration(
+        document=json.loads(device.manifest_json), declared_revision=2))
+    await reconcile.resolve(device_ref=REF)
+    assert provider.calls == 2

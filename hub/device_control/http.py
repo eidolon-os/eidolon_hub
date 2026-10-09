@@ -12,7 +12,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from hub.channel_reconciliation.application import ReconcileChannelBinding
-from hub.channel_reconciliation.domain import ChannelBinding
+from hub.channel_reconciliation.domain import (
+    ChannelBinding,
+    ChannelBindingProblem,
+    ChannelBindingResolution,
+)
 from hub.contracts.bindings.admission import (
     AdmissionCredentialError,
     read_admission_credential,
@@ -197,6 +201,7 @@ class DeviceConfigurationResult(_AdapterModel):
     manifest: ManifestRef | None = None
     output_policy: DeviceOutputPolicy | None = None
     channels: tuple[ChannelBinding, ...] = Field(default=(), max_length=1)
+    channel_problem: ChannelBindingProblem | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,13 +317,13 @@ def create_device_erase_router(
                 ),
                 device_ref=claim.device_ref,
             )
-        channels = (
-            await current().channel_binding.execute(
+        binding = (
+            await current().channel_binding.resolve(
                 device_ref=claim.device_ref,
                 observed_host_address=_observed_host_address(request),
             )
             if claim.state == "active"
-            else ()
+            else ChannelBindingResolution()
         )
         return DeviceConfigurationResult(
             nonce=payload.nonce,
@@ -326,7 +331,8 @@ def create_device_erase_router(
             lifecycle_state="approved" if claim.state == "active" else "revoked",
             manifest=configuration.manifest,
             output_policy=configuration.output_policy,
-            channels=channels,
+            channels=binding.channels,
+            channel_problem=binding.problem,
         )
 
     @router.post(

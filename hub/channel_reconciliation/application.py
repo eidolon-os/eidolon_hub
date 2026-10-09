@@ -6,13 +6,20 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections import OrderedDict
 from datetime import timedelta
 
 from hub.contracts.bindings.device import DeviceRef
+from hub.contracts.bindings.presentation import manifest_outputs, output_policy_required
 from hub.domain.devices.entities import DeviceLifecycleState
 from hub.ports.identity import Clock
 
-from .domain import ChannelBinding, ChannelProviderError
+from .domain import (
+    ChannelBinding,
+    ChannelBindingProblem,
+    ChannelBindingResolution,
+    ChannelProviderError,
+)
 from .ports import (
     ChannelBindingProvider,
     ChannelDeviceProjectionReader,
@@ -28,7 +35,7 @@ def _operation_id(prefix: str, *values: object) -> str:
 
 
 class ReconcileChannelBinding:
-    """Return a Provider binding or an empty tuple while convergence is pending."""
+    """Resolve a binding, distinguishing missing decisions from retryable outages."""
 
     def __init__(
         self,
@@ -40,10 +47,19 @@ class ReconcileChannelBinding:
         self._devices = devices
         self._provider = provider
         self._clock = clock
+        self._refusals: OrderedDict[str, tuple[str, ChannelBindingProblem]] = OrderedDict()
 
     async def execute(
         self, *, device_ref: DeviceRef, observed_host_address: str = ""
     ) -> tuple[ChannelBinding, ...]:
+        result = await self.resolve(
+            device_ref=device_ref, observed_host_address=observed_host_address
+        )
+        return result.channels
+
+    async def resolve(
+        self, *, device_ref: DeviceRef, observed_host_address: str = ""
+    ) -> ChannelBindingResolution:
         """Reconcile, optionally saying where this Host was just reached.
 
         Optional because only one of the two things that call this can say it.
@@ -60,7 +76,7 @@ class ReconcileChannelBinding:
             or device.lifecycle_state is not DeviceLifecycleState.APPROVED
             or device.owner_id is None
         ):
-            return ()
+            return ChannelBindingResolution()
         # Forwarded verbatim, as the Provider's own contract says it is: the
         # accepted Manifest is the device's document, and this Authority does
         # not speak its vocabulary. Parsing it into Hub's own affordance model
@@ -80,7 +96,34 @@ class ReconcileChannelBinding:
                 "Channel binding refused: accepted Manifest is not an object device=%s",
                 device_ref.device_instance_id,
             )
-            return ()
+            return ChannelBindingResolution(problem=ChannelBindingProblem(
+                code="INVALID_MANIFEST", retryable=False,
+                detail="The accepted Manifest must be a JSON object.",
+            ))
+        try:
+            needs_policy = device.output_policy is None and output_policy_required(
+                manifest_outputs(manifest), manifest=manifest
+            )
+        except (TypeError, ValueError):
+            return ChannelBindingResolution(problem=ChannelBindingProblem(
+                code="INVALID_MANIFEST", retryable=False,
+                detail="The accepted Manifest has unreadable output declarations.",
+            ))
+        if needs_policy:
+            return ChannelBindingResolution(problem=ChannelBindingProblem(
+                code="OUTPUT_POLICY_REQUIRED", retryable=False,
+                detail="Ask the Owner to choose this device's input and output permissions.",
+            ))
+        fingerprint = _operation_id(
+            "binding-inputs", device_ref.model_dump_json(), device.manifest_digest,
+            device.manifest_declared_revision, device.owner_id,
+            device.output_policy.model_dump_json() if device.output_policy else "",
+            observed_host_address,
+        )
+        cached = self._refusals.get(device_ref.device_instance_id)
+        if cached is not None and cached[0] == fingerprint:
+            return ChannelBindingResolution(problem=cached[1])
+        self._refusals.pop(device_ref.device_instance_id, None)
         provision_id = _operation_id(
             "channel-provision",
             device_ref.model_dump_json(),
@@ -122,35 +165,24 @@ class ReconcileChannelBinding:
             if current is None:
                 # Only a new DeviceRef lifecycle begins with provision.
                 # A changed Manifest advances the existing Channel below.
-                return _unexpired(
+                return ChannelBindingResolution(_unexpired(
                     await self._provider.provision(operation_id=provision_id, **values),
                     now_ms,
-                )
+                ))
             if (not current.refresh_required and current.expires_at_ms > now_ms
                     and current.manifest_revision == device.manifest_digest
                     and current.output_policy == device.output_policy):
-                return current.channels
+                return ChannelBindingResolution(current.channels)
             refresh_id = _operation_id(
                 "channel-refresh", current.operation_id, current.expires_at_ms,
                 device.manifest_digest, device.manifest_declared_revision,
                 device.output_policy.revision if device.output_policy else 0,
             )
-            return _unexpired(
+            return ChannelBindingResolution(_unexpired(
                 await self._provider.refresh(operation_id=refresh_id, **values), now_ms
-            )
-        # "Pending" is a claim about the future: keep asking and this
-        # converges. A Provider that refused the request against its own
-        # contract will refuse the identical request forever, and there is
-        # nothing left for the device to wait for. Both used to be recorded as
-        # pending, so a Manifest the Provider cannot read was indistinguishable
-        # from a Provider that was briefly down — for a device whose Claim,
-        # mount and Companion binding all read healthy, and whose owner had
-        # already spent the one irrevocable approval.
-        #
-        # What the device is answered does not change: this Authority does not
-        # fail a configuration pull because the Channel is not ready. Answering
-        # 500 there is the other half of the same incident, and it is why the
-        # guard exists at all. Only the record of why it is empty changes.
+            ))
+        # A deterministic refusal is retained for these inputs, while a changed
+        # policy, Manifest, DeviceRef or connection allows a fresh decision.
         except ChannelProviderError as exc:
             if exc.retryable:
                 _LOG.warning(
@@ -173,7 +205,12 @@ class ReconcileChannelBinding:
                     exc.code,
                     exc_info=True,
                 )
-            return ()
+            problem = ChannelBindingProblem(code=exc.code, retryable=exc.retryable, detail=str(exc))
+            if not exc.retryable:
+                self._refusals[device_ref.device_instance_id] = (fingerprint, problem)
+                if len(self._refusals) > 1024:
+                    self._refusals.popitem(last=False)
+            return ChannelBindingResolution(problem=problem)
         except (ValueError, IndexError, KeyError):
             # Not a Provider verdict but a shape neither side declared. It is
             # deterministic, so it is not pending either.
@@ -186,7 +223,14 @@ class ReconcileChannelBinding:
                 device_ref.trust_epoch,
                 exc_info=True,
             )
-            return ()
+            problem = ChannelBindingProblem(
+                code="INVALID_PROVIDER_RESPONSE", retryable=False,
+                detail="The Channel Provider returned an unreadable binding.",
+            )
+            self._refusals[device_ref.device_instance_id] = (fingerprint, problem)
+            if len(self._refusals) > 1024:
+                self._refusals.popitem(last=False)
+            return ChannelBindingResolution(problem=problem)
 
 
 def _unexpired(channels: tuple[ChannelBinding, ...], now_ms: int) -> tuple[ChannelBinding, ...]:

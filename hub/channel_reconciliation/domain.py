@@ -71,3 +71,18 @@ class ChannelProviderError(RuntimeError):
 class ChannelProviderUnavailable(ChannelProviderError):
     def __init__(self, detail: str = "Channel Provider unavailable") -> None:
         super().__init__("PROVIDER_UNAVAILABLE", retryable=True, detail=detail)
+
+
+class ChannelBindingProblem(BaseModel):
+    """Why no binding is available; polling is not permission to retry provision."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+    code: str
+    retryable: bool
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelBindingResolution:
+    channels: tuple[ChannelBinding, ...] = ()
+    problem: ChannelBindingProblem | None = None

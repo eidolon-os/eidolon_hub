@@ -25,7 +25,7 @@ from eidolon_sdk.device_foundation.v1.testing import named_device_instance_id
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from hub.channel_reconciliation.domain import ChannelBinding
+from hub.channel_reconciliation.domain import ChannelBinding, ChannelBindingResolution
 from hub.device_control.application import DeviceEraseDelivery, PullDeviceConfiguration
 from hub.device_control.domain import DeviceEraseOperation, DeviceEraseState
 from hub.device_control.http import DeviceEraseHttpServices, create_device_erase_router
@@ -127,10 +127,10 @@ class _ChannelBinding:
         # test can tell "nothing was observed" from "nothing was passed on".
         self.observed = []
 
-    async def execute(self, *, device_ref, observed_host_address=""):
+    async def resolve(self, *, device_ref, observed_host_address=""):
         self.requested.append(device_ref)
         self.observed.append(observed_host_address)
-        return self.channels
+        return ChannelBindingResolution(self.channels)
 
 
 def _b64url(value: bytes) -> str:
@@ -238,6 +238,7 @@ def test_configuration_pull_reconciles_provider_binding_after_active_claim() -> 
         # set one on this device, and saying so is not the same as leaving the
         # device to guess: null is the Authority stating it holds no policy.
         "output_policy": None,
+        "channel_problem": None,
         "channels": [
             {
                 "channel_id": "channel_01",
@@ -1057,3 +1058,26 @@ def test_a_stated_address_that_names_no_network_is_not_believed() -> None:
 
         assert response.status_code == 200, stated
         assert binding.observed == [""], stated
+
+
+def test_configuration_answers_policy_block_without_failing_claim():
+    from hub.channel_reconciliation.domain import ChannelBindingProblem
+    key = ec.generate_private_key(ec.SECP256R1())
+    nonce = "fresh_nonce_000001"
+    class Blocked:
+        async def resolve(self, **kwargs):
+            return ChannelBindingResolution(problem=ChannelBindingProblem(
+                code="OUTPUT_POLICY_REQUIRED", retryable=False, detail="Owner decision required"))
+    projection = DeviceClaimProjection(device_ref=REF, state="active",
+                                       operational_public_key_spki=_spki(key))
+    app = _configuration_app(projection, binding=Blocked())
+    response = TestClient(app).post("/api/device-control/v1/configuration:pull", json={
+        "device_ref": REF.model_dump(mode="json"), "nonce": nonce,
+        "public_key_spki": _spki(key), "device_signature": _sign(key,
+            device_control_configuration_proof_document(device_ref=REF, nonce=nonce)),
+    })
+    assert response.status_code == 200
+    assert response.json()["lifecycle_state"] == "approved"
+    assert response.json()["channels"] == []
+    assert response.json()["channel_problem"] == {
+        "code": "OUTPUT_POLICY_REQUIRED", "retryable": False, "detail": "Owner decision required"}
