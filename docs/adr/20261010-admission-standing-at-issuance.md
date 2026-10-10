@@ -35,6 +35,27 @@ Proposal 也批不了。三方各自合理，合起来是一条断路。
   仍由 `requires_fresh_presence` 挡在 Proposal 之前；新的在场配网产生新的 standing。
 - `decide_from_standing` 构造参数可关闭自动裁决（测试与排障用），默认开启。
 
+## 撤销 Controller 即撤回它的 standing（2026-10-11 补）
+
+standing 的价值在于它比记录它的那一刻活得久——voucher 未被使用前一直有效（24 小时）。反面是：
+Owner 撤销记录它的那台手机（例如手机丢失）之后，这台手机此前签出、尚未被设备用掉的 voucher
+仍会以它的名义自动批准。一次性 jti 账本只防重放，不防「签发后撤销」。
+
+- **Host 在撤销授权之前先告诉 Hub。** Local API 撤销 Controller 时，先经控制面
+  `POST /api/admission/v1/controller-withdrawals {principal_id}`（携带发起撤销的 Controller 的
+  ActorRef，要求 `device.claim.approve`；手机可以撤销自己），Hub 落
+  `admission_controller_withdrawals_v1(owner_domain_id, principal_id, withdrawn_at, actor_json)`；
+  成功后才让 bootstrap 撤销 grant。Hub 不可达则撤销被拒绝——反过来的顺序会留下一个窗口。
+  Host 没有 Workspace 或没有 Owner Domain 准入配置时从未签过 voucher，直接撤销、不问 Hub。
+- **裁决时忽略被撤回者的 standing。** `_standing_for` 若发现记录者在 `recorded_at` 当时或之后被撤回，
+  返回无 standing：Proposal 进队列，等 Owner 仍在使用的 Controller 裁决。续用申请同样适用。
+- 撤回按 Controller 记一行而不是给每条 standing 打标：它覆盖该 Controller 记录过的全部 standing，
+  包括 voucher 还没出示的；同一把手机密钥以后被重新授权，之后记录的 standing 照常有效；
+  再次撤回只会把时刻往后推，不会往前挪。
+
+**未覆盖**：运维 `controller-reset`（全部手机丢失后的物理在场恢复）走 bootstrapd 控制 socket，
+不经 Local API，因此不会通知 Hub；旧手机签出的未用 voucher 在 24 小时内仍可能被自动批准。
+
 ## 没有做的
 
 - 没有改 voucher 的 claim 集。把 actor 放进 voucher 也能达到同样效果，但那是签名契约

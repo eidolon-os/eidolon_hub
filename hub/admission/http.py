@@ -397,6 +397,39 @@ def create_admission_router(
         except (KeyError, TypeError, ValueError) as exc:
             return problem_response(_invalid(exc))
 
+    @router.post("/controller-withdrawals")
+    async def withdraw_controller(payload: dict, request: Request) -> JSONResponse:
+        """What a Host says before it revokes a Controller grant.
+
+        Standing recorded at issuance outlives the moment it was recorded in —
+        that is its point. The other side of that is that revoking the phone
+        which recorded it has to reach here, or the vouchers it signed while
+        trusted keep admitting devices after the Owner withdrew it.
+        """
+
+        try:
+            _strict(payload, {"contract_version", "principal_id"})
+            if payload.get("contract_version", "1") != "1":
+                raise AdmissionProblem(
+                    "INVALID_ARGUMENT",
+                    "unsupported contract_version",
+                    status=422,
+                    category="invalid",
+                )
+            context = await actor_provider(request)
+            answered = await current().withdraw_controller(
+                principal_id=payload["principal_id"], context=context
+            )
+            return JSONResponse(status_code=200, content=answered)
+        except AdmissionProblem as exc:
+            return problem_response(exc)
+        except PermissionError as exc:
+            return problem_response(
+                AdmissionProblem("FORBIDDEN", str(exc), status=403, category="forbidden")
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            return problem_response(_invalid(exc))
+
     @router.get("/base-identities")
     async def base_identity_for_key(
         request: Request, operational_key_id: str

@@ -17,6 +17,7 @@ from hub.adapters.persistence.models import (
     AdmissionCommandResultRow,
     AdmissionCommissioningStandingRow,
     AdmissionCommissioningVoucherRow,
+    AdmissionControllerWithdrawalRow,
     AdmissionDecisionRow,
     AdmissionGrantAckRow,
     AdmissionGrantRow,
@@ -453,6 +454,51 @@ class SqlAdmissionStore:
             )
             .limit(1)
         )
+
+    async def record_controller_withdrawal(
+        self,
+        session,
+        *,
+        owner_domain_id: str,
+        principal_id: str,
+        actor_json: str,
+        withdrawn_at: datetime,
+    ) -> datetime:
+        """Note that this Owner Domain no longer acts through a Controller.
+
+        Answers the moment that now stands. Withdrawing twice is one fact; a
+        later withdrawal moves the moment forward, because a Controller trusted
+        again in between may have recorded standings that this one also ends.
+        It never moves back: an earlier moment would revive standings a
+        withdrawal already ended.
+        """
+
+        existing = await session.get(
+            AdmissionControllerWithdrawalRow, (owner_domain_id, principal_id)
+        )
+        if existing is None:
+            session.add(
+                AdmissionControllerWithdrawalRow(
+                    owner_domain_id=owner_domain_id,
+                    principal_id=principal_id,
+                    withdrawn_at=withdrawn_at,
+                    actor_json=actor_json,
+                )
+            )
+            return withdrawn_at
+        if withdrawn_at > aware(existing.withdrawn_at):
+            existing.withdrawn_at = withdrawn_at
+            existing.actor_json = actor_json
+            return withdrawn_at
+        return aware(existing.withdrawn_at)
+
+    async def controller_withdrawn_at(
+        self, session, *, owner_domain_id: str, principal_id: str
+    ) -> datetime | None:
+        existing = await session.get(
+            AdmissionControllerWithdrawalRow, (owner_domain_id, principal_id)
+        )
+        return None if existing is None else aware(existing.withdrawn_at)
 
     async def requires_fresh_presence(
         self, session, *, owner_domain_id: str, hardware_identity_ref: str

@@ -462,9 +462,51 @@ class AdmissionAuthority:
             or "device.claim.approve" not in actor.granted_scopes
         ):
             return None
+        # The Controller that recorded this may since have been withdrawn — a
+        # phone revoked as lost. Its word then ends with it: the Proposal
+        # waits for a Controller the Owner still acts through, exactly as one
+        # with no standing does.
+        withdrawn_at = await self.store.controller_withdrawn_at(
+            session, owner_domain_id=owner_domain_id, principal_id=str(actor.principal_id)
+        )
+        if withdrawn_at is not None and aware(row.recorded_at) <= withdrawn_at:
+            return None
         return _RecordedStanding(
             actor=actor, business_owner_id=BusinessOwnerId(row.business_owner_id)
         )
+
+    async def withdraw_controller(self, *, principal_id: str, context: ActorContext) -> dict:
+        """End every standing a Controller recorded, because the Owner stopped trusting it.
+
+        The Host holds the Controller grants, so it is the Host that says when
+        one is revoked — before it revokes, so that no moment exists in which
+        the grant is gone and its vouchers still admit. Asked by a Controller
+        that may decide from the queue, since ending a decision is the same
+        authority as making one; a Controller may withdraw itself.
+        """
+
+        context.require_scope("device.claim.approve")
+        if not isinstance(principal_id, str) or not principal_id.strip() or len(principal_id) > 128:
+            raise AdmissionProblem(
+                "INVALID_ARGUMENT", "principal_id is required", status=422, category="invalid"
+            )
+        now = self.clock.now()
+        actor_json = json.dumps(context.actor.model_dump(mode="json"), sort_keys=True)
+        async with self.store.lock:
+            async with self.store.transaction() as session:
+                withdrawn_at = await self.store.record_controller_withdrawal(
+                    session,
+                    owner_domain_id=str(context.owner_domain_id),
+                    principal_id=principal_id,
+                    actor_json=actor_json,
+                    withdrawn_at=now,
+                )
+        return {
+            "contract_version": "1",
+            "owner_domain_id": str(context.owner_domain_id),
+            "principal_id": principal_id,
+            "withdrawn_at": withdrawn_at.isoformat().replace("+00:00", "Z"),
+        }
 
     async def record_commissioning_standing(
         self, *, jti: str, operational_key_id: str, context: ActorContext

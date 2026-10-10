@@ -202,6 +202,31 @@ class AdmissionCommissioningStandingRow(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class AdmissionControllerWithdrawalRow(Base):
+    """A Controller this Owner Domain no longer acts through, and since when.
+
+    A standing is the Owner's decision as spoken through one Controller, and
+    it stays undecided for as long as its voucher is unused — up to the
+    voucher's lifetime. Withdrawing the Controller has to end that, or a phone
+    revoked as lost keeps admitting the devices it vouched for while it was
+    trusted. The Host holds the Controller grants and says so here; standings
+    that Controller recorded at or before ``withdrawn_at`` then decide nothing.
+
+    One row per Controller rather than a flag per standing, because the fact
+    is about the Controller: it covers every standing it recorded, including
+    one whose voucher has not been presented yet, and a Controller that is
+    trusted again later earns new standings after it.
+    """
+
+    __tablename__ = "admission_controller_withdrawals_v1"
+
+    owner_domain_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    principal_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    withdrawn_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    #: Who withdrew it — the Controller that asked, as the Host vouched for it.
+    actor_json: Mapped[str] = mapped_column(Text)
+
+
 class AdmissionProposalRow(Base):
     __tablename__ = "admission_proposals_v1"
 

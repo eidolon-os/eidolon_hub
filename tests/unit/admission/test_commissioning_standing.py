@@ -477,3 +477,201 @@ async def test_the_host_records_standing_over_http_and_is_answered_the_identity(
     assert (await proposal_row(database, created["enrollment_id"])).state == (
         "approved_awaiting_handoff"
     )
+
+
+async def test_a_withdrawn_controller_s_standing_decides_nothing(harness):
+    """Revoking a phone ends the vouchers it signed while it was trusted.
+
+    Standing outlives the moment it was recorded in, which is the point of it
+    -- and also why withdrawing the Controller has to reach the Authority. A
+    phone revoked as lost must not keep admitting the devices it vouched for:
+    their Proposals wait for a Controller the Owner still acts through.
+    """
+
+    database, authority, clock, signing_key = harness
+    handoff, operational = keys()
+    await record(authority, operational, jti="jti-withdrawn-01")
+
+    clock.value += timedelta(minutes=5)
+    withdrawn = await authority.withdraw_controller(
+        principal_id="controller_01", context=actor(principal="controller_02")
+    )
+    assert withdrawn["principal_id"] == "controller_01"
+    assert withdrawn["owner_domain_id"] == "owner-domain_01"
+
+    clock.value += timedelta(minutes=5)
+    created = await authority.create_enrollment(
+        command_id="create_withdrawn",
+        correlation_id="intent_withdrawn",
+        payload=create_payload(
+            handoff,
+            operational,
+            signing_key,
+            voucher=vouch(operational, jti="jti-withdrawn-01", signing_key=signing_key),
+        ),
+    )
+    assert created["state"] == "pending_review"
+    assert (await proposal_row(database, created["enrollment_id"])).state == "pending_review"
+    assert await decision_row(database, created["enrollment_id"]) is None
+    with pytest.raises(AdmissionProblem) as undecided:
+        await collect(authority, created, handoff, command_id="collect_withdrawn")
+    assert undecided.value.code == "DECISION_REQUIRED"
+
+    # A Controller the Owner still acts through decides it from the queue,
+    # and the record says it was that one.
+    await authority.decide_enrollment(
+        command_id="decide_withdrawn",
+        correlation_id="intent_withdrawn",
+        enrollment_id=created["enrollment_id"],
+        payload={
+            "expected_proposal_revision": 1,
+            "decision": "approve",
+            "target_owner_domain_id": "owner-domain_01",
+            "target_business_owner_id": "owner_01",
+            "target_space_id": None,
+            "reviewed_manifest_ref": created["reviewed_manifest_ref"],
+            "initial_assignment_intent": None,
+            "initial_capability_policy_refs": [],
+        },
+        context=actor(principal="controller_02"),
+    )
+    decision = await decision_row(database, created["enrollment_id"])
+    assert ControllerActorRef.model_validate_json(decision.actor_json).principal_id == (
+        "controller_02"
+    )
+
+
+async def test_a_controller_trusted_again_earns_standing_after_its_withdrawal(harness):
+    """The withdrawal ends what came before it, not the Controller forever.
+
+    The same phone key can be granted again (re-claimed with the Host's Setup
+    code). Standing it records after that is a new decision and decides; and a
+    second withdrawal moves the moment forward without reviving anything.
+    """
+
+    database, authority, clock, signing_key = harness
+    handoff, operational = keys()
+    first = await authority.withdraw_controller(
+        principal_id="controller_01", context=actor()
+    )
+    clock.value += timedelta(minutes=1)
+    await record(authority, operational, jti="jti-after-withdrawal")
+
+    # Withdrawing again with an earlier moment cannot move it back.
+    clock.value -= timedelta(minutes=10)
+    again = await authority.withdraw_controller(
+        principal_id="controller_01", context=actor()
+    )
+    assert again["withdrawn_at"] == first["withdrawn_at"]
+    clock.value += timedelta(minutes=11)
+
+    created = await authority.create_enrollment(
+        command_id="create_after",
+        correlation_id="intent_after",
+        payload=create_payload(
+            handoff,
+            operational,
+            signing_key,
+            voucher=vouch(operational, jti="jti-after-withdrawal", signing_key=signing_key),
+        ),
+    )
+    assert (await proposal_row(database, created["enrollment_id"])).state == (
+        "approved_awaiting_handoff"
+    )
+
+
+async def test_a_withdrawal_also_ends_the_continuation_its_standing_would_decide(harness):
+    """An expired Proposal re-proposed on its enrolled key is answered by the
+    latest standing for that key -- and a withdrawn recorder's standing is no
+    answer there either."""
+
+    database, authority, clock, signing_key = harness
+    handoff, operational = keys()
+    await record(authority, operational, jti="jti-cont-withdrawn")
+    first = await authority.create_enrollment(
+        command_id="create_cont_first",
+        correlation_id="intent_cont",
+        payload=create_payload(
+            handoff,
+            operational,
+            signing_key,
+            voucher=vouch(operational, jti="jti-cont-withdrawn", signing_key=signing_key),
+        ),
+    )
+    clock.value += timedelta(minutes=16)
+    assert await authority.expire_due() == 1
+    del first
+    await authority.withdraw_controller(principal_id="controller_01", context=actor())
+
+    again = await authority.create_enrollment(
+        command_id="create_cont_again",
+        correlation_id="intent_cont_again",
+        payload=create_payload(
+            handoff,
+            operational,
+            signing_key,
+            voucher=continuation_proof(operational),
+            proof_scheme="enrolled-base-key-v1",
+        ),
+    )
+    assert (await proposal_row(database, again["enrollment_id"])).state == "pending_review"
+    assert await decision_row(database, again["enrollment_id"]) is None
+
+
+async def test_only_a_controller_that_may_decide_can_withdraw_one(harness):
+    _database, authority, _clock, _signing_key = harness
+    reader = ActorContext(
+        actor=ControllerActorRef(
+            principal_id="controller_reader",
+            owner_domain_id=OwnerDomainId("owner-domain_01"),
+            granted_scopes=("device.read",),
+            authentication_strength="software",
+        ),
+        owner_domain_id=OwnerDomainId("owner-domain_01"),
+        business_owner_id=BusinessOwnerId("owner_01"),
+    )
+    with pytest.raises(AdmissionProblem) as refused:
+        await authority.withdraw_controller(principal_id="controller_01", context=reader)
+    assert refused.value.code == "FORBIDDEN"
+    with pytest.raises(AdmissionProblem) as blank:
+        await authority.withdraw_controller(principal_id=" ", context=actor())
+    assert blank.value.status == 422
+
+
+async def test_the_host_withdraws_a_controller_over_http(harness):
+    database, authority, _clock, signing_key = harness
+    handoff, operational = keys()
+    await record(authority, operational, jti="jti-http-withdrawn")
+
+    async def actor_provider(_request):
+        return actor(principal="controller_02")
+
+    app = create_admission_target_app(authority=authority, actor_provider=actor_provider)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        withdrawn = await client.post(
+            "/api/admission/v1/controller-withdrawals",
+            json={"contract_version": "1", "principal_id": "controller_01"},
+        )
+        assert withdrawn.status_code == 200
+        body = withdrawn.json()
+        assert body["principal_id"] == "controller_01"
+        assert body["owner_domain_id"] == "owner-domain_01"
+        assert body["withdrawn_at"].endswith("Z")
+        stray = await client.post(
+            "/api/admission/v1/controller-withdrawals",
+            json={"principal_id": "controller_01", "extra": True},
+        )
+        assert stray.status_code == 422
+
+    created = await authority.create_enrollment(
+        command_id="create_http_withdrawn",
+        correlation_id="intent_http_withdrawn",
+        payload=create_payload(
+            handoff,
+            operational,
+            signing_key,
+            voucher=vouch(operational, jti="jti-http-withdrawn", signing_key=signing_key),
+        ),
+    )
+    assert (await proposal_row(database, created["enrollment_id"])).state == "pending_review"
