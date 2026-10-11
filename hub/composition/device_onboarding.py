@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -15,6 +16,13 @@ from hub.interfaces.http.routers.device_onboarding import DeviceOnboardingHttpSe
 from hub.ports.identity import Clock
 
 _MDNS_SERVICE_TYPE = "_eidolon-owner._tcp.local."
+
+
+def discovery_owner() -> str:
+    owner = os.environ.get("EIDOLON_HUB_DISCOVERY_OWNER", "embedded")
+    if owner not in {"embedded", "standalone"}:
+        raise ValueError("EIDOLON_HUB_DISCOVERY_OWNER must be embedded or standalone")
+    return owner
 
 
 def _mdns_target_hostname(owner_domain_id: str, public_hostname: str) -> str:
@@ -41,11 +49,12 @@ def build_device_onboarding(
         http_services=DeviceOnboardingHttpServices(
             descriptor=owner_directory.descriptor,
         ),
-        mdns_advertiser=_mdns_advertiser(config),
+        mdns_advertiser=(None if discovery_owner() == "standalone"
+                         else build_mdns_advertiser(config)),
     )
 
 
-def _mdns_advertiser(
+def build_mdns_advertiser(
     config: HubConfig,
 ) -> ZeroconfAuthorityCandidateAdvertiser | None:
     if not config.discovery.mdns.enabled:

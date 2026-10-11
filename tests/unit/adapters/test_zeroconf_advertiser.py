@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from hub.adapters.discovery.zeroconf import ZeroconfAuthorityCandidateAdvertiser
-from hub.composition.device_onboarding import _mdns_advertiser
+from hub.composition.device_onboarding import build_mdns_advertiser
 from hub.config import HubConfig, OnboardingConfig
 
 
@@ -72,7 +72,7 @@ def test_mdns_identity_and_port_derive_from_public_contract() -> None:
         )
     )
 
-    advertiser = _mdns_advertiser(config)
+    advertiser = build_mdns_advertiser(config)
 
     assert advertiser is not None
     assert advertiser._service_type == "_eidolon-owner._tcp.local."
@@ -89,7 +89,7 @@ def test_mdns_can_advertise_a_public_ca_tls_uri_over_the_local_link() -> None:
         )
     )
 
-    advertiser = _mdns_advertiser(config)
+    advertiser = build_mdns_advertiser(config)
 
     assert advertiser is not None
     assert advertiser._hostname == "living-room-owner"

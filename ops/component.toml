@@ -24,6 +24,15 @@ serves = ["hub"]
 requires = ["eidolon-channel-provider"]
 after = ["local-fs.target", "network.target"]
 
+[[units]]
+id = "eidolon-hub-discovery"
+kind = "service"
+exec = ".venv/bin/python"
+user = "eidolon"
+serves = []
+requires = []
+after = ["local-fs.target", "network.target"]
+
 [ports.hub]
 default = 8082
 bind = "loopback"
@@ -50,7 +59,7 @@ template = "config/settings.yaml"
 owner = "root"
 group = "eidolon"
 mode = "0640"
-required_by = ["eidolon-hub"]
+required_by = ["eidolon-hub", "eidolon-hub-discovery"]
 # Derived because Owner identity stays stable while descriptor_uri names the
 # current Host candidate; Ops fills both from its offline Owner material.
 #
