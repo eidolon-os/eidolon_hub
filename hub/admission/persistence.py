@@ -199,7 +199,7 @@ class SqlAdmissionStore:
         session.add(AdmissionGrantAckRow(**values))
 
     @staticmethod
-    async def upsert_claim(session, **values) -> None:
+    async def upsert_claim(session, **values) -> int:
         """Activate a Claim, including one this Body already had and lost.
 
         A Body that was removed keeps its operational key unless somebody
@@ -212,11 +212,12 @@ class SqlAdmissionStore:
         existing = await session.get(AdmissionClaimRow, values["device_instance_id"])
         if existing is None:
             session.add(AdmissionClaimRow(**values))
-            return
+            return values["revision"]
         revision = existing.revision + 1
         for column, value in values.items():
             setattr(existing, column, value)
         existing.revision = revision
+        return revision
 
     @staticmethod
     async def project_active_claim(

@@ -1192,11 +1192,7 @@ class AdmissionAuthority:
                 )
                 decision = await self.store.get_decision(session, grant.decision_id)
                 manifest_ref = ManifestRef.model_validate(json.loads(grant.manifest_ref_json))
-                previous_claim = await self.store.get_claim(session, device_ref.device_instance_id)
-                # Claim generation fences authority; aggregate revision orders the
-                # entire device history, including subsequent authorizations.
-                claim_revision = previous_claim.revision + 1 if previous_claim else 1
-                await self.store.upsert_claim(
+                claim_revision = await self.store.upsert_claim(
                     session,
                     device_instance_id=device_ref.device_instance_id,
                     owner_domain_id=str(device_ref.owner_domain_id),
@@ -1209,7 +1205,7 @@ class AdmissionAuthority:
                     approval_decision_id=grant.decision_id,
                     operational_public_key_spki=proposal.operational_public_key_spki,
                     state="active",
-                    revision=claim_revision,
+                    revision=1,
                     activated_at=now,
                     updated_at=now,
                     revoked_at=None,

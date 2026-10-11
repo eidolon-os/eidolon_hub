@@ -461,9 +461,6 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
         await session.execute(update(AdmissionClaimEventStreamRow).where(
             AdmissionClaimEventStreamRow.event_id == last.event_id
         ).values(event_json=json.dumps(legacy)))
-        await session.execute(update(AdmissionClaimRow).where(
-            AdmissionClaimRow.device_instance_id == second_ref.device_instance_id
-        ).values(revision=1))
     await database.initialize_schema()
     await database.initialize_schema()  # restart must not allocate revisions again
     async with database.sessions() as session:
