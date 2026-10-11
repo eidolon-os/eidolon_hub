@@ -16,6 +16,7 @@ Controller, on the record. What has no standing still waits for the queue.
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 
 import httpx
@@ -30,7 +31,7 @@ from eidolon_sdk.device_foundation.v1 import (
     claim_grant_collection_proof_document,
     derive_voucher_signing_key,
 )
-from sqlalchemy import select
+from sqlalchemy import select, update
 from test_admission_authority import (
     MANAGEMENT_SECRET,
     FixedClock,
@@ -46,6 +47,8 @@ from test_admission_authority import (
 
 from hub.adapters.persistence.database import HubDatabase
 from hub.adapters.persistence.models import (
+    AdmissionClaimRow,
+    AdmissionClaimEventStreamRow,
     AdmissionCommissioningStandingRow,
     AdmissionDecisionRow,
     AdmissionGrantRow,
@@ -426,6 +429,52 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
         second_ref = DeviceRef.model_validate_json(second_grant.device_ref_json)
     assert second_ref.claim_generation == device_ref.claim_generation + 1
 
+    ack_document = claim_grant_ack_proof_document(
+        enrollment_id=second["enrollment_id"],
+        grant_id=second_collected["grant_id"], device_ref=second_ref,
+    )
+    await authority.ack_claim_grant(
+        command_id="ack_gen2", correlation_id="intent_gen2",
+        enrollment_id=second["enrollment_id"], grant_id=second_collected["grant_id"],
+        operational_key_proof=sign(operational, ack_document),
+        stored_claim_generation=second_ref.claim_generation,
+        stored_trust_epoch=second_ref.trust_epoch,
+    )
+    async with database.sessions() as session:
+        events = (await session.scalars(select(AdmissionOutboxRow).where(
+            AdmissionOutboxRow.aggregate_id == second_ref.device_instance_id
+        ).order_by(AdmissionOutboxRow.aggregate_revision))).all()
+    assert [e.aggregate_revision for e in events] == [1, 2, 3]
+    assert [json.loads(e.event_json)["aggregaterev"] for e in events] == [1, 2, 3]
+    assert (await authority.get_claim(device_instance_id=second_ref.device_instance_id,
+                                     context=actor())).revision == 3
+
+    # Reproduce the old producer's durable state, then run the same startup
+    # migration used by installed Hosts. Keep event identities and cursors.
+    last = events[-1]
+    legacy = json.loads(last.event_json)
+    legacy["aggregaterev"] = 1
+    async with database.sessions.begin() as session:
+        await session.execute(update(AdmissionOutboxRow).where(
+            AdmissionOutboxRow.event_id == last.event_id
+        ).values(aggregate_revision=1, event_json=json.dumps(legacy)))
+        await session.execute(update(AdmissionClaimEventStreamRow).where(
+            AdmissionClaimEventStreamRow.event_id == last.event_id
+        ).values(event_json=json.dumps(legacy)))
+        await session.execute(update(AdmissionClaimRow).where(
+            AdmissionClaimRow.device_instance_id == second_ref.device_instance_id
+        ).values(revision=1))
+    await database.initialize_schema()
+    await database.initialize_schema()  # restart must not allocate revisions again
+    async with database.sessions() as session:
+        fixed = await session.get(AdmissionOutboxRow, last.event_id)
+        stream = await session.scalar(select(AdmissionClaimEventStreamRow).where(
+            AdmissionClaimEventStreamRow.event_id == last.event_id))
+        claim = await session.get(AdmissionClaimRow, second_ref.device_instance_id)
+        assert fixed.aggregate_revision == claim.revision == 3
+        assert json.loads(fixed.event_json) == json.loads(last.event_json)
+        assert json.loads(stream.event_json) == json.loads(last.event_json)
+
 
 async def test_the_host_records_standing_over_http_and_is_answered_the_identity(harness):
     database, authority, _clock, signing_key = harness
@@ -675,3 +724,37 @@ async def test_the_host_withdraws_a_controller_over_http(harness):
         ),
     )
     assert (await proposal_row(database, created["enrollment_id"])).state == "pending_review"
+
+
+async def test_same_identity_returning_without_revocation_advances_claim_history(harness):
+    database, authority, _clock, signing_key = harness
+    handoff, operational = keys()
+    refs = []
+    for generation in range(1, 4):
+        jti = f"jti-return-{generation}"
+        await record(authority, operational, jti=jti)
+        created = await authority.create_enrollment(
+            command_id=f"create_return_{generation}", correlation_id=f"return_{generation}",
+            payload=create_payload(handoff, operational, signing_key,
+                voucher=vouch(operational, jti=jti, signing_key=signing_key)),
+        )
+        collected = await collect(authority, created, handoff, command_id=f"collect_return_{generation}")
+        async with database.sessions() as session:
+            grant = await session.get(AdmissionGrantRow, collected["grant_id"])
+            ref = DeviceRef.model_validate_json(grant.device_ref_json)
+        refs.append(ref)
+        document = claim_grant_ack_proof_document(enrollment_id=created["enrollment_id"],
+                                                grant_id=collected["grant_id"], device_ref=ref)
+        await authority.ack_claim_grant(command_id=f"ack_return_{generation}",
+            correlation_id=f"return_{generation}", enrollment_id=created["enrollment_id"],
+            grant_id=collected["grant_id"], operational_key_proof=sign(operational, document),
+            stored_claim_generation=ref.claim_generation, stored_trust_epoch=ref.trust_epoch)
+    assert len({r.device_instance_id for r in refs}) == 1
+    assert [r.claim_generation for r in refs] == [1, 2, 3]
+    async with database.sessions() as session:
+        events = (await session.scalars(select(AdmissionClaimEventStreamRow).order_by(
+            AdmissionClaimEventStreamRow.stream_position))).all()
+    assert [json.loads(e.event_json)["aggregaterev"] for e in events] == [1, 2, 3]
+    with pytest.raises(AdmissionProblem, match="generation is stale"):
+        await authority.revoke_claim(command_id="remove_old", correlation_id="remove_old",
+                                    device_ref=refs[0], reason="old-command", context=actor())

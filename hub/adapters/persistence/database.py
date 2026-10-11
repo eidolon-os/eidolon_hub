@@ -100,6 +100,8 @@ class HubDatabase:
                 bootstrap,
                 self.authority_bootstrap_path is None,
             )
+            from hub.adapters.persistence.claim_revision_migration import repair_claim_revisions
+            await connection.run_sync(repair_claim_revisions)
         if create_anchor:
             self._create_anchor(marker)
         if consume_bootstrap:
