@@ -423,7 +423,23 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
     assert ControllerActorRef.model_validate_json(decision.actor_json).principal_id == (
         "controller_02"
     )
+    # Recovery belongs to this operation. The device's revoked generation 1
+    # must not conceal generation 2's approved, still uncollected Grant.
+    recovery = await authority.get_enrollment_recovery(
+        enrollment_id=second["enrollment_id"], context=actor()
+    )
+    assert recovery.proposal.state == "approved_awaiting_handoff"
+    assert recovery.claim is None
+    old_recovery = await authority.get_enrollment_recovery(
+        enrollment_id=created["enrollment_id"], context=actor()
+    )
+    assert old_recovery.claim.state == "revoked"
     second_collected = await collect(authority, second, handoff, command_id="collect_gen2")
+    recovery = await authority.get_enrollment_recovery(
+        enrollment_id=second["enrollment_id"], context=actor()
+    )
+    assert recovery.proposal.state == "grant_delivered"
+    assert recovery.claim is None
     async with database.sessions() as session:
         second_grant = await session.get(AdmissionGrantRow, second_collected["grant_id"])
         second_ref = DeviceRef.model_validate_json(second_grant.device_ref_json)
@@ -440,6 +456,15 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
         stored_claim_generation=second_ref.claim_generation,
         stored_trust_epoch=second_ref.trust_epoch,
     )
+    recovery = await authority.get_enrollment_recovery(
+        enrollment_id=second["enrollment_id"], context=actor()
+    )
+    assert recovery.claim.state == "active"
+    assert recovery.claim.device_ref == second_ref
+    old_recovery = await authority.get_enrollment_recovery(
+        enrollment_id=created["enrollment_id"], context=actor()
+    )
+    assert old_recovery.claim is None  # a new Claim cannot revive the old operation
     async with database.sessions() as session:
         events = (await session.scalars(select(AdmissionOutboxRow).where(
             AdmissionOutboxRow.aggregate_id == second_ref.device_instance_id

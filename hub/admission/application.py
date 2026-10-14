@@ -1589,6 +1589,16 @@ class AdmissionAuthority:
             if grant_row is not None
             else None
         )
+        # This is an Enrollment projection, not the device's current standing.
+        # Re-enrollment can have a new Grant while the previous Claim remains
+        # revoked until ACK. Joining only by device identity would let that old
+        # Claim terminate the new operation (or a later Claim revive an old one).
+        if claim_row is not None and (
+            claim_row.approval_decision_id != grant_row.decision_id
+            or claim_row.claim_generation != grant_row.claim_generation
+            or claim_row.owner_domain_id != grant_row.owner_domain_id
+        ):
+            claim_row = None
         decision = None
         if decision_row is not None:
             decision = ApprovalDecision(
