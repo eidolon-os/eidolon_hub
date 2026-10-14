@@ -1622,6 +1622,7 @@ class AdmissionAuthority:
                 acknowledged_at=(aware(ack_row.acknowledged_at) if ack_row is not None else None),
             )
         return EnrollmentRecoveryProjection(
+            commissioning_proof_digest=proposal.commissioning_proof_digest,
             proposal=self._proposal(
                 proposal,
                 content_revision=(

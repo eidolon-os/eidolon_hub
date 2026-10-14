@@ -17,6 +17,7 @@ Controller, on the record. What has no standing still waits for the queue.
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import timedelta
 
 import httpx
@@ -428,6 +429,9 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
     recovery = await authority.get_enrollment_recovery(
         enrollment_id=second["enrollment_id"], context=actor()
     )
+    assert recovery.commissioning_proof_digest == "sha256:" + hashlib.sha256(
+        vouch(operational, jti="jti-gen-2", signing_key=signing_key)[0].encode()
+    ).hexdigest()
     assert recovery.proposal.state == "approved_awaiting_handoff"
     assert recovery.claim is None
     old_recovery = await authority.get_enrollment_recovery(
@@ -465,6 +469,7 @@ async def test_a_removed_body_is_decided_again_only_by_a_fresh_standing(harness)
         enrollment_id=created["enrollment_id"], context=actor()
     )
     assert old_recovery.claim is None  # a new Claim cannot revive the old operation
+    assert old_recovery.commissioning_proof_digest != recovery.commissioning_proof_digest
     async with database.sessions() as session:
         events = (await session.scalars(select(AdmissionOutboxRow).where(
             AdmissionOutboxRow.aggregate_id == second_ref.device_instance_id
