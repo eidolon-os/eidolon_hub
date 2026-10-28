@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
 from eidolon_sdk.device_foundation.v1 import (
     AssertDeviceManifest,
     DeviceRef,
+    DeviceEraseContractError,
     ManifestDocument,
     canonical_bytes,
     manifest_digest,
@@ -309,3 +310,38 @@ async def test_recognition_facts_follow_existing_update_and_directory_path() -> 
     assert DeviceManifest.model_validate(stored).model_dump(mode='json', by_alias=True)['properties'] == document['properties']
     assert len(mutations.events) == 1
     assert directory.projected == [REF.device_instance_id]
+
+
+@pytest.mark.asyncio
+async def test_unsigned_revision_cannot_reinstate_an_old_manifest() -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    current = _device(_manifest(revision=5, camera=True))
+    devices = _Devices(current)
+    accept, mutations, directory = _use_case(devices, key)
+    old = _assertion(_manifest(revision=4, camera=False), key)
+    wire = old.model_dump(mode='json')
+    wire['manifest']['revision'] = 6
+    with pytest.raises(DeviceEraseContractError):
+        await accept.execute(assertion=AssertDeviceManifest.model_validate(wire))
+    assert devices.device == current
+    assert mutations.events == []
+    assert directory.projected == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('revision', [5, 6])
+async def test_manifest_name_is_fixed_even_with_a_valid_new_signature(revision) -> None:
+    key = ec.generate_private_key(ec.SECP256R1())
+    manifest = _manifest(revision=5, camera=True)
+    current = _device(manifest)
+    devices = _Devices(current)
+    accept, mutations, directory = _use_case(devices, key)
+    renamed = ManifestDocument.model_validate({
+        **manifest.model_dump(mode='json'), 'manifest_id': 'different-kind',
+        'revision': revision,
+    })
+    with pytest.raises(ManifestRevisionConflict, match='manifest_id'):
+        await accept.execute(assertion=_assertion(renamed, key))
+    assert devices.device == current
+    assert mutations.events == []
+    assert directory.projected == []

@@ -63,14 +63,14 @@ def _assertion_document(vector: dict) -> dict:
         ).read_text(encoding="utf-8")
     )["cases"]
     case = next(
-        case for case in manifest_cases if case["digest"] == asserted["manifest_digest"]
+        case for case in manifest_cases if case["digest"] == asserted["manifest_ref"]["digest"]
     )
     return AssertDeviceManifest(
         device_ref=DeviceRef.model_validate(asserted["device_ref"]),
         manifest=ManifestDocument(
-            manifest_id="manifest_01",
-            revision=1,
-            digest=asserted["manifest_digest"],
+            manifest_id=asserted["manifest_ref"]["manifest_id"],
+            revision=asserted["manifest_ref"]["revision"],
+            digest=asserted["manifest_ref"]["digest"],
             document=json.loads(case["canonical_utf8"]),
         ),
         nonce=asserted["nonce"],

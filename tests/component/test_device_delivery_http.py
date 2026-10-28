@@ -683,6 +683,25 @@ def test_manifest_assertion_is_refused_unless_the_claim_key_signed_it() -> None:
         assert response.json()["outcome"] == "accepted"
         assert response.json()["accepted"]["revision"] == 2
 
+        old_version = _body(key)
+        old_version["contract_version"] = "1.0"
+        assert client.post("/api/device-control/v1/manifest:assert", json=old_version).status_code == 422
+
+        # Labelling the old digest-only proof as 1.1 cannot enable a fallback.
+        old_proof = _body(key)
+        old_proof["device_signature"] = _sign(key, {
+            "device_ref": old_proof["device_ref"],
+            "manifest_digest": old_proof["manifest"]["digest"],
+            "nonce": old_proof["nonce"],
+            "operation_type": "device-control.manifest-assert",
+        })
+        assert client.post("/api/device-control/v1/manifest:assert", json=old_proof).status_code == 403
+
+        for field, value in (("revision", 99), ("manifest_id", "other-manifest")):
+            modified = _body(key)
+            modified["manifest"][field] = value
+            assert client.post("/api/device-control/v1/manifest:assert", json=modified).status_code == 403
+
         forged = _body(key)
         forged["public_key_spki"] = _spki(stranger)
         assert client.post("/api/device-control/v1/manifest:assert", json=forged).status_code == 403

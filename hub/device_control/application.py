@@ -201,19 +201,24 @@ class AcceptDeviceManifest:
             signature=assertion.device_signature,
         )
 
-        # The exact generation, and the one place it is required on this write.
-        # `configuration:pull` next door deliberately corrects a stale ref
-        # instead of refusing it; a Manifest assertion is not corrected, because
-        # this surface remembers no nonces and a signed assertion therefore
-        # stays replayable for as long as its ref matches — the generation
-        # moving is the only thing that ever ends one. A device that is behind
-        # learns its ref from the read and signs again, so refusing here strands
-        # nobody; it costs one extra call.
+        # Writes require the exact Claim generation. The signed manifest
+        # revision prevents content rollback within it; the DeviceRef prevents
+        # replay across lifecycles. No nonce ledger is needed for an idempotent
+        # assertion. A stale device reads configuration and signs again.
         current = await self._devices.get(device_ref.device_instance_id)
         if current is None or current.device_ref != device_ref:
             raise KeyError(device_ref.device_instance_id)
 
         declared = assertion.manifest
+        # The name belongs to this Claim. Only its version and content evolve;
+        # changing it would also change device kind without a new admission.
+        if declared.manifest_id != current.manifest_id:
+            raise ManifestRevisionConflict("manifest_id is fixed for the Claim")
+        current_ref = ManifestRef(
+            manifest_id=current.manifest_id,
+            revision=current.manifest_declared_revision,
+            digest=current.manifest_digest,
+        )
         accepted = DeviceManifestDocument.from_declaration(
             document=declared.document, declared_revision=declared.revision
         )
@@ -222,15 +227,15 @@ class AcceptDeviceManifest:
                 "manifest revision is older than the accepted declaration"
             )
         if declared.revision == current.manifest_declared_revision:
-            if accepted.digest != current.manifest_digest:
+            if declared.ref != current_ref:
                 raise ManifestRevisionConflict("manifest revision was reused for different content")
             # A device asserts on every boot; agreeing is the common case.
-            return self._acceptance(assertion, outcome="unchanged")
+            return self._acceptance(assertion, accepted=current_ref, outcome="unchanged")
 
         now = self._clock.now()
         await self._mutations.commit(
             expected=current,
-            device=self._with_manifest(current, accepted, declared.manifest_id, now),
+            device=self._with_manifest(current, accepted, now),
             event=DeviceManagementEventRecord(
                 event_id=self._ids.new("manifest-acceptance"),
                 event_type=self.MANIFEST_ACCEPTED,
@@ -247,30 +252,28 @@ class AcceptDeviceManifest:
             ),
         )
         await self._directory.execute(device_ref.device_instance_id)
-        return self._acceptance(assertion, outcome="accepted")
+        return self._acceptance(assertion, accepted=declared.ref, outcome="accepted")
 
     @staticmethod
     def _with_manifest(
         device: ManagedDevice,
         manifest: DeviceManifestDocument,
-        manifest_id: str,
         now,
     ) -> ManagedDevice:
         return replace(
             device,
             manifest=manifest,
-            manifest_id=manifest_id,
             updated_at=now,
             aggregate_revision=device.aggregate_revision + 1,
         )
 
     def _acceptance(
-        self, assertion: AssertDeviceManifest, *, outcome: str
+        self, assertion: AssertDeviceManifest, *, accepted: ManifestRef, outcome: str
     ) -> DeviceManifestAcceptance:
         return DeviceManifestAcceptance(
             device_ref=assertion.device_ref,
             nonce=assertion.nonce,
-            accepted=assertion.manifest.ref,
+            accepted=accepted,
             outcome=outcome,
             accepted_at=self._clock.now(),
         )
