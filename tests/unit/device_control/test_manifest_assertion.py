@@ -285,3 +285,27 @@ async def test_a_manifest_is_only_accepted_from_the_claimed_key_and_an_active_cl
     with pytest.raises(KeyError):
         await revoked.execute(assertion=_assertion(_manifest(revision=2, camera=True), key))
     assert devices.device.manifest.declared_revision == 1
+
+
+@pytest.mark.asyncio
+async def test_recognition_facts_follow_existing_update_and_directory_path() -> None:
+    from hub.contracts.bindings.device import DeviceManifest
+
+    key = ec.generate_private_key(ec.SECP256R1())
+    devices = _Devices(_device(_manifest(revision=1, camera=False)))
+    accept, mutations, directory = _use_case(devices, key)
+    document = dict(_manifest(revision=2, camera=False).document)
+    document['properties'] = [
+        {'name': name, 'observable': False, 'writable': False,
+         'schema': {'type': 'boolean', 'const': True}}
+        for name in ('recognition.voiceprint', 'recognition.face')
+    ]
+    upgraded = ManifestDocument(manifest_id='esp-box-3', revision=2,
+                                digest=manifest_digest(document), document=document)
+    result = await accept.execute(assertion=_assertion(upgraded, key))
+    stored = json.loads(devices.device.manifest.canonical_json)
+    assert result.accepted == upgraded.ref
+    assert stored == document
+    assert DeviceManifest.model_validate(stored).model_dump(mode='json', by_alias=True)['properties'] == document['properties']
+    assert len(mutations.events) == 1
+    assert directory.projected == [REF.device_instance_id]
